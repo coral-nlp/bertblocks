@@ -11,7 +11,6 @@ assignees: ''
 name: Architecture Component Implementation
 about: Track implementation of a specific architecture component
 title: 'Implement [Component Name] - [Category]'
-labels: 'component-implementation'
 assignees: ''
 ---
 
