@@ -6,7 +6,7 @@ trainer:
   #logger:
   #  - class_path: lightning.pytorch.loggers.WandbLogger
   #    init_args:
-  #      project: "<projec_name>"
+  #      project: "<project_name>"
   #      entity: "<username>"
   #      log_model: false
   max_epochs: 1

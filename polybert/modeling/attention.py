@@ -1,89 +1,16 @@
-import functools
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from torch.nn.attention.flex_attention import _score_mod_signature
+
 import math
 
 import torch
 from torch import nn
-from torch.nn.attention.flex_attention import (
-    BlockMask,
-    _score_mod_signature,
-    flex_attention,
-)
+from torch.nn.attention.flex_attention import BlockMask, flex_attention
 
 from polybert.modeling.config import PolyBertConfig
-
-
-class ScoreModFunctions:
-    """Collection of score modification functions for flex-attention.
-
-    This class provides static methods for various positional encoding and attention
-    bias schemes that can be used with PyTorch's flex_attention mechanism. Functions
-    are partially applied to improve compile-ability and performance.
-
-    The score modification functions modify the attention scores before the softmax
-    operation, allowing for various forms of positional biases and attention patterns.
-    """
-
-    @staticmethod
-    def _alibi(
-        score: torch.Tensor,
-        _b: torch.Tensor,
-        h: torch.Tensor,
-        q_idx: torch.Tensor,
-        kv_idx: torch.Tensor,
-        slopes: torch.Tensor,
-    ) -> torch.Tensor:
-        """Add Attention with Linear Biases (ALIBI) score modification.
-
-        ALIBI adds a linear bias to attention scores based on the distance between
-        query and key positions, with head-specific slopes. This enables length
-        extrapolation beyond training sequence lengths.
-
-        Args:
-            score: Raw attention scores of shape (batch_size, num_heads, seq_len, seq_len).
-            _b: Batch index tensor (unused in this implementation).
-            h: Head index tensor of shape (num_heads,).
-            q_idx: Query position indices of shape (seq_len,).
-            kv_idx: Key-value position indices of shape (seq_len,).
-            slopes: Head-specific slope values of shape (num_heads,). Smaller slopes
-                   for heads that focus on closer positions.
-
-        Returns:
-            Modified attention scores with ALIBI bias applied, same shape as input score.
-
-        Note:
-            The bias is calculated as (kv_idx - q_idx) * slope[h], creating a linear
-            penalty based on distance that varies per attention head.
-
-        References:
-            - "Train Short, Test Long: Attention with Linear Biases Enables Input Length Extrapolation" (https://arxiv.org/abs/2108.12409)
-
-        """
-        scale = slopes[h]
-        bias = (kv_idx - q_idx) * scale
-        return score + bias
-
-    @staticmethod
-    def alibi(num_heads: int) -> _score_mod_signature:
-        """Create an ALIBI score modification function for the given number of heads.
-
-        This method generates head-specific slopes and returns a partially applied
-        ALIBI function that can be used with flex_attention.
-
-        Args:
-            num_heads: Number of attention heads. Must be positive.
-
-        Returns:
-            A partially applied ALIBI score modification function with the signature
-            expected by flex_attention.
-
-        Note:
-            Slopes are computed as 2^(-(8/num_heads) * head_idx) for each head,
-            creating an exponential decay pattern where different heads have
-            different sensitivities to positional distance.
-
-        """
-        slopes = torch.exp2(torch.arange(num_heads, dtype=torch.float32) * (-8.0 / num_heads))
-        return functools.partial(ScoreModFunctions._alibi, slopes=slopes)
+from polybert.modeling.position import AlibiPositionalEncoding, RotaryPositionalEncoding
 
 
 class PolyBertAttention(nn.Module):
@@ -122,6 +49,7 @@ class PolyBertAttention(nn.Module):
         self.num_heads = config.num_attention_heads
         self.head_dim = config.hidden_size // config.num_attention_heads
         self.scale = 1.0 / math.sqrt(self.head_dim)
+        self.max_seq_len = config.max_sequence_length
         # Fused linear layers for better performance
         self.proj = nn.Linear(config.hidden_size, 3 * config.hidden_size, bias=False)
         self.ffwd = nn.Linear(config.hidden_size, config.hidden_size, bias=False)
@@ -153,7 +81,7 @@ class PolyBertAttention(nn.Module):
             case "sinusoidal":
                 return None
             case "alibi":
-                return ScoreModFunctions.alibi(self.num_heads)
+                return AlibiPositionalEncoding(self.num_heads)()
             case "rope":
                 return None
             case _:
@@ -187,7 +115,7 @@ class PolyBertAttention(nn.Module):
             case "alibi":
                 return nn.Identity()
             case "rope":
-                raise NotImplementedError
+                return RotaryPositionalEncoding(self.head_dim, self.max_seq_len)
             case _:
                 return nn.Identity()
 
@@ -228,13 +156,16 @@ class PolyBertAttention(nn.Module):
 
         # Projection for Q, K, V
         qkv = self.proj(x)
-        qkv = self.qk_mod(qkv)
         q, k, v = qkv.chunk(3, dim=-1)
 
         # Reshape for multi-head attention
         q = q.reshape(n_batch, n_seq, self.num_heads, self.head_dim).transpose(1, 2)
         k = k.reshape(n_batch, n_seq, self.num_heads, self.head_dim).transpose(1, 2)
         v = v.reshape(n_batch, n_seq, self.num_heads, self.head_dim).transpose(1, 2)
+
+        # Add qk-mod (RoPE) if applicable (will be nn.Identity otherwise)
+        q = self.qk_mod(q)
+        k = self.qk_mod(k)
 
         # Apply flex attention kernel
         x, w = flex_attention(q, k, v, score_mod=self.score_mod, block_mask=doc_mask, scale=self.scale, return_lse=True)

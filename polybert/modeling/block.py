@@ -10,9 +10,9 @@ if TYPE_CHECKING:
 from torch import nn
 
 from polybert.modeling.attention import PolyBertAttention
+from polybert.modeling.mask import doc_mask
 from polybert.modeling.mlp import get_mlp
 from polybert.modeling.norms import get_norm
-from polybert.modeling.packing import doc_mask
 
 
 class PolyBertBlock(nn.Module):

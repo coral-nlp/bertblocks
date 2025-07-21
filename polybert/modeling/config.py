@@ -174,9 +174,9 @@ class PolyBertConfig(PretrainedConfig):
     """The type of positional embedding to use.
 
     Available options:
-        - "alibi": Attention with Linear Biases (default)
-        - "sinusoidal": Fixed sinusoidal positional encodings
-        - "rope": Rotary Position Embedding (relative positions)
+        - "alibi": ALiBi positional encoding
+        - "sinusoidal": Sinusoidal positional encoding
+        - "rope": Rotary positional encoding
     """
     pos_emb_kind: Literal["alibi", "sinusoidal", "rope"] = "alibi"
 
