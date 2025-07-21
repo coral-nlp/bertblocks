@@ -54,6 +54,7 @@ def get_norm(config: PolyBertConfig) -> nn.Module:
         - "group": Group normalization with num_groups = hidden_size
         - "layer": Layer normalization across the hidden dimension
         - "rms": Root Mean Square layer normalization
+        - "deep": DeepNorm
 
     Note:
         For GroupNorm, the number of groups is set equal to hidden_size,
@@ -68,6 +69,9 @@ def get_norm(config: PolyBertConfig) -> nn.Module:
         case "rms":
             return RMSNorm(config.hidden_size, config.norm_eps)
         case "deep":
-            return DeepNorm(config.norm_params.alpha, config.hidden_size, config.norm_eps)
+            try:
+                return DeepNorm(config.norm_params["alpha"], config.hidden_size, config.norm_eps)
+            except KeyError:
+                raise ValueError("When using DeepNorm, `alpha` must be specified in `config.norm_params`.")
         case _:
             raise ValueError(f"Unknown norm type {config.norm_type}")

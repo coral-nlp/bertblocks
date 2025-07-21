@@ -16,7 +16,7 @@ class PolyBertPredictionHead(nn.Module):
 
     This class implements a prediction head that uses a gated linear unit (GLU)
     architecture. It projects the hidden states to an expanded dimension, applies
-    gating with an activation function, and includes optional pre/post normalization.
+    gating with an activation function, and includes optional pre-/post-normalization.
 
     The head uses a two-stage approach:
     1. Project to 2x hidden_size and split into value and gate

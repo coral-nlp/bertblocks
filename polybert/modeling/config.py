@@ -67,7 +67,7 @@ class PolyBertConfig(PretrainedConfig):
         ...     num_attention_heads=16,
         ...     intermediate_size=4096,
         ...     actv_fn="relu",
-        ...     norm="layer",
+        ...     norm_fn="layer",
         ...     pos_emb_kind="rope"
         ... )
 
@@ -180,15 +180,9 @@ class PolyBertConfig(PretrainedConfig):
         - "gelu": Gaussian Error Linear Unit (default, used in BERT)
         - "relu": Rectified Linear Unit (faster but potentially less expressive)
     """
-    norm: Literal["group", "layer", "rms"] = Field(default="rms", description="The type of normalization to use")
-    """str: The type of normalization to apply.
-
-    Available options:
-        - "rms": Root Mean Square Layer Normalization (default, more efficient)
-        - "layer": Standard Layer Normalization (as used in BERT)
-        - "group": Group Normalization (useful for smaller batch sizes)
-    """
-    norm_kind: Literal["pre", "post", "both", "none"] = Field(default="pre", description="When to apply normalization")
+    norm_kind: Literal["pre", "post", "both", "none"] = Field(
+        default="pre", description="When to apply the normalization function"
+    )
     """str: When to apply normalization in the transformer layers.
 
     Available options:
@@ -197,11 +191,34 @@ class PolyBertConfig(PretrainedConfig):
         - "both": Apply normalization both before and after
         - "none": No normalization (not recommended)
     """
+    norm_fn: Literal["group", "layer", "rms", "deep"] = Field(
+        default="rms", description="The normalization function to apply"
+    )
+    """str: The type of normalization to apply.
+
+    Available options:
+        - "rms": Root Mean Square Layer Normalization (default, more efficient)
+        - "layer": Standard Layer Normalization (as used in BERT)
+        - "group": Group Normalization (useful for smaller batch sizes)
+    """
     norm_eps: float = Field(default=1e-12, description="Epsilon value for normalization", gt=0.0)
     """float: Small constant added to variance for numerical stability in normalization.
 
     Prevents division by zero in layer normalization. Common values: 1e-12 (BERT),
     1e-5 (standard), 1e-6 (more stable). Must be greater than 0.0.
+    """
+    norm_params: dict = Field(default_factory=dict, description="Additional parameters for normalization functions")
+    """dict: Additional parameters for custom normalization layers.
+
+    This field allows passing custom parameters to normalization layers that require them.
+    For example:
+        - For DeepNorm: {"alpha": 0.81} where alpha is the scaling factor
+        - For custom norms: any additional kwargs needed for instantiation
+
+    The parameters are passed as keyword arguments to the norm constructor.
+    Examples:
+        - DeepNorm: norm_params = {"alpha": 0.81}
+        - Custom GroupNorm: norm_params = {"affine": True, "track_running_stats": False}
     """
     pad_token_id: int = Field(default=0, description="The token ID used for padding", ge=0)
     """int: The token ID used for padding sequences to the same length.
@@ -277,17 +294,6 @@ class PolyBertConfig(PretrainedConfig):
 
     Setting to False can reduce parameters and sometimes improve performance.
     Common values: True (default), False (for efficiency).
-    """
-    attn_implementation: Literal["eager", "sdpa", "flash_attention_2"] | None = Field(
-        default=None, description="Attention implementation to use"
-    )
-    """str | None: The attention implementation to use.
-
-    Available options:
-        - None: Use default implementation (eager for now)
-        - "eager": Standard PyTorch attention implementation
-        - "sdpa": Scaled Dot Product Attention (PyTorch 2.0+)
-        - "flash_attention_2": Flash Attention v2 (if available)
     """
 
     @model_validator(mode="after")
