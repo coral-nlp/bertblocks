@@ -49,7 +49,7 @@ class PolyBertBlock(nn.Module, ConfigMixin):
                 - Other hyperparameters for attention and MLP layers
 
         """
-        super().__init__(config)
+        super().__init__(config=config)
         self.attn = PolyBertAttention(config)
         self.ffwd = get_mlp(config)
         self.pre_norm = get_norm(config) if config.norm_kind in ("pre", "both") else nn.Identity()
@@ -119,7 +119,7 @@ class PolyBertEncoder(nn.Module, ConfigMixin):
             config (PolyBertConfig): Configuration object containing model hyperparameters.
 
         """
-        super().__init__(config)
+        super().__init__(config=config)
         self.blocks = nn.ModuleList([PolyBertBlock(config) for _ in range(config.num_blocks)])
         self.num_heads = self.config.num_attention_heads
 

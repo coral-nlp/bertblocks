@@ -1,7 +1,5 @@
 from typing import TYPE_CHECKING
 
-from polybert.modeling.initialization import InitMixin
-
 if TYPE_CHECKING:
     import torch
 
@@ -12,7 +10,7 @@ from torch import nn
 from polybert.modeling.activations import get_actv_fn
 
 
-class PolyBertGLU(nn.Module, InitMixin):
+class PolyBertGLU(nn.Module):
     """Gated Linear Unit (GLU) implementation for PolyBert.
 
     This class implements a GLU-style MLP layer that uses gating to control information flow.
@@ -35,7 +33,7 @@ class PolyBertGLU(nn.Module, InitMixin):
                 - hidden_dropout_prob: Dropout probability (0 means no dropout)
 
         """
-        super(InitMixin, self).__init__(config)
+        super().__init__()
         # Upwards projection to intermediate size & gate
         self.Uprj = nn.Linear(config.hidden_size, config.intermediate_size * 2, bias=False)
         # Activation function for gate
@@ -44,11 +42,6 @@ class PolyBertGLU(nn.Module, InitMixin):
         self.Dprj = nn.Linear(config.intermediate_size, config.hidden_size, bias=False)
         # Optional dropout
         self.drop = nn.Dropout(config.hidden_dropout_prob) if config.hidden_dropout_prob > 0 else nn.Identity()
-
-    def init_weights(self) -> None:
-        """Initialize weights."""
-        self._init_module_weights(self.Uprj, "in")
-        self._init_module_weights(self.Dprj, "out")
 
     def forward(self, x: "torch.Tensor") -> "torch.Tensor":
         """Forward pass through the GLU layer.
@@ -75,7 +68,7 @@ class PolyBertGLU(nn.Module, InitMixin):
         return x
 
 
-class PolyBertMLP(nn.Module, InitMixin):
+class PolyBertMLP(nn.Module):
     """Standard Multi-Layer Perceptron for PolyBert.
 
     This class implements a standard two-layer MLP (feedforward network).
@@ -100,7 +93,7 @@ class PolyBertMLP(nn.Module, InitMixin):
                 - hidden_dropout_prob: Dropout probability (0 means no dropout)
 
         """
-        super(InitMixin, self).__init__(config)
+        super().__init__()
         # Upwards projection to intermediate size
         self.Uprj = nn.Linear(config.hidden_size, config.intermediate_size, bias=config.mlp_in_bias)
         # Activation function
@@ -109,11 +102,6 @@ class PolyBertMLP(nn.Module, InitMixin):
         self.Dprj = nn.Linear(config.intermediate_size, config.hidden_size, bias=config.mlp_out_bias)
         # Optional dropout
         self.drop = nn.Dropout(config.hidden_dropout_prob) if config.hidden_dropout_prob > 0.0 else nn.Identity()
-
-    def init_weights(self) -> None:
-        """Initialize weights."""
-        self._init_module_weights(self.Uprj, "in")
-        self._init_module_weights(self.Dprj, "out")
 
     def forward(self, x: "torch.Tensor") -> "torch.Tensor":
         """Forward pass through the MLP layer.
@@ -161,10 +149,12 @@ def get_mlp(config: "PolyBertConfig") -> nn.Module:
         that allows for more selective information processing.
 
     """
-    match config.mlp_type:
-        case "mlp":
-            return PolyBertMLP(config)
-        case "glu":
-            return PolyBertGLU(config)
-        case _:
-            raise ValueError(f"Unknown mlp type: {config.mlp_type}")
+    mlp_type = getattr(config, "mlp_type", "mlp")  # Default to mlp for backward compatibility
+
+    if mlp_type == "mlp":
+        return PolyBertMLP(config)
+    elif mlp_type == "glu":
+        return PolyBertGLU(config)
+    else:
+        supported_types = ["mlp", "glu"]
+        raise ValueError(f"Unknown MLP type '{mlp_type}'. " f"Supported types: {', '.join(supported_types)}")

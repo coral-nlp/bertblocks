@@ -21,10 +21,10 @@ class Config:
 
 
 class ConfigMixin:
-    """Mixin class that provides config access to modules.
+    """Mixin class that provides model_config access to modules.
 
     This mixin should be inherited by modules that need access to the model
-    configuration. It stores the config as an instance attribute for easy access.
+    configuration. It stores the model_config as an instance attribute for easy access.
     """
 
     def __init__(self, config: "PolyBertConfig"):
@@ -52,7 +52,7 @@ class PolyBertConfig(PretrainedConfig):
     Example:
         Basic usage:
 
-        >>> config = PolyBertConfig(
+        >>> model_config = PolyBertConfig(
         ...     hidden_size=768,
         ...     num_blocks=12,
         ...     num_attention_heads=12
@@ -60,7 +60,7 @@ class PolyBertConfig(PretrainedConfig):
 
         Custom configuration:
 
-        >>> config = PolyBertConfig(
+        >>> model_config = PolyBertConfig(
         ...     vocab_size=50000,
         ...     hidden_size=1024,
         ...     num_blocks=24,
@@ -68,7 +68,7 @@ class PolyBertConfig(PretrainedConfig):
         ...     intermediate_size=4096,
         ...     actv_fn="relu",
         ...     norm="layer",
-        ...     pos_emb_type="rope"
+        ...     pos_emb_kind="rope"
         ... )
 
     Note:
@@ -77,8 +77,8 @@ class PolyBertConfig(PretrainedConfig):
 
     """
 
-    model_type: str = Field(default="encoder", description="The type of model architecture")
-    """str: The type of model architecture. Always 'encoder' for PolyBert models."""
+    model_type: str = Field(default="polybert", description="The type of model architecture")
+    """str: The type of model architecture. Always 'polybert' for PolyBert models."""
     vocab_size: int = Field(
         alias="vocabulary_size",
         default=30522,
@@ -163,8 +163,15 @@ class PolyBertConfig(PretrainedConfig):
     This ensures no extremely large initial weights. Common values: 2.0-3.0.
     Must be greater than 0.0.
     """
-    actv_fn: Literal["relu", "gelu"] = Field(
-        default="gelu",
+    initializer_gain: float = Field(
+        default=1.0, description="The gain to scale initialized weights with, e.g., for DeepNorm", gt=0.0
+    )
+    """float: Gain to scale initialized weights with, e.g., for DeepNorm.
+
+    Must be greater than 0.0.
+    """
+    actv_fn: Literal["relu", "silu", "gelu", "leakyrelu", "selu", "logsigmoid", "sigmoid", "prelu"] = Field(
+        default="silu",
         description="The activation function used in models",
     )
     """str: The activation function used in feed-forward networks.
@@ -216,25 +223,34 @@ class PolyBertConfig(PretrainedConfig):
     Common values: "regression", "classification", "token_classification",
     "question_answering". This affects the model head architecture.
     """
-    num_labels: int = Field(default=1, description="The number of labels for classification tasks", ge=1)
+    problem_type: Literal["regression", "single_label_classification", "multi_label_classification"] | None = Field(
+        default=None, description="Problem type for automatic loss function selection"
+    )
+    """str | None: The problem type for automatic loss selection (HuggingFace standard).
+
+    When set, automatically selects appropriate loss functions:
+        - "regression": MSE loss for continuous targets
+        - "single_label_classification": CrossEntropy loss for single-label problems
+        - "multi_label_classification": BCEWithLogits loss for multi-label problems
+
+    If None, uses the legacy 'task' field for backward compatibility.
+    """
+    num_labels: int = Field(default=2, description="The number of labels for classification tasks", ge=1)
     """int: The number of output labels for classification tasks.
 
     For regression tasks, typically 1. For binary classification, 2.
     For multi-class classification, the number of classes. Must be at least 1.
+    This is the standard HuggingFace field name for the number of classes.
     """
-    pos_emb_type: Literal["alibi", "sinusoidal", "rope"] = Field(
-        default="none", description="Type of positional embedding."
+    pos_emb_kind: Literal["alibi", "sinusoidal", "rope"] = Field(
+        default="alibi", description="Type of positional embedding."
     )
     """str: The type of positional embedding to use.
 
     Available options:
-        - "none": No positional embeddings (default)
-        - "alibi": Attention with Linear Biases (no learned parameters)
+        - "alibi": Attention with Linear Biases (default)
         - "sinusoidal": Fixed sinusoidal positional encodings
         - "rope": Rotary Position Embedding (relative positions)
-
-    Note: "none" is unusual for transformer models and may hurt performance
-    on tasks requiring positional understanding.
     """
     max_sequence_length: int = Field(default=512, description="Maximum sequence length", gt=0)
     """int: Maximum number of tokens the model can process in a single sequence.
@@ -242,6 +258,36 @@ class PolyBertConfig(PretrainedConfig):
     This affects memory usage and determines the size of positional embeddings
     (if used). Common values: 512 (BERT), 1024, 2048. Longer sequences require
     more memory. Must be greater than 0.
+    """
+    mlp_type: Literal["mlp", "glu"] = Field(default="mlp", description="Type of MLP layer to use")
+    """str: The type of MLP (feed-forward) layer architecture.
+
+    Available options:
+        - "mlp": Standard two-layer feed-forward network
+        - "glu": Gated Linear Unit with learned gating mechanism (typically better performance)
+    """
+    mlp_in_bias: bool = Field(default=True, description="Whether to use bias in MLP input projection")
+    """bool: Whether to include bias terms in the input projection of MLP layers.
+
+    Setting to False can reduce parameters and sometimes improve performance.
+    Common values: True (default), False (for efficiency).
+    """
+    mlp_out_bias: bool = Field(default=True, description="Whether to use bias in MLP output projection")
+    """bool: Whether to include bias terms in the output projection of MLP layers.
+
+    Setting to False can reduce parameters and sometimes improve performance.
+    Common values: True (default), False (for efficiency).
+    """
+    attn_implementation: Literal["eager", "sdpa", "flash_attention_2"] | None = Field(
+        default=None, description="Attention implementation to use"
+    )
+    """str | None: The attention implementation to use.
+
+    Available options:
+        - None: Use default implementation (eager for now)
+        - "eager": Standard PyTorch attention implementation
+        - "sdpa": Scaled Dot Product Attention (PyTorch 2.0+)
+        - "flash_attention_2": Flash Attention v2 (if available)
     """
 
     @model_validator(mode="after")

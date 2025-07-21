@@ -7,10 +7,8 @@ if TYPE_CHECKING:
 
 from torch import nn
 
-from polybert.modeling.initialization import InitMixin
 
-
-class PolyBertEmbeddings(nn.Module, InitMixin):
+class PolyBertEmbeddings(nn.Module):
     """Token embedding layer for PolyBert model.
 
     This class implements the token embedding layer that converts input token IDs
@@ -28,14 +26,9 @@ class PolyBertEmbeddings(nn.Module, InitMixin):
                 - hidden_dropout_prob: Dropout probability (0 means no dropout)
 
         """
-        super(InitMixin, self).__init__(config)
+        super().__init__()
         self.embd = nn.Embedding(config.vocab_size, config.hidden_size, padding_idx=config.pad_token_id)
         self.drop = nn.Dropout(config.hidden_dropout_prob) if config.hidden_dropout_prob > 0 else nn.Identity()
-
-    def init_weights(self) -> None:
-        """Initialize weights."""
-        """Initialize the embedding layer weights."""
-        self._init_module_weights(self.embd, "embedding")
 
     def forward(
         self,

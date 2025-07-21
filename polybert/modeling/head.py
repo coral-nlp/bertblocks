@@ -1,7 +1,5 @@
 from typing import TYPE_CHECKING
 
-from polybert.modeling.initialization import InitMixin
-
 if TYPE_CHECKING:
     import torch
 
@@ -13,7 +11,7 @@ from polybert.modeling.activations import get_actv_fn
 from polybert.modeling.norms import get_norm
 
 
-class PolyBertPredictionHead(nn.Module, InitMixin):
+class PolyBertPredictionHead(nn.Module):
     """Prediction head for PolyBert model with gated activation.
 
     This class implements a prediction head that uses a gated linear unit (GLU)
@@ -38,15 +36,11 @@ class PolyBertPredictionHead(nn.Module, InitMixin):
                 - norm_eps: Epsilon for numerical stability in normalization
 
         """
-        super(InitMixin, self).__init__(config)
+        super().__init__()
         self.ffwd = nn.Linear(config.hidden_size, 2 * config.hidden_size, bias=False)
         self.actv = get_actv_fn(config)
         self.pre_norm = get_norm(config) if config.norm_kind in ("pre", "both") else nn.Identity()
         self.post_norm = get_norm(config) if config.norm_kind in ("post", "both") else nn.Identity()
-
-    def init_weights(self) -> None:
-        """Initialize weights."""
-        self._init_module_weights(self.ffwd, "out")
 
     def forward(self, x: "torch.Tensor") -> "torch.Tensor":
         """Forward pass through the prediction head.

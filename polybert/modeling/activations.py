@@ -22,7 +22,7 @@ def get_actv_fn(config: PolyBertConfig) -> nn.Module:
 
     Args:
         config: PolyBert configuration object containing the activation function
-                specification in config.actv_fn
+                specification in model_config.actv_fn
 
     Returns:
         An activation function module (nn.Module) that can be called on tensors.

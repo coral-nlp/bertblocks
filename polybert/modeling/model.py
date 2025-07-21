@@ -1,4 +1,7 @@
-from typing import TYPE_CHECKING, ClassVar
+import functools
+import math
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
 from polybert.modeling.block import PolyBertEncoder
 
@@ -19,7 +22,6 @@ from transformers.modeling_utils import PreTrainedModel
 from polybert.modeling.config import PolyBertConfig
 from polybert.modeling.embedding import PolyBertEmbeddings
 from polybert.modeling.head import PolyBertPredictionHead
-from polybert.modeling.initialization import InitMixin
 
 
 class PolyBertPreTrainedModel(PreTrainedModel):
@@ -45,6 +47,95 @@ class PolyBertPreTrainedModel(PreTrainedModel):
     _supports_flash_attn_2 = False
     _supports_sdpa = False
     _supports_flex_attn = True
+    _no_split_modules: ClassVar[list] = ["PolyBertEncoder", "PolyBertAttention"]
+    _keys_to_ignore_on_load_missing: ClassVar[list] = [r"position_ids"]
+    _keys_to_ignore_on_load_unexpected: ClassVar[list] = [r"pooler"]
+
+    def __init__(self, config: PolyBertConfig, *args: Any, **kwargs: Any) -> None:
+        super().__init__(config, *args, **kwargs)
+
+    def _init_weights(self, module: nn.Module) -> None:
+        """Initialize module weights.
+
+        Args:
+            module: The module to initialize.
+
+        """
+        # Set up initialization parameters from config
+        initializer_kind = self.config.initializer_kind
+        initializer_cutoff_factor = self.config.initializer_cutoff_factor
+        initializer_range = self.config.initializer_range
+        initializer_gain = self.config.initializer_gain
+
+        std_values = {
+            "in": initializer_range,
+            "out": initializer_range / math.sqrt(2.0 * self.config.num_blocks),
+            "embedding": initializer_range,
+            "final_out": self.config.hidden_size**-0.5,
+        }
+
+        # Determine std_kind based on module type
+        std_kind = None
+
+        # Embedding layers use "embedding" std
+        if isinstance(module, nn.Embedding):
+            std_kind = "embedding"
+        # Linear layers - determine type by attribute name patterns
+        elif isinstance(module, nn.Linear):
+            # Get the full module path to determine context
+            module_name = getattr(module, "_get_name", lambda: str(module))()
+
+            # Task-specific output layers (final classification/generation layers)
+            if any(name in module_name.lower() for name in ["classifier", "decoder"]):
+                std_kind = "final_out"
+            # Attention projection layers (input projections)
+            elif any(name in module_name.lower() for name in ["proj", "uprj"]):
+                std_kind = "in"
+            # Feed-forward and output projections
+            elif any(name in module_name.lower() for name in ["ffwd", "dprj"]):
+                std_kind = "out"
+            else:
+                # Default for other linear layers
+                std_kind = "in"
+
+        if std_kind is None:
+            return  # Skip initialization for unsupported modules
+
+        std = std_values[std_kind]
+
+        def _get_init_fn() -> Callable[[torch.Tensor], None]:
+            match initializer_kind:
+                case "trunc_normal":
+                    return functools.partial(
+                        nn.init.trunc_normal_,
+                        mean=0.0,
+                        std=std,
+                        a=-initializer_cutoff_factor * std,
+                        b=initializer_cutoff_factor * std,
+                    )
+                case "kaiming_normal":
+                    return functools.partial(nn.init.kaiming_normal_)
+                case "kaiming_uniform":
+                    return functools.partial(nn.init.kaiming_uniform_)
+                case "xavier_normal":
+                    return functools.partial(nn.init.xavier_normal_)
+                case "xavier_uniform":
+                    return functools.partial(nn.init.xavier_uniform_)
+                case _:
+                    raise ValueError(
+                        f"Unknown initialization function {initializer_kind}, supported functions: "
+                        f"'trunc_normal', 'kaiming_normal', 'kaiming_uniform', 'xavier_normal', 'xavier_uniform'"
+                    )
+
+        # Apply initialization function to module weight
+        init_fn = _get_init_fn()
+        if hasattr(module, "weight") and module.weight is not None:
+            init_fn(module.weight)
+            module.weight *= initializer_gain
+
+        # Initialize bias terms to zero for linear layers
+        if isinstance(module, nn.Linear) and module.bias is not None:
+            nn.init.zeros_(module.bias)
 
 
 class PolyBertModel(PolyBertPreTrainedModel):
@@ -71,6 +162,16 @@ class PolyBertModel(PolyBertPreTrainedModel):
         self.encd = PolyBertEncoder(config)
         self.num_heads = config.num_attention_heads
         self.post_init()
+
+    @property
+    def dtype(self) -> "torch.dtype":
+        """Get the dtype of the model parameters."""
+        return next(self.parameters()).dtype
+
+    @property
+    def device(self) -> "torch.device":
+        """Get the device of the model parameters."""
+        return next(self.parameters()).device
 
     def get_input_embeddings(self) -> "nn.Embedding":
         """Get the input token embeddings.
@@ -124,7 +225,69 @@ class PolyBertModel(PolyBertPreTrainedModel):
         )
 
 
-class PolyBertForMaskedLM(PolyBertPreTrainedModel, InitMixin):
+class PolyBertForTasksBase(PolyBertPreTrainedModel):
+    """Base class for all PolyBert task-specific models.
+
+    This class provides common functionality for classification, regression,
+    and other downstream tasks, eliminating code duplication across task models.
+    """
+
+    def __init__(self, config: PolyBertConfig, *args: Any, **kwargs: Any) -> None:
+        super().__init__(config, *args, **kwargs)
+        self.model = PolyBertModel(config)
+        self.head = PolyBertPredictionHead(config)
+
+    def get_loss_function(
+        self, problem_type: Literal["regression", "single_label_classification", "multi_label_classification"] | None
+    ) -> nn.Module:
+        """Get the appropriate loss function for the given problem type.
+
+        Args:
+            problem_type: The type of problem ('regression', 'single_label_classification',
+                         'multi_label_classification')
+
+        Returns:
+            The appropriate loss function module.
+
+        """
+        from polybert.modeling.loss import get_loss_function
+
+        return get_loss_function(problem_type)
+
+    def compute_loss(
+        self,
+        logits: torch.Tensor,
+        labels: torch.Tensor,
+        problem_type: Literal["regression", "single_label_classification", "multi_label_classification"] | None,
+    ) -> torch.Tensor:
+        """Compute loss for the given logits, labels and problem type.
+
+        Args:
+            logits: Model predictions
+            labels: Target labels
+            problem_type: Type of problem for loss computation
+
+        Returns:
+            Computed loss tensor or None if labels is None
+
+        """
+        if labels is None:
+            return None
+
+        if problem_type == "regression":
+            if self.num_labels == 1:
+                return self.loss_fn(logits.squeeze(), labels.squeeze())
+            else:
+                return self.loss_fn(logits, labels)
+        elif problem_type == "single_label_classification":
+            return self.loss_fn(logits.view(-1, self.num_labels), labels.view(-1))
+        elif problem_type == "multi_label_classification":
+            return self.loss_fn(logits, labels.float())
+        else:
+            raise ValueError(f"Unknown problem type: {problem_type}")
+
+
+class PolyBertForMaskedLM(PolyBertPreTrainedModel):
     """PolyBert model for masked language modeling tasks.
 
     This model extends the base PolyBert model with a prediction head
@@ -145,8 +308,7 @@ class PolyBertForMaskedLM(PolyBertPreTrainedModel, InitMixin):
             config: Model configuration containing hyperparameters.
 
         """
-        super(PolyBertPreTrainedModel, self).__init__(config)
-        super(InitMixin, self).__init__(config)
+        super().__init__(config)
         self.vocab_size = config.vocab_size
         self.model = PolyBertModel(config)
         self.head = PolyBertPredictionHead(config)
@@ -154,10 +316,6 @@ class PolyBertForMaskedLM(PolyBertPreTrainedModel, InitMixin):
         self.loss_fn = nn.CrossEntropyLoss()
 
         self.post_init()
-
-    def init_weights(self) -> None:
-        """Initialize weights."""
-        self._init_module_weights(self.decoder, "out")
 
     def get_output_embeddings(self) -> "nn.Module":
         """Return the decoder embeddings."""
@@ -218,7 +376,7 @@ class PolyBertForMaskedLM(PolyBertPreTrainedModel, InitMixin):
         )
 
 
-class PolyBertForSequenceClassification(PolyBertPreTrainedModel, InitMixin):
+class PolyBertForSequenceClassification(PolyBertForTasksBase):
     """PolyBert model for sequence classification tasks.
 
     This model extends the base PolyBert model with a classification head
@@ -231,36 +389,15 @@ class PolyBertForSequenceClassification(PolyBertPreTrainedModel, InitMixin):
 
         Args:
             config: Model configuration containing hyperparameters including
-                task type ('regression', 'single_label_classification', or
-                'multi_label_classification') and number of classes.
-
-        Raises:
-            ValueError: If the task type is not supported.
+                task type and number of classes.
 
         """
-        super(PolyBertPreTrainedModel, self).__init__(config)
-        super(InitMixin, self).__init__(config)
-        self.model = PolyBertModel(config)
-        self.head = PolyBertPredictionHead(config)
-        self.classifier = torch.nn.Linear(config.hidden_size, config.num_classes)
-        self.num_classes = config.num_classes
-        if self.config.task == "regression":
-            self.loss_fn = nn.MSELoss()
-        elif self.config.task == "single_label_classification":
-            self.loss_fn = nn.CrossEntropyLoss()
-        elif self.config.task == "multi_label_classification":
-            self.loss_fn = nn.BCEWithLogitsLoss()
-        else:
-            raise ValueError(
-                "Unknown problem type {self.config.problem_type}, "
-                "supported are 'regression', 'single_label_classification', "
-                "and 'multi_label_classification'."
-            )
+        super().__init__(config=config)
+        self.classifier = torch.nn.Linear(config.hidden_size, config.num_labels)
+        self.num_labels = config.num_labels
+        self.problem_type = config.problem_type
+        self.loss_fn = self.get_loss_function(self.problem_type)
         self.post_init()
-
-    def init_weights(self) -> None:
-        """Initialize weights."""
-        self._init_module_weights(self.classifier, "final_out")
 
     def forward(
         self,
@@ -277,9 +414,9 @@ class PolyBertForSequenceClassification(PolyBertPreTrainedModel, InitMixin):
             attention_mask: Optional tensor indicating which tokens should be attended to.
                 Shape (batch_size, sequence_length). Defaults to None.
             labels: Optional tensor of target labels for computing loss.
-                For regression: shape (batch_size,) or (batch_size, num_classes).
+                For regression: shape (batch_size,) or (batch_size, num_labels).
                 For classification: shape (batch_size,) for single-label or
-                (batch_size, num_classes) for multi-label. Defaults to None.
+                (batch_size, num_labels) for multi-label. Defaults to None.
             output_attentions: Whether to return attention weights from all layers.
                 Defaults to False.
             output_hidden_states: Whether to return hidden states from all layers.
@@ -303,17 +440,7 @@ class PolyBertForSequenceClassification(PolyBertPreTrainedModel, InitMixin):
         cls_features = output.last_hidden_state[:, 0, :]  # Regular CLS token extraction
         logits = self.classifier(self.head(cls_features))
 
-        loss = None
-        if labels is not None:
-            if self.config.task == "regression":
-                if self.num_classes == 1:
-                    loss = self.loss_fn(logits.squeeze(), labels.squeeze())
-                else:
-                    loss = self.loss_fn(logits, labels)
-            elif self.config.task == "single_label_classification":
-                loss = self.loss_fn(logits.view(-1, self.num_classes), labels.view(-1))
-            elif self.config.task == "multi_label_classification":
-                loss = self.loss_fn(logits, labels.float())
+        loss = self.compute_loss(logits, labels, self.problem_type)
 
         return SequenceClassifierOutput(
             loss=loss,
@@ -323,7 +450,7 @@ class PolyBertForSequenceClassification(PolyBertPreTrainedModel, InitMixin):
         )
 
 
-class PolyBertForTokenClassification(PolyBertPreTrainedModel, InitMixin):
+class PolyBertForTokenClassification(PolyBertForTasksBase):
     """PolyBert model for token classification tasks.
 
     This model extends the base PolyBert model with a classification head
@@ -339,18 +466,13 @@ class PolyBertForTokenClassification(PolyBertPreTrainedModel, InitMixin):
                 the number of classes for token classification.
 
         """
-        super(PolyBertPreTrainedModel, self).__init__(config)
-        super(InitMixin, self).__init__(config)
-        self.model = PolyBertModel(config)
-        self.head = PolyBertPredictionHead(config)
-        self.num_classes = config.num_classes
-        self.classifier = torch.nn.Linear(config.hidden_size, self.num_classes)
-        self.loss_fn = nn.CrossEntropyLoss()
+        super().__init__(config=config)
+        self.num_labels = config.num_labels
+        self.classifier = torch.nn.Linear(config.hidden_size, self.num_labels)
+        # Token classification is always single-label classification; explicit literal cast is needed for mypy
+        self.problem_type: Literal["single_label_classification"] = "single_label_classification"
+        self.loss_fn = self.get_loss_function(self.problem_type)
         self.post_init()
-
-    def init_weights(self) -> None:
-        """Initialize weights."""
-        self._init_module_weights(self.classifier, "final_out")
 
     def forward(
         self,
@@ -388,9 +510,7 @@ class PolyBertForTokenClassification(PolyBertPreTrainedModel, InitMixin):
         )
         logits = self.classifier(self.head(output.last_hidden_state))
 
-        loss = None
-        if labels is not None:
-            loss = self.loss_fn(logits.view(-1, self.num_classes), labels.view(-1))
+        loss = self.compute_loss(logits, labels, self.problem_type)
 
         return TokenClassifierOutput(
             loss=loss,
@@ -400,7 +520,7 @@ class PolyBertForTokenClassification(PolyBertPreTrainedModel, InitMixin):
         )
 
 
-class PolyBertForQuestionAnswering(PolyBertPreTrainedModel, InitMixin):
+class PolyBertForQuestionAnswering(PolyBertForTasksBase):
     """PolyBert model for extractive question answering tasks.
 
     This model extends the base PolyBert model with a classification head
@@ -416,16 +536,9 @@ class PolyBertForQuestionAnswering(PolyBertPreTrainedModel, InitMixin):
             config: Model configuration containing hyperparameters.
 
         """
-        super(PolyBertPreTrainedModel, self).__init__(config)
-        super(InitMixin, self).__init__(config)
-        self.model = PolyBertModel(config)
-        self.head = PolyBertPredictionHead(config)
-        self.classifier = torch.nn.Linear(config.hidden_size, 2)
+        super().__init__(config=config)
+        self.classifier = torch.nn.Linear(config.hidden_size, 2)  # start and end positions
         self.post_init()
-
-    def init_weights(self) -> None:
-        """Initialize weights."""
-        self._init_module_weights(self.classifier, "final_out")
 
     def forward(
         self,

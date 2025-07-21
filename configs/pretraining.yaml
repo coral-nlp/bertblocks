@@ -1,0 +1,45 @@
+# lightning.pytorch==2.0.0
+seed_everything: 153201820 # For reproducibility
+trainer:
+  precision: 16-mixed
+  accumulate_grad_batches: 24
+  default_root_dir: "./checkpoints"
+  #logger:
+  #  - class_path: lightning.pytorch.loggers.WandbLogger
+  #    init_args:
+  #      project: "german-encoder"
+  #      entity: "lgienapp"
+  #      log_model: false
+  max_epochs: 1
+  log_every_n_steps: 1
+model:
+  class_path: polybert.pretraining.mlm.PolyBertPretrainingModule
+  init_args:
+    learning_rate: 1e-4
+    weight_decay: 1e-5
+    warmup_steps: 1000
+    warmup_decay: 0.1
+    learning_rate_decay: 1
+    pretrained_tokenizer_name_or_path: ${data.init_args.pretrained_tokenizer_name_or_path}
+    compile_model: true
+    model_config:
+      class_path: polybert.modeling.config.PolyBertConfig
+      init_args:
+        hidden_size: 512
+        num_blocks: 6
+        num_attention_heads: 4
+        intermediate_size: 2048
+        actv_fn: "silu"
+        norm: "rms"
+        norm_kind: "pre"
+        pos_emb_kind: "alibi"
+        max_sequence_length: ${data.init_args.max_sequence_length}
+data:
+  class_path: polybert.pretraining.mlm.PolyBertPretrainingDataModule
+  init_args:
+    pretrained_tokenizer_name_or_path: "bert-base-uncased"
+    max_sequence_length: 512
+    mlm_probability: 0.3
+    train_batch_size: 16
+    val_batch_size: 16
+    num_workers: 8

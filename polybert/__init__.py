@@ -22,11 +22,35 @@ from .modeling import (
     PolyBertModel,
 )
 
+# Register models with HuggingFace AutoModel system
+try:
+    from transformers import (
+        AutoConfig,
+        AutoModel,
+        AutoModelForMaskedLM,
+        AutoModelForQuestionAnswering,
+        AutoModelForSequenceClassification,
+        AutoModelForTokenClassification,
+    )
+
+    # Register configuration
+    AutoConfig.register("polybert", PolyBertConfig)
+
+    # Register models for automatic loading
+    AutoModel.register(PolyBertConfig, PolyBertModel)
+    AutoModelForMaskedLM.register(PolyBertConfig, PolyBertForMaskedLM)
+    AutoModelForSequenceClassification.register(PolyBertConfig, PolyBertForSequenceClassification)
+    AutoModelForTokenClassification.register(PolyBertConfig, PolyBertForTokenClassification)
+    AutoModelForQuestionAnswering.register(PolyBertConfig, PolyBertForQuestionAnswering)
+except ImportError:
+    # transformers not available - skip registration
+    pass
+
 __all__ = [
     "PolyBertConfig",
     "PolyBertModel",
     "PolyBertForMaskedLM",
-    "PolyBertForTokenClassification",
     "PolyBertForSequenceClassification",
+    "PolyBertForTokenClassification",
     "PolyBertForQuestionAnswering",
 ]

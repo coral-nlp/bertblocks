@@ -10,7 +10,6 @@ from torch.nn.attention.flex_attention import (
 )
 
 from polybert.modeling.config import PolyBertConfig
-from polybert.modeling.initialization import InitMixin
 
 
 class ScoreModFunctions:
@@ -87,7 +86,7 @@ class ScoreModFunctions:
         return functools.partial(ScoreModFunctions._alibi, slopes=slopes)
 
 
-class PolyBertAttention(nn.Module, InitMixin):
+class PolyBertAttention(nn.Module):
     """Extended PolyBERT attention mechanism with configurable positional encodings.
 
     This class implements a flexible attention mechanism using flex_attention for efficient
@@ -115,10 +114,10 @@ class PolyBertAttention(nn.Module, InitMixin):
         Args:
             config: PolyBERT configuration object containing model hyperparameters
                    including hidden_size, num_attention_heads, attn_dropout_prob,
-                   and pos_emb_type.
+                   and pos_emb_kind.
 
         """
-        super(InitMixin, self).__init__(config)
+        super().__init__()
         # General hyperparameters
         self.num_heads = config.num_attention_heads
         self.head_dim = config.hidden_size // config.num_attention_heads
@@ -128,13 +127,8 @@ class PolyBertAttention(nn.Module, InitMixin):
         self.ffwd = nn.Linear(config.hidden_size, config.hidden_size, bias=False)
         self.drop = nn.Dropout(config.attn_dropout_prob) if config.attn_dropout_prob > 0 else nn.Identity()
         # Positional embeddings (they apply at different stages of attention depending on type)
-        self.qk_mod = self._qk_mod(config.pos_emb_type)
-        self.score_mod = self._score_mod(config.pos_emb_type)
-
-    def init_weights(self) -> None:
-        """Initialize weights."""
-        self._init_module_weights(self.proj, "in")
-        self._init_module_weights(self.ffwd, "out")
+        self.qk_mod = self._qk_mod(config.pos_emb_kind)
+        self.score_mod = self._score_mod(config.pos_emb_kind)
 
     def _score_mod(self, score_mod_type: str) -> "_score_mod_signature | None":
         """Initialize score modification function based on positional encoding type.

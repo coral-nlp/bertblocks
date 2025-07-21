@@ -205,27 +205,18 @@ class PolyBertPretrainingModule(L.LightningModule):
 
     def __init__(
         self,
-        pretrained_tokenizer_name_or_path: str,
         learning_rate: float | None = 1e-7,
         weight_decay: float | None = 1e-6,
         warmup_steps: int | None = 1_000,
         warmup_decay: float | None = 0.1,
         learning_rate_decay: float | None = 0.99999,
         compile_model: bool | None = True,
-        hidden_size: int | None = 768,
-        num_hidden_layers: int | None = 12,
-        num_attention_heads: int | None = 12,
-        intermediate_size: int | None = 3072,
-        hidden_dropout_prob: float | None = 0.1,
-        attention_probs_dropout_prob: float | None = 0.1,
-        initializer_range: float | None = 0.02,
-        initializer_cutoff_factor: float | None = 3.0,
-        norm_eps: float | None = 1e-12,
+        pretrained_tokenizer_name_or_path: str | None = None,
+        model_config: "PolyBertConfig | None" = None,
     ):
         """Initialize the PolyBert pretraining module.
 
         Args:
-            pretrained_tokenizer_name_or_path: Path or name of tokenizer for vocab size.
             learning_rate: Peak learning rate for optimization. Defaults to 1e-7.
             weight_decay: Weight decay coefficient for AdamW. Defaults to 1e-6.
             warmup_steps: Number of warmup steps for learning rate schedule.
@@ -236,41 +227,25 @@ class PolyBertPretrainingModule(L.LightningModule):
                 Defaults to 0.99999 (very gradual decay).
             compile_model: Whether to compile the model with torch.compile.
                 Defaults to True for better performance.
-            hidden_size: Hidden dimension size. Defaults to 768.
-            num_hidden_layers: Number of transformer layers. Defaults to 12.
-            num_attention_heads: Number of attention heads. Defaults to 12.
-            intermediate_size: Feed-forward intermediate size. Defaults to 3072.
-            hidden_dropout_prob: Dropout probability for hidden layers.
-                Defaults to 0.1.
-            attention_probs_dropout_prob: Dropout probability for attention.
-                Defaults to 0.1.
-            initializer_range: Standard deviation for weight initialization.
-                Defaults to 0.02.
-            initializer_cutoff_factor: Cutoff factor for truncated normal init.
-                Defaults to 3.0.
-            norm_eps: Epsilon for layer normalization. Defaults to 1e-12.
+            model_config: PolyBertConfig or None
+                PolyBert model configuration. Defaults to None.
+            pretrained_tokenizer_name_or_path: str
+                Tokenizer name; if provided, will overwrite the model vocab size using the given tokenizers properties.
 
         """
         super().__init__()
-        self.save_hyperparameters()
-        tokenizer = AutoTokenizer.from_pretrained(self.hparams.pretrained_tokenizer_name_or_path)
-        self.config = PolyBertConfig(
-            hidden_size=hidden_size,
-            num_blocks=num_hidden_layers,
-            num_attention_heads=num_attention_heads,
-            intermediate_size=intermediate_size,
-            hidden_dropout_prob=hidden_dropout_prob,
-            attention_probs_dropout_prob=attention_probs_dropout_prob,
-            initializer_range=initializer_range,
-            initializer_cutoff_factor=initializer_cutoff_factor,
-            norm_eps=norm_eps,
-            pad_token_id=tokenizer.pad_token_id,
-            vocab_size=tokenizer.vocab_size,
-        )
-        self.model = PolyBertForMaskedLM(self.config)
-        self.model = torch.compile(
-            self.model, options={"shape_padding": True, "trace.enabled": True, "trace.graph_diagram": True}
-        )
+        self.save_hyperparameters(ignore=["model_config"])
+        self.model_config = model_config if model_config is not None else PolyBertConfig()
+        # Patch model config with tokenizer vocab size if given
+        if self.hparams.pretrained_tokenizer_name_or_path is not None:
+            tokenizer = AutoTokenizer.from_pretrained(self.hparams.pretrained_tokenizer_name_or_path)
+            self.model_config.vocab_size = tokenizer.vocab_size
+            del tokenizer
+        self.model = PolyBertForMaskedLM(self.model_config)
+        if self.hparams.compile_model:
+            self.model = torch.compile(
+                self.model, options={"shape_padding": True, "trace.enabled": True, "trace.graph_diagram": True}
+            )
 
     def configure_optimizers(self) -> tuple[list["torch.optim.Optimizer"], list[dict[str, Any]]]:
         """Configure optimizers and learning rate schedulers.
