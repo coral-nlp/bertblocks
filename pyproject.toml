@@ -4,7 +4,9 @@ version = "0.1.0"
 description = "Add your description here"
 requires-python = ">=3.12"
 dependencies = [
+    "datasets>=4.0.0",
     "einops>=0.8.1",
+    "lightning>=2.5.2",
     "pydantic>=2.11.7",
     "torch==2.7.1",
     "transformers>=4.53.2",
@@ -98,7 +100,8 @@ indent-style = "space"
 line-ending = "auto"
 
 [tool.bandit]
-exclude_dirs = ["tests", "examples", "docs"]
+exclude_dirs = ["examples", "docs"]
+exclude = 'test_*.py'
 skips = ["B101", "B601"]
 
 [tool.coverage.run]

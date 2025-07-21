@@ -1,76 +1,94 @@
+"""Model weight initialization utilities for PolyBert.
+
+This module provides comprehensive weight initialization strategies for transformer
+models, including support for various initialization schemes (truncated normal,
+Kaiming, Xavier) and layer-specific initialization patterns.
+
+The module implements a mixin class and initialization functions that can be
+applied to PolyBert models to ensure proper weight initialization for training
+stability and performance.
+"""
+
+import functools
 import math
+from collections.abc import Callable
 from typing import Literal
 
 from torch import nn
 
+from polybert.modeling.config import PolyBertConfig
+
 
 class InitMixin:
-    def __init__(self, config: "PolyBertConfig"):
-        super().__init__()
-        self.config = config
+    """Mixin class for initialization strategies."""
 
-    def _init_weights(self, reset_params: bool = False):
-        if hasattr(self, "attn"):
-            self.attn._init_weights(reset_params)
-        if hasattr(self, "mlp"):
-            self.mlp._init_weights(reset_params)
+    def __init__(self, config: PolyBertConfig):
+        self.intializer_kind = config.initializer_kind
+        self.initializer_cutoff_factor = config.initializer_cutoff_factor
+        self.initializer_range = config.initializer_range
 
-
-def init_weights(config: "PolyBertConfig"):
-    def __inner__(module: nn.Module) -> None:
-        def init_weight(
-            module: nn.Module,
-            std: float,
-            init_fn: Literal["trunc_normal"] = "trunc_normal",
-        ):
-            match init_fn:
-                case "trunc_normal":
-                    nn.init.trunc_normal_(
-                        module.weight,
-                        mean=0.0,
-                        std=std,
-                        a=-config.initializer_cutoff_factor * std,
-                        b=config.initializer_cutoff_factor * std,
-                    )
-                case "kaiming_normal":
-                    nn.init.kaiming_normal_(module.weight)
-                case "kaiming_uniform":
-                    nn.init.kaiming_uniform_(module.weight)
-                case "xavier_normal":
-                    nn.init.xavier_normal_(module.weight)
-                case "xavier_uniform":
-                    nn.init.xavier_uniform_(module.weight)
-                case _:
-                    raise ValueError(f"Unknown initialization function {init_fn}")
-
-            if isinstance(module, nn.Linear):  # noqa: SIM102
-                if module.bias is not None:
-                    nn.init.zeros_(module.bias)
-
-        stds = {
-            "in": config.initializer_range,
-            "out": config.initializer_range / math.sqrt(2.0 * config.num_hidden_layers),
-            "embedding": config.initializer_range,
+        self.std = {
+            "in": self.initializer_range,
+            "out": self.initializer_range / math.sqrt(2.0 * config.num_hidden_layers),
+            "embedding": self.initializer_range,
             "final_out": config.hidden_size**-0.5,
         }
 
-        if isinstance(module, PolyBertEmbeddings):
-            init_weight(module.embd, stds["embedding"])
-        elif isinstance(module, PolyBertGLU):
-            init_weight(module.ffwd, stds["in"])
-            init_weight(module.proj, stds["out"])
-        elif isinstance(module, PolyBertAttention):
-            init_weight(module.proj, stds["in"])
-            init_weight(module.ffwd, stds["out"])
-        elif isinstance(module, PolyBertPredictionHead):
-            init_weight(module.ffwd, stds["out"])
-        elif hasattr(module, "decoder") and module.__class__.__name__ == "PolyBertForMaskedLM":
-            init_weight(module.decoder, stds["out"])
-        elif hasattr(module, "classifier") and module.__class__.__name__ in (
-            "PolyBertForSequenceClassification",
-            "PolyBertForTokenClassification",
-            "PolyBertForQuestionAnswering",
-        ):
-            init_weight(module.classifier, stds["final_out"])
+    def _init_module_weights(self, module: nn.Module, std_kind: Literal["in", "out", "embedding", "final_out"]) -> None:
+        """Apply to a module a specific initialization function based on given distribution parameters.
 
-    return __inner__
+        Args:
+            module: The module to initialize.
+            std_kind: Standard deviation for weight initialization, differs by layer.
+
+        Raises:
+            ValueError: If unsupported initialization options are used.
+
+        """
+        # Different standard deviations depending on layer type
+        if std_kind not in ["in", "out", "embedding", "final_out"]:
+            raise ValueError(
+                f"Unknown standard deviation type {std_kind}, supported types: 'in', 'out', 'embedding', 'final_out'"
+            )
+
+        std = self.std[std_kind]
+
+        def _get_init_fn() -> Callable[["nn.Module"], None]:
+            match self.intializer_kind:
+                case "trunc_normal":
+                    return functools.partial(
+                        nn.init.trunc_normal_,
+                        mean=0.0,
+                        std=std,
+                        a=-self.initializer_cutoff_factor * std,
+                        b=self.initializer_cutoff_factor * std,
+                    )
+                case "kaiming_normal":
+                    return functools.partial(
+                        nn.init.kaiming_normal_,
+                    )
+                case "kaiming_uniform":
+                    return functools.partial(
+                        nn.init.kaiming_uniform_,
+                    )
+                case "xavier_normal":
+                    return functools.partial(
+                        nn.init.xavier_normal_,
+                    )
+                case "xavier_uniform":
+                    return functools.partial(
+                        nn.init.xavier_uniform_,
+                    )
+                case _:
+                    raise ValueError(
+                        f"Unknown initialization function {self.intializer_kind}, supported functions: "
+                        f"'trunc_normal', 'kaiming_normal', 'kaiming_uniform', 'xavier_normal', 'xavier_uniform'"
+                    )
+
+        # Apply initialization function to module
+        module.apply(_get_init_fn())
+
+        # Initialize bias terms to zero for linear layers
+        if isinstance(module, nn.Linear):  # noqa: SIM102
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
