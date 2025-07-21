@@ -10,13 +10,12 @@ if TYPE_CHECKING:
 from torch import nn
 
 from polybert.modeling.attention import PolyBertAttention
-from polybert.modeling.config import ConfigMixin
 from polybert.modeling.mlp import get_mlp
 from polybert.modeling.norms import get_norm
-from polybert.modeling.packing import doc_mask, pack_seq, unpack_seq
+from polybert.modeling.packing import doc_mask
 
 
-class PolyBertBlock(nn.Module, ConfigMixin):
+class PolyBertBlock(nn.Module):
     """A single transformer block implementation for PolyBert.
 
     This class implements a standard transformer block with attention and feed-forward
@@ -49,7 +48,7 @@ class PolyBertBlock(nn.Module, ConfigMixin):
                 - Other hyperparameters for attention and MLP layers
 
         """
-        super().__init__(config=config)
+        super().__init__()
         self.attn = PolyBertAttention(config)
         self.ffwd = get_mlp(config)
         self.pre_norm = get_norm(config) if config.norm_kind in ("pre", "both") else nn.Identity()
@@ -98,7 +97,7 @@ class PolyBertBlock(nn.Module, ConfigMixin):
         return x, w
 
 
-class PolyBertEncoder(nn.Module, ConfigMixin):
+class PolyBertEncoder(nn.Module):
     """Multi-layer transformer encoder for PolyBert.
 
     This class stacks multiple PolyBertBlock instances to create a deep transformer
@@ -119,9 +118,9 @@ class PolyBertEncoder(nn.Module, ConfigMixin):
             config (PolyBertConfig): Configuration object containing model hyperparameters.
 
         """
-        super().__init__(config=config)
+        super().__init__()
         self.blocks = nn.ModuleList([PolyBertBlock(config) for _ in range(config.num_blocks)])
-        self.num_heads = self.config.num_attention_heads
+        self.num_heads = config.num_attention_heads
 
     def forward(
         self,
@@ -166,18 +165,16 @@ class PolyBertEncoder(nn.Module, ConfigMixin):
         """
         all_attentions = []
         all_hidden_states = [x]
-        B, S = x.shape
-        x, indices, cu_seqlens, max_seq_len = pack_seq(x, attention_mask)
+        B, S, _ = x.shape
         # Create document block mask to reuse throughout all layers for this batch
-        block_mask = create_block_mask(doc_mask(cu_seqlens), None, None, S, S, _compile=True)
+        block_mask = create_block_mask(doc_mask(attention_mask), None, None, S, S, device=x.device)
         # Apply layers
         for block in self.blocks:
             x, w = block(x, block_mask, output_attentions)
             if output_attentions:
                 all_attentions.append(w)
             if output_hidden_states:
-                all_hidden_states.append(unpack_seq(x, indices, B, max_seq_len))
-        x = unpack_seq(x, indices, B, max_seq_len)
+                all_hidden_states.append(x)
         return (
             x,
             tuple(all_hidden_states) if output_hidden_states else None,

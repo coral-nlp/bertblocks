@@ -24,14 +24,6 @@ from transformers.trainer_pt_utils import get_parameter_names
 
 from polybert.modeling import PolyBertConfig, PolyBertForMaskedLM
 
-# Some needed compile settings
-torch._inductor.config.coordinate_descent_tuning = True
-torch._inductor.config.triton.unique_kernel_names = True
-# Experimental features to reduce compilation times, will be on by default in future
-torch._inductor.config.fx_graph_cache = False
-torch._functorch.config.enable_autograd_cache = False
-torch._inductor.config.triton.cudagraph_trees = False  # Bug with cudagraph trees in this case
-
 
 class MaskedLanguageModelingCollator:
     """Data collator for masked language modeling pretraining.
@@ -212,7 +204,7 @@ class PolyBertPretrainingModule(L.LightningModule):
         learning_rate_decay: float | None = 0.99999,
         compile_model: bool | None = True,
         pretrained_tokenizer_name_or_path: str | None = None,
-        model_config: "PolyBertConfig | None" = None,
+        model_config_kwargs: "dict[str, Any] | None" = None,
     ):
         """Initialize the PolyBert pretraining module.
 
@@ -227,15 +219,17 @@ class PolyBertPretrainingModule(L.LightningModule):
                 Defaults to 0.99999 (very gradual decay).
             compile_model: Whether to compile the model with torch.compile.
                 Defaults to True for better performance.
-            model_config: PolyBertConfig or None
-                PolyBert model configuration. Defaults to None.
             pretrained_tokenizer_name_or_path: str
                 Tokenizer name; if provided, will overwrite the model vocab size using the given tokenizers properties.
+            model_config_kwargs: dict[str, Any] or None
+                Optional dictionary of model configuration options passed to PolyBertConfig for instantiation.
 
         """
         super().__init__()
         self.save_hyperparameters(ignore=["model_config"])
-        self.model_config = model_config if model_config is not None else PolyBertConfig()
+        if model_config_kwargs is None:
+            model_config_kwargs = {}
+        self.model_config = PolyBertConfig(**model_config_kwargs)
         # Patch model config with tokenizer vocab size if given
         if self.hparams.pretrained_tokenizer_name_or_path is not None:
             tokenizer = AutoTokenizer.from_pretrained(self.hparams.pretrained_tokenizer_name_or_path)
@@ -243,6 +237,14 @@ class PolyBertPretrainingModule(L.LightningModule):
             del tokenizer
         self.model = PolyBertForMaskedLM(self.model_config)
         if self.hparams.compile_model:
+            # Some needed compile settings
+            torch._inductor.config.coordinate_descent_tuning = True
+            torch._inductor.config.triton.unique_kernel_names = True
+            # Experimental features to reduce compilation times, will be on by default in future
+            torch._inductor.config.fx_graph_cache = False
+            torch._functorch.config.enable_autograd_cache = False
+            torch._inductor.config.triton.cudagraph_trees = False  # Bug with cudagraph trees in this case
+
             self.model = torch.compile(
                 self.model, options={"shape_padding": True, "trace.enabled": True, "trace.graph_diagram": True}
             )
@@ -296,7 +298,8 @@ class PolyBertPretrainingModule(L.LightningModule):
             torch.Tensor: MLM loss for backpropagation.
 
         """
-        torch.compiler.cudagraph_mark_step_begin()
+        if self.hparams.compile_model:
+            torch.compiler.cudagraph_mark_step_begin()
         output = self.model(
             input_ids=batch["input_ids"],
             attention_mask=batch["attention_mask"],

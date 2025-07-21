@@ -20,7 +20,7 @@ class DeepNorm(nn.Module):
     """
 
     def __init__(
-        self, alpha: float, normalized_shape: int | list[int] | torch.Size, eps: float = 1e-5, **norm_kwargs: Any
+        self, alpha: float, normalized_shape: "int | list[int]", eps: float = 1e-5, **norm_kwargs: Any
     ) -> None:
         super().__init__()
         self.alpha = alpha
@@ -61,7 +61,7 @@ def get_norm(config: PolyBertConfig) -> nn.Module:
         effectively creating instance normalization.
 
     """
-    match config.norm_type:
+    match config.norm_fn:
         case "group":
             return GroupNorm(config.hidden_size, config.hidden_size, config.norm_eps)
         case "layer":
@@ -74,4 +74,4 @@ def get_norm(config: PolyBertConfig) -> nn.Module:
             except KeyError:
                 raise ValueError("When using DeepNorm, `alpha` must be specified in `config.norm_params`.")
         case _:
-            raise ValueError(f"Unknown norm type {config.norm_type}")
+            raise ValueError(f"Unknown norm type {config.norm_fn}")

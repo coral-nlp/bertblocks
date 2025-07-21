@@ -7,11 +7,11 @@ from polybert.modeling.block import PolyBertEncoder
 
 if TYPE_CHECKING:
     import torch
+    from transformers.modeling_outputs import BaseModelOutputWithPooling
 
 from torch import nn
 from transformers.modeling_outputs import (
     BaseModelOutput,
-    BaseModelOutputWithPooling,
     MaskedLMOutput,
     QuestionAnsweringModelOutput,
     SequenceClassifierOutput,
@@ -103,7 +103,7 @@ class PolyBertPreTrainedModel(PreTrainedModel):
 
         std = std_values[std_kind]
 
-        def _get_init_fn() -> Callable[[torch.Tensor], None]:
+        def _get_init_fn() -> "Callable[[torch.Tensor], None]":
             match initializer_kind:
                 case "trunc_normal":
                     return functools.partial(
@@ -256,10 +256,10 @@ class PolyBertForTasksBase(PolyBertPreTrainedModel):
 
     def compute_loss(
         self,
-        logits: torch.Tensor,
-        labels: torch.Tensor,
-        problem_type: Literal["regression", "single_label_classification", "multi_label_classification"] | None,
-    ) -> torch.Tensor:
+        logits: "torch.Tensor",
+        labels: "torch.Tensor",
+        problem_type: "Literal['regression', 'single_label_classification', 'multi_label_classification'] | None",
+    ) -> "torch.Tensor | None":
         """Compute loss for the given logits, labels and problem type.
 
         Args:
@@ -316,6 +316,10 @@ class PolyBertForMaskedLM(PolyBertPreTrainedModel):
         self.loss_fn = nn.CrossEntropyLoss()
 
         self.post_init()
+
+    def get_input_embeddings(self) -> "nn.Module":
+        """Return the encoder input embeddings."""
+        return self.model.embd.embd
 
     def get_output_embeddings(self) -> "nn.Module":
         """Return the decoder embeddings."""
@@ -506,6 +510,7 @@ class PolyBertForTokenClassification(PolyBertForTasksBase):
         output = self.model(
             input_ids,
             attention_mask=attention_mask,
+            output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
         )
         logits = self.classifier(self.head(output.last_hidden_state))
@@ -582,6 +587,7 @@ class PolyBertForQuestionAnswering(PolyBertForTasksBase):
         output = self.model(
             input_ids,
             attention_mask=attention_mask,
+            output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
         )
         logits = self.classifier(self.head(output.last_hidden_state))
