@@ -1,3 +1,6 @@
+from typing import Any
+
+import torch
 from torch import nn
 from torch.nn.modules.normalization import (
     GroupNorm,
@@ -6,6 +9,26 @@ from torch.nn.modules.normalization import (
 )
 
 from polybert.modeling.config import PolyBertConfig
+
+
+class DeepNorm(nn.Module):
+    """DeepNorm normalization.
+
+    References:
+    - DeepNet: Scaling Transformers to 1,000 Layers (https://ieeexplore.ieee.org/document/10496231)
+
+    """
+
+    def __init__(
+        self, alpha: float, normalized_shape: int | list[int] | torch.Size, eps: float = 1e-5, **norm_kwargs: Any
+    ) -> None:
+        super().__init__()
+        self.alpha = alpha
+        self.layer_norm = LayerNorm(normalized_shape=normalized_shape, eps=eps, **norm_kwargs)
+
+    def forward(self, x: "torch.Tensor", gx: "torch.Tensor") -> "torch.Tensor":
+        """Apply DeepNorm."""
+        return self.layer_norm(x + self.alpha * gx)
 
 
 def get_norm(config: PolyBertConfig) -> nn.Module:
@@ -44,5 +67,7 @@ def get_norm(config: PolyBertConfig) -> nn.Module:
             return LayerNorm(config.hidden_size, config.norm_eps)
         case "rms":
             return RMSNorm(config.hidden_size, config.norm_eps)
+        case "deep":
+            return DeepNorm(config.norm_params.alpha, config.hidden_size, config.norm_eps)
         case _:
             raise ValueError(f"Unknown norm type {config.norm_type}")
