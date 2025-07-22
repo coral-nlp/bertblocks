@@ -35,7 +35,7 @@ def get_actv_fn(config: "PolyBertConfig") -> "nn.Module":
         - `silu`: Sigmoid Linear Unit (Swish)
         - `gelu`: Gaussian Error Linear Unit
         - `leakyrelu`: Leaky Rectified Linear Unit
-        - `selu: Scaled Exponential Linear Unit
+        - `selu`: Scaled Exponential Linear Unit
         - `logsigmoid`: Log-sigmoid activation
         - `sigmoid`: Standard sigmoid activation
         - `prelu`: Parametric Rectified Linear Unit
