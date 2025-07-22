@@ -131,8 +131,7 @@ def get_prediction_head(config: "PolyBertConfig") -> nn.Module:
     based on the configuration. Supports both standard MLP and GLU variants.
 
     Args:
-        config: PolyBert configuration object containing the MLP type
-                specification in config.mlp_type
+        config (PolyBertConfig): Configuration object determining model hyperparameters.
 
     Returns:
         An prediction head module (nn.Module) that can transform hidden states.

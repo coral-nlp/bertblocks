@@ -59,10 +59,7 @@ def get_norm(config: "PolyBertConfig") -> "nn.Module":
     in transformer architectures.
 
     Args:
-        config: PolyBert configuration object containing:
-            - norm_type: Type of normalization ("group", "layer", "rms")
-            - hidden_size: Size of the hidden dimension to normalize
-            - norm_eps: Small constant for numerical stability
+        config (PolyBertConfig): Configuration object determining model hyperparameters.
 
     Returns:
         A normalization module (nn.Module) that can normalize tensors.

@@ -39,9 +39,7 @@ class PolyBertAttention(nn.Module):
         """Initialize the PolyBERT attention mechanism.
 
         Args:
-            config: PolyBERT configuration object containing model hyperparameters
-                   including hidden_size, num_attention_heads, attn_dropout_prob,
-                   and pos_emb_kind.
+            config (PolyBertConfig): Configuration object determining model hyperparameters.
 
         """
         super().__init__()

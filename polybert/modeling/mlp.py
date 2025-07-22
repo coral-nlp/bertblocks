@@ -117,8 +117,7 @@ def get_mlp(config: "PolyBertConfig") -> "nn.Module":
     the configuration. Supports both standard MLP and GLU variants.
 
     Args:
-        config: PolyBert configuration object containing the MLP type
-                specification in config.mlp_type
+        config (PolyBertConfig): Configuration object determining model hyperparameters.
 
     Returns:
         An MLP module (nn.Module) that can transform hidden states.

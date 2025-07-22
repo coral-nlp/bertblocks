@@ -22,11 +22,7 @@ class PolyBertEmbeddings(nn.Module):
         """Initialize the embedding layer.
 
         Args:
-            config: PolyBert configuration object containing:
-                - vocab_size: Size of the vocabulary
-                - hidden_size: Dimensionality of the embedding vectors
-                - pad_token_id: Token ID used for padding
-                - hidden_dropout_prob: Dropout probability (0 means no dropout)
+            config (PolyBertConfig): Configuration object determining model hyperparameters.
 
         """
         super().__init__()

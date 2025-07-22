@@ -7,12 +7,9 @@ import torch
 
 
 def doc_mask(attention_mask: "torch.Tensor") -> "_mask_mod_signature":
-    """Create a document-level attention mask for multi-document sequences.
+    """Create a document-level attention mask to prevent cross-document attention.
 
-    This function creates a mask that prevents attention between tokens from
-    different documents when multiple documents are packed into a single sequence.
-    Each document is defined by a binary attention mask, and tokens can only
-    attend to other tokens within the same document.
+    Transforms a given binary attention mask into a block mask compatible with flex-attention.
 
     Args:
         attention_mask: Binary attention mask of shape (n_batch, n_seq).

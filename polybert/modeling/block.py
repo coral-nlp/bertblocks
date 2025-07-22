@@ -27,11 +27,11 @@ class PolyBertBlock(nn.Module):
     3. Optional layer normalization (pre/post/both/none)
 
     Args:
-        config (PolyBertConfig): Configuration object containing model hyperparameters.
-            Must include norm_kind to determine normalization placement.
+        config (PolyBertConfig): Configuration object determining model hyperparameters.
 
     References:
-         - "On Layer Normalization in the Transformer Architecture" (https://arxiv.org/pdf/2002.04745).
+         - "Attention Is All You Need" (https://arxiv.org/pdf/1706.03762)
+         - "On Layer Normalization in the Transformer Architecture" (https://arxiv.org/pdf/2002.04745)
 
     """
 
@@ -39,13 +39,11 @@ class PolyBertBlock(nn.Module):
         """Initialize a PolyBert transformer block.
 
         Sets up the attention mechanism, feed-forward network, and normalization
-        layers based on the configuration. Normalization layers are set to Identity
+        layers based on configuration. Normalization layers are set to Identity
         when not needed according to the norm_kind setting.
 
         Args:
-            config (PolyBertConfig): Configuration object containing:
-                - norm_kind: Normalization placement ("pre", "post", "both", "none")
-                - Other hyperparameters for attention and MLP layers
+            config (PolyBertConfig): Configuration object determining model hyperparameters.
 
         """
         super().__init__()
@@ -64,7 +62,7 @@ class PolyBertBlock(nn.Module):
 
         Args:
             x (torch.Tensor): Input tensor of shape (batch_size, seq_len, hidden_size)
-                or (packed_seq_len, hidden_size) if sequence packing is used.
+                The hidden state of the previous transformer block.
             block_mask (BlockMask): Block mask for efficient attention computation,
                 typically created using torch.nn.attention.flex_attention.create_block_mask.
             output_attention (bool | None, optional): Whether to return attention weights.
@@ -72,9 +70,9 @@ class PolyBertBlock(nn.Module):
 
         Returns:
             tuple[torch.Tensor, torch.Tensor | None]: A tuple containing:
-                - output (torch.Tensor): Transformed tensor with same shape as input
+                - output (torch.Tensor): Transformed hidden state with same shape as input
                 - attention_weights (torch.Tensor | None): Attention weights if requested,
-                  None otherwise. Shape depends on attention implementation.
+                  None otherwise. Shape (batch_size, seq_len, seq_len)
 
         """
         # Attention component
@@ -104,11 +102,10 @@ class PolyBertEncoder(nn.Module):
     def __init__(self, config: "PolyBertConfig"):
         """Initialize the PolyBert encoder.
 
-        Creates a stack of transformer blocks and stores configuration parameters.
-        Each block is independently initialized with the same configuration.
+        Creates a stack of transformer blocks. Each block is independently initialized with the same configuration.
 
         Args:
-            config (PolyBertConfig): Configuration object containing model hyperparameters.
+            config (PolyBertConfig): Configuration object determining model hyperparameters.
 
         """
         super().__init__()
@@ -124,9 +121,8 @@ class PolyBertEncoder(nn.Module):
     ) -> "tuple[torch.Tensor, tuple[torch.Tensor, ...] | None, tuple[torch.Tensor, ...] | None]":
         """Forward pass through the multi-layer transformer encoder.
 
-        Processes input through all transformer blocks with sequence packing for
-        efficiency. Creates document-level block masks to prevent attention across
-        document boundaries in packed sequences.
+        Processes input through all transformer blocks. Creates document-level block masks to
+        prevent attention across document boundaries.
 
         Args:
             x (torch.FloatTensor): Input embeddings tensor of shape (batch_size, seq_len, hidden_size).
