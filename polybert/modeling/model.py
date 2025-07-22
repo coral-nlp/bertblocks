@@ -7,11 +7,11 @@ from polybert.modeling.block import PolyBertEncoder
 
 if TYPE_CHECKING:
     import torch
-    from transformers.modeling_outputs import BaseModelOutputWithPooling
 
 from torch import nn
 from transformers.modeling_outputs import (
     BaseModelOutput,
+    BaseModelOutputWithPooling,
     MaskedLMOutput,
     QuestionAnsweringModelOutput,
     SequenceClassifierOutput,
@@ -21,7 +21,8 @@ from transformers.modeling_utils import PreTrainedModel
 
 from polybert.modeling.config import PolyBertConfig
 from polybert.modeling.embedding import PolyBertEmbeddings
-from polybert.modeling.head import PolyBertPredictionHead
+from polybert.modeling.head import PolyBertPooler, get_prediction_head
+from polybert.modeling.loss import get_loss_function
 
 
 class PolyBertPreTrainedModel(PreTrainedModel):
@@ -30,15 +31,6 @@ class PolyBertPreTrainedModel(PreTrainedModel):
     This class provides the base configuration and weight initialization
     for all PolyBert model variants. It inherits from HuggingFace's
     PreTrainedModel to provide compatibility with the transformers library.
-
-    Attributes:
-        config_class: Configuration class for PolyBert models.
-        base_model_prefix: Prefix used for model state dict keys.
-        supports_gradient_checkpointing: Whether gradient checkpointing is supported.
-        _supports_flash_attn_2: Whether Flash Attention 2 is supported.
-        _supports_sdpa: Whether Scaled Dot Product Attention is supported.
-        _supports_flex_attn: Whether Flexible Attention is supported.
-
     """
 
     config_class = PolyBertConfig
@@ -145,21 +137,23 @@ class PolyBertModel(PolyBertPreTrainedModel):
     task-specific head. It can be used as a feature extractor for downstream tasks.
 
     The model consists of:
-    - Embedding layer for token, position, and type embeddings
+    - Embedding layer for token embeddings
     - Stack of transformer encoder blocks
     - Optional pooling layer
     """
 
-    def __init__(self, config: "PolyBertConfig"):
+    def __init__(self, config: "PolyBertConfig", add_pooling_layer: bool = True) -> None:
         """Initialize the PolyBert model.
 
         Args:
             config: Model configuration containing hyperparameters.
+            add_pooling_layer: Whether to add a pooling layer after the encoder layers.
 
         """
         super().__init__(config)
         self.embd = PolyBertEmbeddings(config)
         self.encd = PolyBertEncoder(config)
+        self.pool = PolyBertPooler(config) if add_pooling_layer else None
         self.num_heads = config.num_attention_heads
         self.post_init()
 
@@ -210,19 +204,29 @@ class PolyBertModel(PolyBertPreTrainedModel):
                 Defaults to False.
 
         Returns:
-            BaseModelOutput containing:
+            BaseModelOutput or BaseModelOutputWithPooling containing:
                 - last_hidden_state: Hidden states from the last layer
-                - hidden_states: Hidden states from all layers if requested
-                - attentions: Attention weights from all layers if requested
+                - pooler_output: Pooler output from the last layer (optional)
+                - hidden_states: Hidden states from all layers (optional)
+                - attentions: Attention weights from all layers (optional)
 
         """
         x = self.embd(input_ids)
         x, hidden_states, attentions = self.encd(x, attention_mask, output_attentions, output_hidden_states)
-        return BaseModelOutput(
-            last_hidden_state=x,
-            hidden_states=hidden_states if output_hidden_states else None,
-            attentions=attentions if output_attentions else None,
-        )
+        if self.pool is not None:
+            pooler_output = self.pool(x)
+            return BaseModelOutputWithPooling(
+                last_hidden_state=x,
+                pooler_output=pooler_output,
+                hidden_states=hidden_states if output_hidden_states else None,
+                attentions=attentions if output_attentions else None,
+            )
+        else:
+            return BaseModelOutput(
+                last_hidden_state=x,
+                hidden_states=hidden_states if output_hidden_states else None,
+                attentions=attentions if output_attentions else None,
+            )
 
 
 class PolyBertForTasksBase(PolyBertPreTrainedModel):
@@ -235,24 +239,7 @@ class PolyBertForTasksBase(PolyBertPreTrainedModel):
     def __init__(self, config: PolyBertConfig, *args: Any, **kwargs: Any) -> None:
         super().__init__(config, *args, **kwargs)
         self.model = PolyBertModel(config)
-        self.head = PolyBertPredictionHead(config)
-
-    def get_loss_function(
-        self, problem_type: Literal["regression", "single_label_classification", "multi_label_classification"] | None
-    ) -> nn.Module:
-        """Get the appropriate loss function for the given problem type.
-
-        Args:
-            problem_type: The type of problem ('regression', 'single_label_classification',
-                         'multi_label_classification')
-
-        Returns:
-            The appropriate loss function module.
-
-        """
-        from polybert.modeling.loss import get_loss_function
-
-        return get_loss_function(problem_type)
+        self.head = get_prediction_head(config)
 
     def compute_loss(
         self,
@@ -311,7 +298,7 @@ class PolyBertForMaskedLM(PolyBertPreTrainedModel):
         super().__init__(config)
         self.vocab_size = config.vocab_size
         self.model = PolyBertModel(config)
-        self.head = PolyBertPredictionHead(config)
+        self.head = get_prediction_head(config)
         self.decoder = nn.Linear(config.hidden_size, config.vocab_size, bias=True)
         self.loss_fn = nn.CrossEntropyLoss()
 
@@ -400,7 +387,7 @@ class PolyBertForSequenceClassification(PolyBertForTasksBase):
         self.classifier = torch.nn.Linear(config.hidden_size, config.num_labels)
         self.num_labels = config.num_labels
         self.problem_type = config.problem_type
-        self.loss_fn = self.get_loss_function(self.problem_type)
+        self.loss_fn = get_loss_function(self.problem_type)
         self.post_init()
 
     def forward(
@@ -475,7 +462,7 @@ class PolyBertForTokenClassification(PolyBertForTasksBase):
         self.classifier = torch.nn.Linear(config.hidden_size, self.num_labels)
         # Token classification is always single-label classification; explicit literal cast is needed for mypy
         self.problem_type: Literal["single_label_classification"] = "single_label_classification"
-        self.loss_fn = self.get_loss_function(self.problem_type)
+        self.loss_fn = get_loss_function(self.problem_type)
         self.post_init()
 
     def forward(
@@ -603,7 +590,7 @@ class PolyBertForQuestionAnswering(PolyBertForTasksBase):
                 start_positions = start_positions.squeeze(-1)
             if len(end_positions.size()) > 1:
                 end_positions = end_positions.squeeze(-1)
-            # sometimes the start/end positions are outside our model inputs, we ignore these terms
+            # Sometimes the start/end positions are outside our model inputs, we ignore these terms
             ignored_index = start_logits.size(1)
             start_positions = start_positions.clamp(0, ignored_index)
             end_positions = end_positions.clamp(0, ignored_index)

@@ -144,10 +144,6 @@ def get_mlp(config: "PolyBertConfig") -> nn.Module:
         - "mlp": Standard two-layer feedforward network
         - "glu": Gated Linear Unit with learned gating mechanism
 
-    Note:
-        GLU typically provides better performance due to its gating mechanism
-        that allows for more selective information processing.
-
     """
     mlp_type = getattr(config, "mlp_type", "mlp")  # Default to mlp for backward compatibility
 
