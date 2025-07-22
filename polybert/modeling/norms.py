@@ -11,6 +11,26 @@ from torch.nn.modules.normalization import (
 from polybert.modeling.config import PolyBertConfig
 
 
+class DynamicTanhNorm(nn.Module):
+    """Dynamic Tanh normalization.
+
+    References:
+        - Transformers without Normalization (https://arxiv.org/pdf/2503.10622)
+
+    """
+
+    def __init__(self, alpha: float, dim: int) -> None:
+        super().__init__()
+        self.alpha = nn.Parameter(torch.ones(1) * alpha)
+        self.gamma = nn.Parameter(torch.ones(dim))
+        self.beta = nn.Parameter(torch.zeros(dim))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply dynamic tanh normalization."""
+        x = torch.tanh(self.alpha * x)
+        return self.gamma * x + self.beta
+
+
 class DeepNorm(nn.Module):
     """DeepNorm normalization.
 
@@ -51,19 +71,18 @@ def get_norm(config: PolyBertConfig) -> nn.Module:
         ValueError: If the specified normalization type is not supported.
 
     Supported normalization types:
-        - "group": Group normalization with num_groups = hidden_size
+        - "group": Group normalization
         - "layer": Layer normalization across the hidden dimension
         - "rms": Root Mean Square layer normalization
         - "deep": DeepNorm
 
-    Note:
-        For GroupNorm, the number of groups is set equal to hidden_size,
-        effectively creating instance normalization.
-
     """
     match config.norm_fn:
         case "group":
-            return GroupNorm(config.hidden_size, config.hidden_size, config.norm_eps)
+            try:
+                return GroupNorm(config.norm_params["group_size"], config.hidden_size, config.norm_eps)
+            except KeyError:
+                raise ValueError("When using GroupNorm, `group_size` must be specified in `config.norm_params`.")
         case "layer":
             return LayerNorm(config.hidden_size, config.norm_eps)
         case "rms":
@@ -73,5 +92,11 @@ def get_norm(config: PolyBertConfig) -> nn.Module:
                 return DeepNorm(config.norm_params["alpha"], config.hidden_size, config.norm_eps)
             except KeyError:
                 raise ValueError("When using DeepNorm, `alpha` must be specified in `config.norm_params`.")
+        case "dynamictanh":
+            try:
+                return DynamicTanhNorm(config.norm_params["alpha"], config.hidden_size)
+            except KeyError:
+                raise ValueError("When using DynamicTanhNorm, `alpha` must be specified in `config.norm_params`.")
         case _:
-            raise ValueError(f"Unknown norm type {config.norm_fn}")
+            supported_norm_types = ["group", "layer", "rms", "deep", "dynamictanh"]
+            raise ValueError(f"Unknown norm type {config.norm_fn}", f"Supported norm types: {supported_norm_types}")
