@@ -1,4 +1,4 @@
-.PHONY: help install install-dev lint format type-check test test-cov clean pre-commit-install pre-commit-run
+.PHONY: help install install-dev install-docs lint format type-check test test-cov clean pre-commit-install pre-commit-run docs-init docs-build docs-apidoc docs-serve docs-clean docs
 
 help: ## Show this help message
 	@echo "Available commands:"
@@ -9,6 +9,9 @@ install: ## Install the package
 
 install-dev: ## Install the package with development dependencies
 	uv pip install -e ".[dev]"
+
+install-docs: ## Install the package with documentation dependencies
+	uv pip install -e ".[docs]"
 
 lint: ## Run linting (ruff)
 	uv run ruff check .
@@ -40,6 +43,7 @@ clean: ## Clean up build artifacts
 	rm -rf .pytest_cache/
 	rm -rf .coverage
 	rm -rf htmlcov/
+	rm -rf docs/_build/
 	find . -type f -name "*.pyc" -delete
 	find . -type d -name "__pycache__" -delete
 
@@ -48,6 +52,24 @@ pre-commit-install: ## Install pre-commit hooks
 
 pre-commit-run: ## Run pre-commit hooks on all files
 	uv run pre-commit run --all-files
+
+docs-init: ## Initialize Sphinx documentation
+	mkdir -p docs/source docs/_build
+	uv run sphinx-quickstart -q -p "PolyBERT" -a "CORAL Project Contributors" -v "0.1.0" --ext-autodoc --ext-doctest --ext-intersphinx --makefile --no-batchfile docs/source
+
+docs-build: ## Build Sphinx documentation
+	uv run sphinx-build -b html docs/source docs/_build/html
+
+docs-apidoc: ## Generate API documentation from docstrings
+	uv run sphinx-apidoc -o docs/source polybert --force --separate
+
+docs-serve: ## Serve documentation locally (requires Python http.server)
+	cd docs/_build/html && python -m http.server 8000
+
+docs-clean: ## Clean documentation build artifacts
+	rm -rf docs/_build/
+
+docs: docs-apidoc docs-build ## Build complete documentation (API + Sphinx)
 
 check: lint type-check security-check doc-check ## Run all checks
 
