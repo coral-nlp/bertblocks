@@ -124,6 +124,56 @@ class PolyBertConfig(PretrainedConfig):
             **kwargs: Additional keyword arguments passed to the parent PretrainedConfig class.
 
         """
+        if vocab_size <= 0:
+            raise ValueError(f"vocab_size must be greater than 0, got {vocab_size}")
+
+        if hidden_size <= 0:
+            raise ValueError(f"hidden_size must be greater than 0, got {hidden_size}")
+
+        if num_blocks < 1:
+            raise ValueError(f"num_blocks must be at least 1, got {num_blocks}")
+
+        if num_attention_heads < 1:
+            raise ValueError(f"num_attention_heads must be at least 1, got {num_attention_heads}")
+
+        if hidden_size % num_attention_heads != 0:
+            raise ValueError(
+                f"hidden_size ({hidden_size}) must be divisible by num_attention_heads ({num_attention_heads})"
+            )
+
+        if intermediate_size <= 0:
+            raise ValueError(f"intermediate_size must be greater than 0, got {intermediate_size}")
+
+        if not 0.0 <= hidden_dropout_prob <= 1.0:
+            raise ValueError(f"hidden_dropout_prob must be between 0.0 and 1.0, got {hidden_dropout_prob}")
+
+        if not 0.0 <= attn_dropout_prob <= 1.0:
+            raise ValueError(f"attn_dropout_prob must be between 0.0 and 1.0, got {attn_dropout_prob}")
+
+        if initializer_range <= 0.0:
+            raise ValueError(f"initializer_range must be greater than 0.0, got {initializer_range}")
+
+        if initializer_cutoff_factor <= 0.0:
+            raise ValueError(f"initializer_cutoff_factor must be greater than 0.0, got {initializer_cutoff_factor}")
+
+        if initializer_gain <= 0.0:
+            raise ValueError(f"initializer_gain must be greater than 0.0, got {initializer_gain}")
+
+        if pad_token_id < 0:
+            raise ValueError(f"pad_token_id must be non-negative, got {pad_token_id}")
+
+        if pad_token_id >= vocab_size:
+            raise ValueError(f"pad_token_id ({pad_token_id}) must be within vocabulary range (0 to {vocab_size - 1})")
+
+        if not 0.0 <= classifier_dropout <= 1.0:
+            raise ValueError(f"classifier_dropout must be between 0.0 and 1.0, got {classifier_dropout}")
+
+        if num_labels < 1:
+            raise ValueError(f"num_labels must be at least 1, got {num_labels}")
+
+        if max_sequence_length <= 0:
+            raise ValueError(f"max_sequence_length must be greater than 0, got {max_sequence_length}")
+
         super().__init__(pad_token_id=pad_token_id, **kwargs)
         self.vocab_size = vocab_size
         self.hidden_size = hidden_size
