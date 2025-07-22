@@ -186,7 +186,7 @@ class RelativePositionalEncoding:
     def _relative_positional(
         score: "torch.Tensor",
         _b: "torch.Tensor",
-        h: "torch.Tensor",
+        _h: "torch.Tensor",
         q_idx: "torch.Tensor",
         kv_idx: "torch.Tensor",
     ) -> "torch.Tensor":
@@ -194,8 +194,8 @@ class RelativePositionalEncoding:
 
         Args:
             score: Raw attention scores of shape (batch_size, num_heads, seq_len, seq_len).
-            _b: Batch index tensor (unused in this implementation).
-            h: Head index tensor of shape (num_heads,).
+            _b: Batch index tensor (unused).
+            _h: Head index tensor of shape (unused).
             q_idx: Query position indices of shape (seq_len,).
             kv_idx: Key-value position indices of shape (seq_len,).
 
