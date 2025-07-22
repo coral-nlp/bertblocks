@@ -17,7 +17,7 @@ class PolyBertConfig(PretrainedConfig):
         intermediate_size: int = 3072,
         num_blocks: int = 12,
         num_attention_heads: int = 12,
-        pos_emb_kind: Literal["alibi", "sinusoidal", "rope"] = "alibi",
+        pos_emb_kind: Literal["alibi", "sinusoidal", "rope", "relative"] = "alibi",
         mlp_type: Literal["mlp", "glu"] = "mlp",
         mlp_in_bias: bool = True,
         mlp_out_bias: bool = True,

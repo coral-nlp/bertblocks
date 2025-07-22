@@ -123,7 +123,7 @@ class AlibiPositionalEncoding:
 
     """
 
-    def __init__(self, num_heads: int):
+    def __init__(self, num_heads: int) -> None:
         self.slopes = torch.exp2(torch.arange(num_heads, dtype=torch.float32) * (-8.0 / num_heads))
 
     @staticmethod
@@ -169,3 +169,47 @@ class AlibiPositionalEncoding:
 
         """
         return functools.partial(AlibiPositionalEncoding._alibi, slopes=self.slopes)
+
+
+class RelativePositionalEncoding:
+    """Add Relative Positional Encoding score modification.
+
+    References:
+        - "Self-Attention with Relative Position Representations" (https://arxiv.org/pdf/1803.02155)
+
+    """
+
+    def __init__(self) -> None:
+        pass
+
+    @staticmethod
+    def _relative_positional(
+        score: "torch.Tensor",
+        _b: "torch.Tensor",
+        h: "torch.Tensor",
+        q_idx: "torch.Tensor",
+        kv_idx: "torch.Tensor",
+    ) -> "torch.Tensor":
+        """FlexAttention score mod function that adds relative positional bias.
+
+        Args:
+            score: Raw attention scores of shape (batch_size, num_heads, seq_len, seq_len).
+            _b: Batch index tensor (unused in this implementation).
+            h: Head index tensor of shape (num_heads,).
+            q_idx: Query position indices of shape (seq_len,).
+            kv_idx: Key-value position indices of shape (seq_len,).
+
+        Returns:
+            Modified attention scores with relative positional bias applied, same shape as input score.
+
+        """
+        return score + (q_idx - kv_idx)
+
+    def __call__(self) -> "_score_mod_signature":
+        """Create a relative positional score modification function.
+
+        Returns:
+            A score relative positional score modification function with the signature expected by flex_attention.
+
+        """
+        return RelativePositionalEncoding._relative_positional

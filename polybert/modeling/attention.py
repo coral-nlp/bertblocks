@@ -10,7 +10,7 @@ from torch import nn
 from torch.nn.attention.flex_attention import BlockMask, flex_attention
 
 from polybert.modeling.config import PolyBertConfig
-from polybert.modeling.position import AlibiPositionalEncoding, RotaryPositionalEncoding
+from polybert.modeling.position import AlibiPositionalEncoding, RelativePositionalEncoding, RotaryPositionalEncoding
 
 
 class PolyBertAttention(nn.Module):
@@ -61,9 +61,8 @@ class PolyBertAttention(nn.Module):
 
         Args:
             score_mod_type: Type of positional encoding to use. Supported values:
-                          - "sinusoidal": No score modification (handled in embeddings)
                           - "alibi": ALIBI linear bias score modification
-                          - "rope": No score modification (handled in qk_mod)
+                          - "relative": relative positional bias score modification
                           - Any other value: No score modification
 
         Returns:
@@ -72,12 +71,10 @@ class PolyBertAttention(nn.Module):
 
         """
         match score_mod_type:
-            case "sinusoidal":
-                return None
             case "alibi":
                 return AlibiPositionalEncoding(self.num_heads)()
-            case "rope":
-                return None
+            case "relative":
+                return RelativePositionalEncoding()()
             case _:
                 return None
 
@@ -86,24 +83,15 @@ class PolyBertAttention(nn.Module):
 
         Args:
             qk_mod_type: Type of positional encoding to use. Supported values:
-                        - "sinusoidal": No modification (handled in embeddings)
-                        - "alibi": No modification (handled in score_mod)
-                        - "rope": Rotary Position Embedding (not yet implemented)
+                        - "rope": Rotary Position Embedding
                         - Any other value: No modification
 
         Returns:
             PyTorch module that modifies query-key projections, or Identity module
             if no modification is needed.
 
-        Raises:
-            NotImplementedError: If "rope" is specified (RoPE not yet implemented).
-
         """
         match qk_mod_type:
-            case "sinusoidal":
-                return nn.Identity()
-            case "alibi":
-                return nn.Identity()
             case "rope":
                 return RotaryPositionalEncoding(self.head_dim, self.max_seq_len)
             case _:
