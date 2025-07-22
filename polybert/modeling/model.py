@@ -43,10 +43,10 @@ class PolyBertPreTrainedModel(PreTrainedModel):
     _keys_to_ignore_on_load_missing: ClassVar[list] = [r"position_ids"]
     _keys_to_ignore_on_load_unexpected: ClassVar[list] = [r"pooler"]
 
-    def __init__(self, config: PolyBertConfig, *args: Any, **kwargs: Any) -> None:
+    def __init__(self, config: "PolyBertConfig", *args: Any, **kwargs: Any) -> None:
         super().__init__(config, *args, **kwargs)
 
-    def _init_weights(self, module: nn.Module) -> None:
+    def _init_weights(self, module: "nn.Module") -> None:
         """Initialize module weights.
 
         Args:
@@ -136,10 +136,6 @@ class PolyBertModel(PolyBertPreTrainedModel):
     This is the base PolyBert model that outputs hidden states without any
     task-specific head. It can be used as a feature extractor for downstream tasks.
 
-    The model consists of:
-    - Embedding layer for token embeddings
-    - Stack of transformer encoder blocks
-    - Optional pooling layer
     """
 
     def __init__(self, config: "PolyBertConfig", add_pooling_layer: bool = True) -> None:
@@ -236,7 +232,7 @@ class PolyBertForTasksBase(PolyBertPreTrainedModel):
     and other downstream tasks, eliminating code duplication across task models.
     """
 
-    def __init__(self, config: PolyBertConfig, *args: Any, **kwargs: Any) -> None:
+    def __init__(self, config: "PolyBertConfig", *args: Any, **kwargs: Any) -> None:
         super().__init__(config, *args, **kwargs)
         self.model = PolyBertModel(config)
         self.head = get_prediction_head(config)
@@ -565,10 +561,6 @@ class PolyBertForQuestionAnswering(PolyBertForTasksBase):
                 - end_logits: Scores for end position of answer span
                 - hidden_states: Hidden states from all layers if requested
                 - attentions: Attention weights from all layers if requested
-
-        Note:
-            The loss is computed as the average of start and end position losses.
-            Positions outside the input sequence are clamped and ignored during loss computation.
 
         """
         output = self.model(

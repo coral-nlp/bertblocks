@@ -15,11 +15,6 @@ class PolyBertGLU(nn.Module):
 
     This class implements a GLU-style MLP layer that uses gating to control information flow.
 
-    Architecture:
-    1. Project input to 2x intermediate_size (split into value and gate)
-    2. Apply activation to gate and multiply with value
-    3. Project back to hidden_size
-    4. Apply optional dropout
     """
 
     def __init__(self, config: "PolyBertConfig"):
@@ -56,10 +51,6 @@ class PolyBertGLU(nn.Module):
             Transformed tensor after gated projection, down-projection, and dropout.
             Shape: (batch_size, sequence_length, hidden_size)
 
-        Note:
-            The gating mechanism allows the model to learn which parts of the
-            intermediate representation should be emphasized or suppressed.
-
         """
         x, gate = self.Uprj(x).chunk(2, axis=-1)
         x = x * self.actv(gate)
@@ -73,11 +64,6 @@ class PolyBertMLP(nn.Module):
 
     This class implements a standard two-layer MLP (feedforward network).
 
-    Architecture:
-    1. Linear projection to intermediate_size
-    2. Apply activation function
-    3. Linear projection back to hidden_size
-    4. Apply optional dropout
     """
 
     def __init__(self, config: "PolyBertConfig"):
@@ -124,7 +110,7 @@ class PolyBertMLP(nn.Module):
         return x
 
 
-def get_mlp(config: "PolyBertConfig") -> nn.Module:
+def get_mlp(config: "PolyBertConfig") -> "nn.Module":
     """Get the MLP layer specified in the configuration.
 
     This factory function returns the appropriate MLP architecture based on
@@ -141,8 +127,8 @@ def get_mlp(config: "PolyBertConfig") -> nn.Module:
         ValueError: If the specified MLP type is not supported.
 
     Supported MLP types:
-        - "mlp": Standard two-layer feedforward network
-        - "glu": Gated Linear Unit with learned gating mechanism
+        - `mlp`: Standard two-layer feedforward network
+        - `glu`: Gated Linear Unit with learned gating mechanism
 
     """
     mlp_type = getattr(config, "mlp_type", "mlp")  # Default to mlp for backward compatibility

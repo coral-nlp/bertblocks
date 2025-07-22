@@ -28,7 +28,7 @@ class SinusoidalPositionalEncoding(nn.Module):
         self.register_buffer("sin", sin)
 
     @staticmethod
-    def _build_cache(dim: int, max_seq_len: int, base: float = 10000.0) -> torch.Tensor:
+    def _build_cache(dim: int, max_seq_len: int, base: float = 10000.0) -> "torch.Tensor":
         pos = torch.arange(max_seq_len).unsqueeze(1)
         denom = torch.exp(torch.arange(0, dim, 2) * (-math.log(base) / dim))
         enc = torch.zeros(1, max_seq_len, dim)
@@ -36,7 +36,7 @@ class SinusoidalPositionalEncoding(nn.Module):
         enc[0, :, 1::2] = torch.cos(pos * denom)
         return enc
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: "torch.Tensor") -> "torch.Tensor":
         """Add sinusoidal positional encoding to a given tensor.
 
         Args:
@@ -75,7 +75,7 @@ class RotaryPositionalEncoding(nn.Module):
         self.register_buffer("sin", sin)
 
     @staticmethod
-    def _build_cache(dim: int, max_seq_len: int, base: float) -> tuple[torch.Tensor, torch.Tensor]:
+    def _build_cache(dim: int, max_seq_len: int, base: float) -> "tuple[torch.Tensor, torch.Tensor]":
         theta = 1.0 / (base ** (torch.arange(0, dim, 2).float() / dim))
         seq = torch.arange(max_seq_len, dtype=theta.dtype)
         freqs = torch.outer(seq, theta)
@@ -85,11 +85,11 @@ class RotaryPositionalEncoding(nn.Module):
         return cos, sin
 
     @staticmethod
-    def _rotate_half(x: torch.Tensor) -> torch.Tensor:
+    def _rotate_half(x: "torch.Tensor") -> "torch.Tensor":
         x1, x2 = torch.chunk(x, 2, dim=-1)
         return torch.cat((-x2, x1), dim=-1)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: "torch.Tensor") -> "torch.Tensor":
         """Add RoPE to a given tensor.
 
         Args:
@@ -128,13 +128,13 @@ class AlibiPositionalEncoding:
 
     @staticmethod
     def _alibi(
-        score: torch.Tensor,
-        _b: torch.Tensor,
-        h: torch.Tensor,
-        q_idx: torch.Tensor,
-        kv_idx: torch.Tensor,
-        slopes: torch.Tensor,
-    ) -> torch.Tensor:
+        score: "torch.Tensor",
+        _b: "torch.Tensor",
+        h: "torch.Tensor",
+        q_idx: "torch.Tensor",
+        kv_idx: "torch.Tensor",
+        slopes: "torch.Tensor",
+    ) -> "torch.Tensor":
         """FlexAttention score mod function that adds ALiBi bias.
 
         Args:
@@ -154,7 +154,7 @@ class AlibiPositionalEncoding:
         bias = (kv_idx - q_idx) * scale
         return score + bias
 
-    def __call__(self) -> _score_mod_signature:
+    def __call__(self) -> "_score_mod_signature":
         """Create an ALIBI score modification function.
 
         This method generates head-specific slopes and returns a partially applied
@@ -166,11 +166,6 @@ class AlibiPositionalEncoding:
         Returns:
             A partially applied ALIBI score modification function with the signature
             expected by flex_attention.
-
-        Note:
-            Slopes are computed as 2^(-(8/num_heads) * head_idx) for each head,
-            creating an exponential decay pattern where different heads have
-            different sensitivities to positional distance.
 
         """
         return functools.partial(AlibiPositionalEncoding._alibi, slopes=self.slopes)

@@ -22,7 +22,7 @@ class PolyBertPooler(nn.Module):
         self.ffwd = nn.Linear(config.hidden_size, config.hidden_size)
         self.actv = get_actv_fn(config)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: "torch.Tensor") -> "torch.Tensor":
         """Forward pass through the pooling layer."""
         x = self.ffwd(x[:, 0])
         x = self.actv(x)
@@ -141,8 +141,8 @@ def get_prediction_head(config: "PolyBertConfig") -> nn.Module:
         ValueError: If the specified prediction head type is not supported.
 
     Supported prediction head types:
-        - "mlp": Standard two-layer feedforward network
-        - "glu": Gated Linear Unit
+        - `mlp`: Standard two-layer feedforward network
+        - `glu`: Gated Linear Unit
 
     """
     mlp_type = getattr(config, "mlp_type", "mlp")  # Default to mlp for backward compatibility

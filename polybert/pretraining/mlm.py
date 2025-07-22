@@ -38,7 +38,7 @@ class MaskedLanguageModelingCollator:
 
     def __init__(
         self,
-        tokenizer: PreTrainedTokenizer,
+        tokenizer: "PreTrainedTokenizer",
         text_column: str,
         max_sequence_length: int | None = 256,
         mlm_probability: float | None = 0.3,

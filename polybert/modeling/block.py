@@ -76,13 +76,6 @@ class PolyBertBlock(nn.Module):
                 - attention_weights (torch.Tensor | None): Attention weights if requested,
                   None otherwise. Shape depends on attention implementation.
 
-        Note:
-            The forward pass follows the standard transformer architecture:
-            1. x = post_norm(pre_norm(x) + attention(pre_norm(x)))
-            2. x = post_norm(pre_norm(x) + ffwd(pre_norm(x)))
-
-            The normalization functions may be identity operations based on configuration.
-
         """
         # Attention component
         residual = x
@@ -155,12 +148,6 @@ class PolyBertEncoder(nn.Module):
                   (batch_size, seq_len, hidden_size).
                 - all_attentions (tuple[torch.Tensor, ...] | None): Attention weights from all layers
                   if output_attentions=True, None otherwise. Shape depends on attention implementation.
-
-        Note:
-            This method uses sequence packing internally for efficiency:
-            1. Sequences are packed into a single tensor to remove padding
-            2. Document block masks prevent cross-document attention
-            3. Results are unpacked back to original batch format
 
         """
         all_attentions = []

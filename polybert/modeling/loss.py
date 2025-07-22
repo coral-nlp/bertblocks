@@ -5,7 +5,7 @@ from torch import nn
 
 def get_loss_function(
     problem_type: Literal["regression", "single_label_classification", "multi_label_classification"] | None,
-) -> nn.Module:
+) -> "nn.Module":
     """Return the applicable loss function for a given problem type.
 
     Args:

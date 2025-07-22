@@ -1,8 +1,12 @@
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from torch.nn.attention.flex_attention import _mask_mod_signature
+
 import torch
-from torch.nn.attention.flex_attention import _mask_mod_signature
 
 
-def doc_mask(attention_mask: torch.Tensor) -> _mask_mod_signature:
+def doc_mask(attention_mask: "torch.Tensor") -> "_mask_mod_signature":
     """Create a document-level attention mask for multi-document sequences.
 
     This function creates a mask that prevents attention between tokens from
@@ -21,7 +25,9 @@ def doc_mask(attention_mask: torch.Tensor) -> _mask_mod_signature:
     """
     attention_mask = attention_mask.to(torch.bool)
 
-    def __inner__(b, _h, q_idx, kv_idx) -> torch.Tensor:  # type: ignore
+    def __inner__(
+        b: "torch.Tensor", _h: "torch.Tensor", q_idx: "torch.Tensor", kv_idx: "torch.Tensor"
+    ) -> "torch.Tensor":
         """Inner mask function that checks if query and key indices are in the same document.
 
         Args:

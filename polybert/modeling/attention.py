@@ -35,7 +35,7 @@ class PolyBertAttention(nn.Module):
 
     """
 
-    def __init__(self, config: PolyBertConfig):
+    def __init__(self, config: "PolyBertConfig"):
         """Initialize the PolyBERT attention mechanism.
 
         Args:
@@ -72,10 +72,6 @@ class PolyBertAttention(nn.Module):
             Score modification function compatible with flex_attention, or None
             if no score modification is needed for the given type.
 
-        Note:
-            Different positional encoding schemes apply modifications at different
-            stages: ALIBI modifies scores, while RoPE modifies query/key projections.
-
         """
         match score_mod_type:
             case "sinusoidal":
@@ -104,10 +100,6 @@ class PolyBertAttention(nn.Module):
         Raises:
             NotImplementedError: If "rope" is specified (RoPE not yet implemented).
 
-        Note:
-            This method returns the transformation applied to the fused QKV projection
-            before splitting into separate Q, K, V tensors.
-
         """
         match qk_mod_type:
             case "sinusoidal":
@@ -121,10 +113,10 @@ class PolyBertAttention(nn.Module):
 
     def forward(
         self,
-        x: torch.Tensor,
-        doc_mask: BlockMask,
+        x: "torch.Tensor",
+        doc_mask: "BlockMask",
         output_attention: bool = False,
-    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+    ) -> "tuple[torch.Tensor, torch.Tensor | None]":
         """Forward pass of the PolyBERT attention mechanism.
 
         Computes multi-head self-attention with configurable positional encodings
@@ -142,14 +134,6 @@ class PolyBertAttention(nn.Module):
             - output: Attention output tensor of shape (batch_size, seq_len, hidden_size).
             - attention_weights: Log-sum-exp attention weights if output_attention is True,
                                otherwise None. Shape is (batch_size, num_heads, seq_len, seq_len).
-
-        Note:
-            The attention computation follows these steps:
-            1. Project input to Q, K, V using fused linear layer
-            2. Apply positional encoding modifications (if any)
-            3. Reshape for multi-head attention
-            4. Compute attention using flex_attention with score_mod and block_mask
-            5. Reshape and apply output projection with dropout
 
         """
         n_batch, n_seq, _ = x.shape

@@ -25,7 +25,7 @@ class DynamicTanhNorm(nn.Module):
         self.gamma = nn.Parameter(torch.ones(dim))
         self.beta = nn.Parameter(torch.zeros(dim))
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: "torch.Tensor") -> "torch.Tensor":
         """Apply dynamic tanh normalization."""
         x = torch.tanh(self.alpha * x)
         return self.gamma * x + self.beta
@@ -51,7 +51,7 @@ class DeepNorm(nn.Module):
         return self.layer_norm(x + self.alpha * gx)
 
 
-def get_norm(config: PolyBertConfig) -> nn.Module:
+def get_norm(config: "PolyBertConfig") -> "nn.Module":
     """Get the normalization layer specified in the configuration.
 
     This factory function returns the appropriate normalization layer based on
@@ -71,10 +71,11 @@ def get_norm(config: PolyBertConfig) -> nn.Module:
         ValueError: If the specified normalization type is not supported.
 
     Supported normalization types:
-        - "group": Group normalization
-        - "layer": Layer normalization across the hidden dimension
-        - "rms": Root Mean Square layer normalization
-        - "deep": DeepNorm
+        - `group`: Group normalization
+        - `layer`: Layer normalization across the hidden dimension
+        - `rms`: Root Mean Square layer normalization
+        - `deep`: DeepNorm
+        - `dynamictanh`: DynamicTanhNorm
 
     """
     match config.norm_fn:

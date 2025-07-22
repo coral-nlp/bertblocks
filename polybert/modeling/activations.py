@@ -13,7 +13,7 @@ from torch.nn.modules.activation import (
 from polybert.modeling.config import PolyBertConfig
 
 
-def get_actv_fn(config: PolyBertConfig) -> nn.Module:
+def get_actv_fn(config: "PolyBertConfig") -> "nn.Module":
     """Get the activation function specified in the configuration.
 
     This factory function returns the appropriate activation function module
@@ -31,14 +31,14 @@ def get_actv_fn(config: PolyBertConfig) -> nn.Module:
         ValueError: If the specified activation function is not supported.
 
     Supported activation functions:
-        - "relu": Rectified Linear Unit
-        - "silu": Sigmoid Linear Unit (Swish)
-        - "gelu": Gaussian Error Linear Unit
-        - "leakyrelu": Leaky Rectified Linear Unit
-        - "selu": Scaled Exponential Linear Unit
-        - "logsigmoid": Log-sigmoid activation
-        - "sigmoid": Standard sigmoid activation
-        - "prelu": Parametric Rectified Linear Unit
+        - `relu`: Rectified Linear Unit
+        - `silu`: Sigmoid Linear Unit (Swish)
+        - `gelu`: Gaussian Error Linear Unit
+        - `leakyrelu`: Leaky Rectified Linear Unit
+        - `selu: Scaled Exponential Linear Unit
+        - `logsigmoid`: Log-sigmoid activation
+        - `sigmoid`: Standard sigmoid activation
+        - `prelu`: Parametric Rectified Linear Unit
 
     """
     match config.actv_fn:
