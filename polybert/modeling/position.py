@@ -13,7 +13,7 @@ class SinusoidalPositionalEncoding(nn.Module):
         dim: int
             Embedding dimension, usually set to embed_dim // num_heads
         max_seq_len: int
-            Maximum expected sequence length for the model, if exceeded the cached freqs will be recomputed
+            Maximum sequence length for the model.
         base: int
             The base used to compute frequencies.
 

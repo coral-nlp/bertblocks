@@ -32,7 +32,7 @@ class PolyBertEmbeddings(nn.Module):
             if config.pos_emb_kind == "sinusoidal"
             else nn.Identity()
         )
-        self.drop = nn.Dropout(config.hidden_dropout_prob) if config.hidden_dropout_prob > 0 else nn.Identity()
+        self.drop = nn.Dropout(config.emb_dropout_prob) if config.emb_dropout_prob > 0 else nn.Identity()
 
     def forward(
         self,

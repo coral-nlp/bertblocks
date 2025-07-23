@@ -32,9 +32,10 @@ class PolyBertConfig(PretrainedConfig):
         norm_fn: Literal["group", "layer", "rms", "deep", "dynamictanh"] = "rms",
         norm_eps: float = 1e-12,
         norm_params: dict | None = None,
+        emb_dropout_prob: float = 0.1,
         hidden_dropout_prob: float = 0.1,
         attn_dropout_prob: float = 0.1,
-        classifier_dropout: float = 0.1,
+        classifier_dropout_prob: float = 0.1,
         problem_type: Literal["regression", "single_label_classification", "multi_label_classification"] = "regression",
         num_labels: int = 2,
         **kwargs: Any,
@@ -105,11 +106,13 @@ class PolyBertConfig(PretrainedConfig):
             norm_params: Additional parameters for custom normalization layers. This field allows
                 passing custom parameters to normalization layers that require them. For example,
                 for DeepNorm: {"alpha": 0.81} where alpha is the scaling factor.
+            emb_dropout_prob: Dropout probability applied to the embedding layer output.
+                Common values: 0.1 (default), 0.0 (no dropout). Must be between 0.0 and 1.0.
             hidden_dropout_prob: Dropout probability applied to hidden layer outputs.
                 Common values: 0.1 (default), 0.0 (no dropout). Must be between 0.0 and 1.0.
             attn_dropout_prob: Dropout probability applied to attention weights.
                 Common values: 0.1 (default), 0.0 (no dropout). Must be between 0.0 and 1.0.
-            classifier_dropout: Dropout probability for the classification head. Applied to the
+            classifier_dropout_prob: Dropout probability for the classification head. Applied to the
                 pooled representation before the final classification layer. Helps prevent
                 overfitting in downstream tasks. Must be between 0.0 and 1.0.
             problem_type: The problem type for automatic loss selection (HuggingFace standard).
@@ -145,12 +148,6 @@ class PolyBertConfig(PretrainedConfig):
         if intermediate_size <= 0:
             raise ValueError(f"intermediate_size must be greater than 0, got {intermediate_size}")
 
-        if not 0.0 <= hidden_dropout_prob <= 1.0:
-            raise ValueError(f"hidden_dropout_prob must be between 0.0 and 1.0, got {hidden_dropout_prob}")
-
-        if not 0.0 <= attn_dropout_prob <= 1.0:
-            raise ValueError(f"attn_dropout_prob must be between 0.0 and 1.0, got {attn_dropout_prob}")
-
         if initializer_range <= 0.0:
             raise ValueError(f"initializer_range must be greater than 0.0, got {initializer_range}")
 
@@ -166,8 +163,17 @@ class PolyBertConfig(PretrainedConfig):
         if pad_token_id >= vocab_size:
             raise ValueError(f"pad_token_id ({pad_token_id}) must be within vocabulary range (0 to {vocab_size - 1})")
 
-        if not 0.0 <= classifier_dropout <= 1.0:
-            raise ValueError(f"classifier_dropout must be between 0.0 and 1.0, got {classifier_dropout}")
+        if not 0.0 <= emb_dropout_prob <= 1.0:
+            raise ValueError(f"emb_dropout_prob must be between 0.0 and 1.0, got {emb_dropout_prob}")
+
+        if not 0.0 <= hidden_dropout_prob <= 1.0:
+            raise ValueError(f"hidden_dropout_prob must be between 0.0 and 1.0, got {hidden_dropout_prob}")
+
+        if not 0.0 <= attn_dropout_prob <= 1.0:
+            raise ValueError(f"attn_dropout_prob must be between 0.0 and 1.0, got {attn_dropout_prob}")
+
+        if not 0.0 <= classifier_dropout_prob <= 1.0:
+            raise ValueError(f"classifier_dropout_prob must be between 0.0 and 1.0, got {classifier_dropout_prob}")
 
         if num_labels < 1:
             raise ValueError(f"num_labels must be at least 1, got {num_labels}")
@@ -203,9 +209,10 @@ class PolyBertConfig(PretrainedConfig):
         self.norm_eps = norm_eps
         self.norm_params = norm_params or {}
         # Dropout parameters
+        self.emb_dropout_prob = emb_dropout_prob
         self.hidden_dropout_prob = hidden_dropout_prob
         self.attn_dropout_prob = attn_dropout_prob
-        self.classifier_dropout = classifier_dropout
+        self.classifier_dropout = classifier_dropout_prob
         # Downstream task parameters
         self.problem_type = problem_type
         self.num_labels = num_labels
