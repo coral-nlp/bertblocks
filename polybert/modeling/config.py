@@ -18,6 +18,8 @@ class PolyBertConfig(PretrainedConfig):
         num_blocks: int = 12,
         num_attention_heads: int = 12,
         pos_emb_kind: Literal["alibi", "sinusoidal", "rope", "relative", "learned"] = "alibi",
+        add_token_type_emb: bool = False,
+        type_vocab_size: int = 1,
         mlp_type: Literal["mlp", "glu"] = "mlp",
         mlp_in_bias: bool = True,
         mlp_out_bias: bool = True,
@@ -72,6 +74,8 @@ class PolyBertConfig(PretrainedConfig):
                 "alibi" (ALiBi positional encoding), "sinusoidal" (Sinusoidal positional encoding),
                 "rope" (Rotary positional encoding), "relative" (Relative positional encoding),
                 "learned" (Learned positional encoding).
+            add_token_type_emb: Whether to add token type embeddings to the model.
+            type_vocab_size: The size of the token_type vocabulary. Only used if add_token_type_emb is True.
             mlp_type: The type of MLP (feed-forward) layer architecture. Available options:
                 "mlp" (Standard two-layer feed-forward network),
                 "glu" (Gated Linear Unit with learned gating mechanism, typically better performance).
@@ -193,6 +197,8 @@ class PolyBertConfig(PretrainedConfig):
         self.intermediate_size = intermediate_size
         self.num_attention_heads = num_attention_heads
         self.pos_emb_kind = pos_emb_kind
+        self.add_token_type_emb = add_token_type_emb
+        self.type_vocab_size = type_vocab_size
         # MLP parameters
         self.mlp_type = mlp_type
         self.mlp_in_bias = mlp_in_bias

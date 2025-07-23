@@ -62,7 +62,7 @@ class LearnedPositionalEncoding(nn.Module):
 
     def __init__(self, dim: int, max_seq_len: int = 1024):
         super().__init__()
-        self.emb = nn.Embedding(max_seq_len, dim)
+        self.embd = nn.Embedding(max_seq_len, dim)
         self.register_buffer("position_ids", torch.arange(max_seq_len).expand((1, -1)), persistent=False)
 
     def forward(self, x: "torch.Tensor") -> "torch.Tensor":
@@ -77,7 +77,7 @@ class LearnedPositionalEncoding(nn.Module):
             The tensor after adding learned positional encodings.
 
         """
-        return x + self.emb(self.position_ids)
+        return x + self.embd(self.position_ids)
 
 
 class RotaryPositionalEncoding(nn.Module):

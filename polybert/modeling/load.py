@@ -20,6 +20,8 @@ def from_bert_model(pretrained_model_name_or_path: str) -> "PolyBertModel":
             intermediate_size=config.intermediate_size,
             num_attention_heads=config.num_attention_heads,
             pos_emb_kind="learned" if config.position_embedding_type == "absolute" else "relative",
+            add_token_type_emb=True,
+            type_vocab_size=config.type_vocab_size,
             mlp_type="mlp",
             mlp_in_bias=True,
             mlp_out_bias=True,
@@ -44,10 +46,11 @@ def from_bert_model(pretrained_model_name_or_path: str) -> "PolyBertModel":
     bert_model = BertModel.from_pretrained(pretrained_model_name_or_path)
 
     # Embedding layer
-    model.embd.embd.weight = bert_model.embeddings.word_embeddings.weight
-    model.embd.pos.weight = bert_model.embeddings.position_embeddings.weight
-    model.embd.post_norm.weight = bert_model.embeddings.LayerNorm.weight
-    model.embd.post_norm.bias = bert_model.embeddings.LayerNorm.bias
+    model.embd.embd = bert_model.embeddings.word_embeddings
+    model.embd.pose.embd = bert_model.embeddings.position_embeddings
+    model.embd.norm.weight = bert_model.embeddings.LayerNorm.weight
+    model.embd.norm.bias = bert_model.embeddings.LayerNorm.bias
+    model.embd.tokt.embd = bert_model.embeddings.token_type_embeddings
 
     for i in range(len(model.encd.blocks)):
         # QKV Projection
@@ -99,11 +102,6 @@ if __name__ == "__main__":
     tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
     seq = tokenizer(["I like cats.", "Cats are the ultimate pet."], return_tensors="pt", padding="max_length")
 
-    # We run the embedding pass separately to use for both models, since polybert doesn't support absolute encodings
-    # inp = bert_model.embeddings(seq["input_ids"])
-    # mask_bert = _prepare_4d_attention_mask_for_sdpa(seq["attention_mask"], inp.dtype, tgt_len=inp.shape[1])
-
-    # Only run the encoder stack using the precomputed input embeddings
     with torch.no_grad():
         seq1_bert, seq2_bert = bert_model(seq["input_ids"], attention_mask=seq["attention_mask"]).last_hidden_state[
             :, 0, :
