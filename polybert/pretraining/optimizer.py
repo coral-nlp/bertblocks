@@ -62,7 +62,6 @@ def get_optimizer(
 
             return Lion(params, **optimizer_kwargs)
         case "sophiah":
-            # TODO: @cschroeder is this the same as Sophia?
             from pytorch_optimizer import SophiaH
 
             return SophiaH(params, **optimizer_kwargs)
@@ -79,6 +78,7 @@ def get_optimizer(
 
             return SOAP(params, **optimizer_kwargs)
         case "splus":
+            # see: https://github.com/kozistr/pytorch_optimizer/issues/396
             raise NotImplementedError
         case _:
             supported = ["sgd", "adam", "adamw", "adafactor", "shampoo", "lion", "sophia", "muon", "galore", "soap"]
