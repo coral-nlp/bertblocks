@@ -19,7 +19,7 @@ def from_bert_model(pretrained_model_name_or_path: str) -> "PolyBertModel":
             num_blocks=config.num_hidden_layers,
             intermediate_size=config.intermediate_size,
             num_attention_heads=config.num_attention_heads,
-            pos_emb_kind="sinusoidal" if config.position_embedding_type == "absolute" else "relative",
+            pos_emb_kind="learned" if config.position_embedding_type == "absolute" else "relative",
             mlp_type="mlp",
             mlp_in_bias=True,
             mlp_out_bias=True,
@@ -43,7 +43,12 @@ def from_bert_model(pretrained_model_name_or_path: str) -> "PolyBertModel":
     model = PolyBertModel(config, add_pooling_layer=False)
     bert_model = BertModel.from_pretrained(pretrained_model_name_or_path)
 
+    # Embedding layer
     model.embd.embd.weight = bert_model.embeddings.word_embeddings.weight
+    model.embd.pos.weight = bert_model.embeddings.position_embeddings.weight
+    model.embd.post_norm.weight = bert_model.embeddings.LayerNorm.weight
+    model.embd.post_norm.bias = bert_model.embeddings.LayerNorm.bias
+
     for i in range(len(model.encd.blocks)):
         # QKV Projection
         model.encd.blocks[i].attn.proj.weight = torch.nn.Parameter(
@@ -85,7 +90,6 @@ def from_bert_model(pretrained_model_name_or_path: str) -> "PolyBertModel":
 
 if __name__ == "__main__":
     from transformers import AutoModel, AutoTokenizer
-    from transformers.modeling_attn_mask_utils import _prepare_4d_attention_mask_for_sdpa
 
     poly_model = from_bert_model("bert-base-uncased")
     bert_model = AutoModel.from_pretrained("bert-base-uncased", add_pooling_layer=False)
@@ -96,13 +100,17 @@ if __name__ == "__main__":
     seq = tokenizer(["I like cats.", "Cats are the ultimate pet."], return_tensors="pt", padding="max_length")
 
     # We run the embedding pass separately to use for both models, since polybert doesn't support absolute encodings
-    inp = bert_model.embeddings(seq["input_ids"])
-    mask_bert = _prepare_4d_attention_mask_for_sdpa(seq["attention_mask"], inp.dtype, tgt_len=inp.shape[1])
+    # inp = bert_model.embeddings(seq["input_ids"])
+    # mask_bert = _prepare_4d_attention_mask_for_sdpa(seq["attention_mask"], inp.dtype, tgt_len=inp.shape[1])
 
     # Only run the encoder stack using the precomputed input embeddings
     with torch.no_grad():
-        seq1_bert, seq2_bert = bert_model.encoder(inp, attention_mask=mask_bert).last_hidden_state[:, 0, :]
-        seq1_poly, seq2_poly = poly_model.encd(inp, attention_mask=seq["attention_mask"])[0][:, 0, :]
+        seq1_bert, seq2_bert = bert_model(seq["input_ids"], attention_mask=seq["attention_mask"]).last_hidden_state[
+            :, 0, :
+        ]
+        seq1_poly, seq2_poly = poly_model(seq["input_ids"], attention_mask=seq["attention_mask"]).last_hidden_state[
+            :, 0, :
+        ]
 
     # Assert that both produced same output
     torch.testing.assert_close(seq1_bert, seq1_poly)

@@ -17,7 +17,7 @@ class PolyBertConfig(PretrainedConfig):
         intermediate_size: int = 3072,
         num_blocks: int = 12,
         num_attention_heads: int = 12,
-        pos_emb_kind: Literal["alibi", "sinusoidal", "rope", "relative"] = "alibi",
+        pos_emb_kind: Literal["alibi", "sinusoidal", "rope", "relative", "learned"] = "alibi",
         mlp_type: Literal["mlp", "glu"] = "mlp",
         mlp_in_bias: bool = True,
         mlp_out_bias: bool = True,
@@ -70,7 +70,8 @@ class PolyBertConfig(PretrainedConfig):
                 Must be at least 1 and hidden_size must be divisible by this value.
             pos_emb_kind: The type of positional embedding to use. Available options:
                 "alibi" (ALiBi positional encoding), "sinusoidal" (Sinusoidal positional encoding),
-                "rope" (Rotary positional encoding).
+                "rope" (Rotary positional encoding), "relative" (Relative positional encoding),
+                "learned" (Learned positional encoding).
             mlp_type: The type of MLP (feed-forward) layer architecture. Available options:
                 "mlp" (Standard two-layer feed-forward network),
                 "glu" (Gated Linear Unit with learned gating mechanism, typically better performance).

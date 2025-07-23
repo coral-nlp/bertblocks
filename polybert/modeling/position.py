@@ -51,6 +51,35 @@ class SinusoidalPositionalEncoding(nn.Module):
         return x + self.sin[: x.size(1), :]
 
 
+class LearnedPositionalEncoding(nn.Module):
+    """Implementation of Learned Positional Encodings.
+
+    Args:
+        dim (int): Hidden size of the model.
+        max_seq_len (int): Maximum sequence length for the model.
+
+    """
+
+    def __init__(self, dim: int, max_seq_len: int = 1024):
+        super().__init__()
+        self.emb = nn.Embedding(max_seq_len, dim)
+        self.register_buffer("position_ids", torch.arange(max_seq_len).expand((1, -1)), persistent=False)
+
+    def forward(self, x: "torch.Tensor") -> "torch.Tensor":
+        """Add learned positional encodings to a given tensor.
+
+        Args:
+            x: Tensor, shape `[seq_len, batch_size, num_heads, embedding_dim]`
+                The tensor to add positional encodings to.
+
+        Returns:
+            Tensor, shape `[seq_len, batch_size, num_heads, embedding_dim]`
+            The tensor after adding learned positional encodings.
+
+        """
+        return x + self.emb(self.position_ids)
+
+
 class RotaryPositionalEncoding(nn.Module):
     """Implementation of Rotary Positional Encodings.
 
@@ -90,15 +119,15 @@ class RotaryPositionalEncoding(nn.Module):
         return torch.cat((-x2, x1), dim=-1)
 
     def forward(self, x: "torch.Tensor") -> "torch.Tensor":
-        """Add RoPE to a given tensor.
+        """Add RoPE positional encodings to a given tensor.
 
         Args:
             x: Tensor, shape `[seq_len, batch_size, num_heads, embedding_dim]`
-                The tensor to add RoPE to.
+                The tensor to add RoPE positional encodings to.
 
         Returns:
             Tensor, shape `[seq_len, batch_size, num_heads, embedding_dim]`
-            The tensor after adding RoPE.
+            The tensor after adding RoPE positional encodings.
 
         """
         if x.shape[0] > self.cos.shape[0]:  # type: ignore
