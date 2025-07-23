@@ -21,7 +21,7 @@ def get_actv_fn(config: "PolyBertConfig") -> "nn.Module":
     used in transformer architectures.
 
     Args:
-        config (PolyBertConfig): Configuration object determining model hyperparameters.
+        config (PolyBertConfig): Configuration object determining poly_model hyperparameters.
 
     Returns:
         An activation function module (nn.Module) that can be called on tensors.

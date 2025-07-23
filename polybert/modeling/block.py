@@ -27,7 +27,7 @@ class PolyBertBlock(nn.Module):
     3. Optional layer normalization (pre/post/both/none)
 
     Args:
-        config (PolyBertConfig): Configuration object determining model hyperparameters.
+        config (PolyBertConfig): Configuration object determining poly_model hyperparameters.
 
     References:
          - "Attention Is All You Need" (https://arxiv.org/pdf/1706.03762)
@@ -43,7 +43,7 @@ class PolyBertBlock(nn.Module):
         when not needed according to the norm_kind setting.
 
         Args:
-            config (PolyBertConfig): Configuration object determining model hyperparameters.
+            config (PolyBertConfig): Configuration object determining poly_model hyperparameters.
 
         """
         super().__init__()
@@ -57,7 +57,7 @@ class PolyBertBlock(nn.Module):
         self.hidden_drop = nn.Dropout(config.hidden_dropout_prob) if config.hidden_dropout_prob > 0 else nn.Identity()
 
     def forward(
-        self, x: "torch.Tensor", block_mask: "BlockMask", output_attention: "bool | None" = False
+        self, x: "torch.Tensor", attention_mask: "BlockMask", output_attention: "bool | None" = False
     ) -> "tuple[torch.Tensor, torch.Tensor | None]":
         """Forward pass through the transformer block.
 
@@ -67,7 +67,7 @@ class PolyBertBlock(nn.Module):
         Args:
             x (torch.Tensor): Input tensor of shape (batch_size, seq_len, hidden_size)
                 The hidden state of the previous transformer block.
-            block_mask (BlockMask): Block mask for efficient attention computation,
+            attention_mask (BlockMask): Block mask for efficient attention computation,
                 typically created using torch.nn.attention.flex_attention.create_block_mask.
             output_attention (bool | None, optional): Whether to return attention weights.
                 Defaults to False.
@@ -82,15 +82,15 @@ class PolyBertBlock(nn.Module):
         # Attention component
         residual = x
         x = self.pre_norm_attn(x)
-        x, w = self.attn(x, block_mask, output_attention)
+        x, w = self.attn(x, attention_mask, output_attention)
         x = self.attn_drop(x)
         x = self.post_norm_attn(x + residual)
         # Feed-forward component
         residual = x
-        x = self.pre_norm_attn(x)
+        x = self.pre_norm_ffwd(x)
         x = self.ffwd(x)
         x = self.hidden_drop(x)
-        x = self.post_norm_attn(x + residual)
+        x = self.post_norm_ffwd(x + residual)
         return x, w
 
 
@@ -111,7 +111,7 @@ class PolyBertEncoder(nn.Module):
         Creates a stack of transformer blocks. Each block is independently initialized with the same configuration.
 
         Args:
-            config (PolyBertConfig): Configuration object determining model hyperparameters.
+            config (PolyBertConfig): Configuration object determining poly_model hyperparameters.
 
         """
         super().__init__()

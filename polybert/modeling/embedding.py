@@ -13,7 +13,7 @@ from polybert.modeling.position import SinusoidalPositionalEncoding
 
 
 class PolyBertEmbeddings(nn.Module):
-    """Token embedding layer for PolyBert model.
+    """Token embedding layer for PolyBert poly_model.
 
     This class implements the token embedding layer that converts input token IDs
     to dense vector representations. Optionally applies sinusoidal positional encodings
@@ -24,7 +24,7 @@ class PolyBertEmbeddings(nn.Module):
         """Initialize the embedding layer.
 
         Args:
-            config (PolyBertConfig): Configuration object determining model hyperparameters.
+            config (PolyBertConfig): Configuration object determining poly_model hyperparameters.
 
         """
         super().__init__()

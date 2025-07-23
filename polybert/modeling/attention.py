@@ -3,7 +3,6 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from torch.nn.attention.flex_attention import _score_mod_signature
 
-import math
 
 import torch
 from torch import nn
@@ -39,14 +38,13 @@ class PolyBertAttention(nn.Module):
         """Initialize the PolyBERT attention mechanism.
 
         Args:
-            config (PolyBertConfig): Configuration object determining model hyperparameters.
+            config (PolyBertConfig): Configuration object determining poly_model hyperparameters.
 
         """
         super().__init__()
         # General hyperparameters
         self.num_heads = config.num_attention_heads
         self.head_dim = config.hidden_size // config.num_attention_heads
-        self.scale = 1.0 / math.sqrt(self.head_dim)
         self.max_seq_len = config.max_sequence_length
         # Fused linear layers for better performance
         self.proj = nn.Linear(config.hidden_size, 3 * config.hidden_size, bias=config.attn_proj_bias)
@@ -100,20 +98,21 @@ class PolyBertAttention(nn.Module):
     def forward(
         self,
         x: "torch.Tensor",
-        doc_mask: "BlockMask",
+        attention_mask: "BlockMask",
         output_attention: bool = False,
     ) -> "tuple[torch.Tensor, torch.Tensor | None]":
         """Forward pass of the PolyBERT attention mechanism.
 
         Computes multi-head self-attention with configurable positional encodings
-        and block masking. Uses PyTorch's flex_attention for efficient computation.
+        and block masking. Uses PyTorch's flex_attention.
 
         Args:
-            x: Input tensor of shape (batch_size, seq_len, hidden_size).
-            doc_mask: Block mask defining attention patterns, typically used to
-                     prevent attention across document boundaries.
-            output_attention: Whether to return attention weights along with the output.
-                            Default is False for efficiency.
+            x: Tensor of shape (batch_size, seq_len, hidden_size).
+                The input hidden state.
+            attention_mask: BlockMask
+                Flex attention block mask to ignore padding tokens.
+            output_attention: bool
+                Whether to return attention weights along with the output.
 
         Returns:
             A tuple containing:
@@ -122,27 +121,26 @@ class PolyBertAttention(nn.Module):
                                otherwise None. Shape is (batch_size, num_heads, seq_len, seq_len).
 
         """
-        n_batch, n_seq, _ = x.shape
+        n_batch, n_seq = x.size()[:-1]
 
         # Projection for Q, K, V
         qkv = self.proj(x)
-        qkv = self.drop(qkv)
         q, k, v = qkv.chunk(3, dim=-1)
 
         # Reshape for multi-head attention
-        q = q.reshape(n_batch, n_seq, self.num_heads, self.head_dim).transpose(1, 2)
-        k = k.reshape(n_batch, n_seq, self.num_heads, self.head_dim).transpose(1, 2)
-        v = v.reshape(n_batch, n_seq, self.num_heads, self.head_dim).transpose(1, 2)
+        q = q.reshape(n_batch, n_seq, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
+        k = k.reshape(n_batch, n_seq, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
+        v = v.reshape(n_batch, n_seq, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
 
         # Add qk-mod (RoPE) if applicable (will be nn.Identity otherwise)
-        q = self.qk_mod(q)
-        k = self.qk_mod(k)
+        # q = self.qk_mod(q)
+        # k = self.qk_mod(k)
 
         # Apply flex attention kernel
-        x, w = flex_attention(q, k, v, score_mod=self.score_mod, block_mask=doc_mask, scale=self.scale, return_lse=True)
-
+        x, w = flex_attention(q, k, v, block_mask=attention_mask, score_mod=self.score_mod, return_lse=True)
+        w = None
         # Reshape back
-        x = x.transpose(1, 2).contiguous().reshape(n_batch, n_seq, -1)
+        x = x.permute(0, 2, 1, 3).contiguous().reshape(n_batch, n_seq, -1)
 
         # Output projection
         x = self.ffwd(x)

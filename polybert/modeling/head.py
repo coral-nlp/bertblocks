@@ -30,7 +30,7 @@ class PolyBertPooler(nn.Module):
 
 
 class PolyBertGLUPredictionHead(nn.Module):
-    """Prediction head for PolyBert model with gated activation.
+    """Prediction head for PolyBert poly_model with gated activation.
 
     This class implements a prediction head that uses a gated linear unit (GLU)
     architecture. It projects the hidden states to an expanded dimension, applies
@@ -74,7 +74,7 @@ class PolyBertGLUPredictionHead(nn.Module):
 
 
 class PolyBertMLPPredictionHead(nn.Module):
-    """MLP Prediction head for PolyBert model.
+    """MLP Prediction head for PolyBert poly_model.
 
     This class implements a traditional MLP prediction head. It projects the hidden states
     to an expanded dimension, and then projects it back down to the original dimension.
@@ -131,7 +131,7 @@ def get_prediction_head(config: "PolyBertConfig") -> nn.Module:
     based on the configuration. Supports both standard MLP and GLU variants.
 
     Args:
-        config (PolyBertConfig): Configuration object determining model hyperparameters.
+        config (PolyBertConfig): Configuration object determining poly_model hyperparameters.
 
     Returns:
         An prediction head module (nn.Module) that can transform hidden states.

@@ -1,5 +1,3 @@
-from typing import Any
-
 import torch
 
 from polybert.modeling.config import PolyBertConfig
@@ -7,7 +5,7 @@ from polybert.modeling.model import PolyBertModel
 
 
 def from_bert_model(pretrained_model_name_or_path: str) -> "PolyBertModel":
-    """Instantiate an equivalent PolyBERT model from BERT weights and config."""
+    """Instantiate an equivalent PolyBERT poly_model from BERT weights and config."""
     from transformers import BertConfig, BertModel
 
     def _bert_config_to_polybert_config(pretrained_model_name_or_path: str) -> "PolyBertConfig":
@@ -78,48 +76,34 @@ def from_bert_model(pretrained_model_name_or_path: str) -> "PolyBertModel":
         model.encd.blocks[i].ffwd.Dprj.bias = bert_model.encoder.layer[i].output.dense.bias
         # Norms
         model.encd.blocks[i].post_norm_attn.weight = bert_model.encoder.layer[i].attention.output.LayerNorm.weight
+        model.encd.blocks[i].post_norm_attn.bias = bert_model.encoder.layer[i].attention.output.LayerNorm.bias
         model.encd.blocks[i].post_norm_ffwd.weight = bert_model.encoder.layer[i].output.LayerNorm.weight
+        model.encd.blocks[i].post_norm_ffwd.bias = bert_model.encoder.layer[i].output.LayerNorm.bias
 
     return model
 
 
 if __name__ == "__main__":
     from transformers import AutoModel, AutoTokenizer
-
-    model = from_bert_model("bert-base-uncased")
-
-    bert_model = AutoModel.from_pretrained("bert-base-uncased", add_pooling_layer=False)
-    tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
-
-    seq = tokenizer(
-        [
-            "I like cats.",
-            "Cats are the ultimate pet.",
-        ],
-        return_tensors="pt",
-        padding="max_length",
-    )
-
-    def count_trainable_parameters(model: torch.nn.Module) -> Any:
-        """Count the trainable parameters of a module."""
-        import numpy as np
-
-        model_parameters = filter(lambda p: p.requires_grad, model.parameters())
-        params = sum([np.prod(p.size()) for p in model_parameters])
-        return params
-
-    inp = bert_model.embeddings(seq["input_ids"])
     from transformers.modeling_attn_mask_utils import _prepare_4d_attention_mask_for_sdpa
 
-    mask = _prepare_4d_attention_mask_for_sdpa(seq["attention_mask"], inp.dtype, tgt_len=inp.shape[1])
+    poly_model = from_bert_model("bert-base-uncased")
+    bert_model = AutoModel.from_pretrained("bert-base-uncased", add_pooling_layer=False)
+    bert_model.eval()
+    poly_model.eval()
 
-    seq_bert = bert_model.encoder(inp, attention_mask=mask).last_hidden_state
-    seq_poly = model.encd(inp, attention_mask=seq["attention_mask"])[0]
+    tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
+    seq = tokenizer(["I like cats.", "Cats are the ultimate pet."], return_tensors="pt", padding="max_length")
 
-    seq1_bert, seq2_bert = seq_bert[:, 0, :]
-    seq1_poly, seq2_poly = seq_poly[:, 0, :]
+    # We run the embedding pass separately to use for both models, since polybert doesn't support absolute encodings
+    inp = bert_model.embeddings(seq["input_ids"])
+    mask_bert = _prepare_4d_attention_mask_for_sdpa(seq["attention_mask"], inp.dtype, tgt_len=inp.shape[1])
 
-    print("Poly 1 vs Bert 1: ", torch.nn.functional.cosine_similarity(seq1_poly.unsqueeze(0), seq1_bert.unsqueeze(0)))
-    print("Poly 2 vs Bert 2: ", torch.nn.functional.cosine_similarity(seq2_poly.unsqueeze(0), seq2_bert.unsqueeze(0)))
-    print("Poly 1 vs Poly 2: ", torch.nn.functional.cosine_similarity(seq1_poly.unsqueeze(0), seq2_poly.unsqueeze(0)))
-    print("Bert 1 vs Bert 2: ", torch.nn.functional.cosine_similarity(seq1_bert.unsqueeze(0), seq2_bert.unsqueeze(0)))
+    # Only run the encoder stack using the precomputed input embeddings
+    with torch.no_grad():
+        seq1_bert, seq2_bert = bert_model.encoder(inp, attention_mask=mask_bert).last_hidden_state[:, 0, :]
+        seq1_poly, seq2_poly = poly_model.encd(inp, attention_mask=seq["attention_mask"])[0][:, 0, :]
+
+    # Assert that both produced same output
+    torch.testing.assert_close(seq1_bert, seq1_poly)
+    torch.testing.assert_close(seq2_bert, seq2_poly)

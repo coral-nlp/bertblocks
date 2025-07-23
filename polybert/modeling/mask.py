@@ -38,6 +38,6 @@ def doc_mask(attention_mask: "torch.Tensor") -> "_mask_mod_signature":
                 tokens are in the same document and can attend to each other.
 
         """
-        return ~attention_mask[b, q_idx] & ~attention_mask[b, kv_idx]
+        return attention_mask[b, q_idx] & attention_mask[b, kv_idx]
 
     return __inner__
