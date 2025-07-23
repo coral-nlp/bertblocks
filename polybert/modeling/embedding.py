@@ -1,5 +1,7 @@
 from typing import TYPE_CHECKING
 
+from polybert.modeling.norms import get_norm
+
 if TYPE_CHECKING:
     import torch
 
@@ -32,6 +34,8 @@ class PolyBertEmbeddings(nn.Module):
             if config.pos_emb_kind == "sinusoidal"
             else nn.Identity()
         )
+        # Only post norm needed, as input is not a dense representation
+        self.post_norm = get_norm(config) if config.norm_kind in ("post", "both") else nn.Identity()
         self.drop = nn.Dropout(config.emb_dropout_prob) if config.emb_dropout_prob > 0 else nn.Identity()
 
     def forward(

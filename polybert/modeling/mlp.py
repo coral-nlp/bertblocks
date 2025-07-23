@@ -35,8 +35,6 @@ class PolyBertGLU(nn.Module):
         self.actv = get_actv_fn(config)
         # Downwards projection to hidden size
         self.Dprj = nn.Linear(config.intermediate_size, config.hidden_size, bias=False)
-        # Optional dropout
-        self.drop = nn.Dropout(config.hidden_dropout_prob) if config.hidden_dropout_prob > 0 else nn.Identity()
 
     def forward(self, x: "torch.Tensor") -> "torch.Tensor":
         """Forward pass through the GLU layer.
@@ -55,7 +53,6 @@ class PolyBertGLU(nn.Module):
         x, gate = self.Uprj(x).chunk(2, axis=-1)
         x = x * self.actv(gate)
         x = self.Dprj(x)
-        x = self.drop(x)
         return x
 
 
@@ -86,8 +83,6 @@ class PolyBertMLP(nn.Module):
         self.actv = get_actv_fn(config)
         # Downwards projection to hidden size
         self.Dprj = nn.Linear(config.intermediate_size, config.hidden_size, bias=config.mlp_out_bias)
-        # Optional dropout
-        self.drop = nn.Dropout(config.hidden_dropout_prob) if config.hidden_dropout_prob > 0.0 else nn.Identity()
 
     def forward(self, x: "torch.Tensor") -> "torch.Tensor":
         """Forward pass through the MLP layer.
@@ -106,7 +101,6 @@ class PolyBertMLP(nn.Module):
         x = self.Uprj(x)
         x = self.actv(x)
         x = self.Dprj(x)
-        x = self.drop(x)
         return x
 
 

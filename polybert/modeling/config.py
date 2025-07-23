@@ -21,6 +21,8 @@ class PolyBertConfig(PretrainedConfig):
         mlp_type: Literal["mlp", "glu"] = "mlp",
         mlp_in_bias: bool = True,
         mlp_out_bias: bool = True,
+        attn_proj_bias: bool = True,
+        attn_out_bias: bool = True,
         initializer_kind: Literal[
             "trunc_normal", "kaiming_normal", "kaiming_uniform", "xavier_normal", "xavier_uniform"
         ] = "trunc_normal",
@@ -73,11 +75,9 @@ class PolyBertConfig(PretrainedConfig):
                 "mlp" (Standard two-layer feed-forward network),
                 "glu" (Gated Linear Unit with learned gating mechanism, typically better performance).
             mlp_in_bias: Whether to include bias terms in the input projection of MLP layers.
-                Setting to False can reduce parameters and sometimes improve performance.
-                Common values: True (default), False (for efficiency).
             mlp_out_bias: Whether to include bias terms in the output projection of MLP layers.
-                Setting to False can reduce parameters and sometimes improve performance.
-                Common values: True (default), False (for efficiency).
+            attn_proj_bias: Whether to include bias terms in the qkv projection of attention layers.
+            attn_out_bias: Whether to include bias terms in the output projection of attention layers.
             initializer_kind: The initialization method for weights. Determines the type of
                 distribution random weights are sampled from for initialization.
                 Defaults to a truncated normal distribution.
@@ -196,6 +196,9 @@ class PolyBertConfig(PretrainedConfig):
         self.mlp_type = mlp_type
         self.mlp_in_bias = mlp_in_bias
         self.mlp_out_bias = mlp_out_bias
+        # Attention parameters
+        self.attn_proj_bias = attn_proj_bias
+        self.attn_out_bias = attn_out_bias
         # Initialization parameters
         self.initializer_kind = initializer_kind
         self.initializer_range = initializer_range

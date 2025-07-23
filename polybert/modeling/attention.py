@@ -49,8 +49,8 @@ class PolyBertAttention(nn.Module):
         self.scale = 1.0 / math.sqrt(self.head_dim)
         self.max_seq_len = config.max_sequence_length
         # Fused linear layers for better performance
-        self.proj = nn.Linear(config.hidden_size, 3 * config.hidden_size, bias=False)
-        self.ffwd = nn.Linear(config.hidden_size, config.hidden_size, bias=False)
+        self.proj = nn.Linear(config.hidden_size, 3 * config.hidden_size, bias=config.attn_proj_bias)
+        self.ffwd = nn.Linear(config.hidden_size, config.hidden_size, bias=config.attn_out_bias)
         self.drop = nn.Dropout(config.attn_dropout_prob) if config.attn_dropout_prob > 0 else nn.Identity()
         # Positional embeddings (they apply at different stages of attention depending on type)
         self.qk_mod = self._qk_mod(config.pos_emb_kind)
@@ -126,6 +126,7 @@ class PolyBertAttention(nn.Module):
 
         # Projection for Q, K, V
         qkv = self.proj(x)
+        qkv = self.drop(qkv)
         q, k, v = qkv.chunk(3, dim=-1)
 
         # Reshape for multi-head attention
@@ -143,8 +144,7 @@ class PolyBertAttention(nn.Module):
         # Reshape back
         x = x.transpose(1, 2).contiguous().reshape(n_batch, n_seq, -1)
 
-        # Output projection and dropout
+        # Output projection
         x = self.ffwd(x)
-        x = self.drop(x)
 
         return x, w if output_attention else None

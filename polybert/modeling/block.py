@@ -49,8 +49,12 @@ class PolyBertBlock(nn.Module):
         super().__init__()
         self.attn = PolyBertAttention(config)
         self.ffwd = get_mlp(config)
-        self.pre_norm = get_norm(config) if config.norm_kind in ("pre", "both") else nn.Identity()
-        self.post_norm = get_norm(config) if config.norm_kind in ("post", "both") else nn.Identity()
+        self.pre_norm_attn = get_norm(config) if config.norm_kind in ("pre", "both") else nn.Identity()
+        self.pre_norm_ffwd = get_norm(config) if config.norm_kind in ("pre", "both") else nn.Identity()
+        self.post_norm_attn = get_norm(config) if config.norm_kind in ("post", "both") else nn.Identity()
+        self.post_norm_ffwd = get_norm(config) if config.norm_kind in ("post", "both") else nn.Identity()
+        self.attn_drop = nn.Dropout(config.attn_dropout_prob) if config.attn_dropout_prob > 0 else nn.Identity()
+        self.hidden_drop = nn.Dropout(config.hidden_dropout_prob) if config.hidden_dropout_prob > 0 else nn.Identity()
 
     def forward(
         self, x: "torch.Tensor", block_mask: "BlockMask", output_attention: "bool | None" = False
@@ -77,14 +81,16 @@ class PolyBertBlock(nn.Module):
         """
         # Attention component
         residual = x
-        x = self.pre_norm(x)
+        x = self.pre_norm_attn(x)
         x, w = self.attn(x, block_mask, output_attention)
-        x = self.post_norm(x + residual)
-        # Linear component
+        x = self.attn_drop(x)
+        x = self.post_norm_attn(x + residual)
+        # Feed-forward component
         residual = x
-        x = self.pre_norm(x)
+        x = self.pre_norm_attn(x)
         x = self.ffwd(x)
-        x = self.post_norm(x + residual)
+        x = self.hidden_drop(x)
+        x = self.post_norm_attn(x + residual)
         return x, w
 
 
