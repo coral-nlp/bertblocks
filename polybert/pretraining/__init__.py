@@ -11,5 +11,5 @@ The pretraining framework includes:
 - Model compilation support for improved performance
 
 The pretraining setup is designed to be scalable and easily configurable
-for different datasets, poly_model sizes, and training regimes.
+for different datasets, model sizes, and training regimes.
 """

@@ -59,7 +59,7 @@ def get_norm(config: "PolyBertConfig") -> "nn.Module":
     in transformer architectures.
 
     Args:
-        config (PolyBertConfig): Configuration object determining poly_model hyperparameters.
+        config (PolyBertConfig): Configuration object determining model hyperparameters.
 
     Returns:
         A normalization module (nn.Module) that can normalize tensors.

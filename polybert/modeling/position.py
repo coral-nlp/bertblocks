@@ -13,7 +13,7 @@ class SinusoidalPositionalEncoding(nn.Module):
         dim: int
             Embedding dimension, usually set to embed_dim // num_heads
         max_seq_len: int
-            Maximum sequence length for the poly_model.
+            Maximum sequence length for the model.
         base: int
             The base used to compute frequencies.
 
@@ -58,7 +58,7 @@ class RotaryPositionalEncoding(nn.Module):
         dim: int
             Embedding dimension, usually set to embed_dim // num_heads
         max_seq_len: int
-            Maximum expected sequence length for the poly_model, if exceeded the cached freqs will be recomputed
+            Maximum expected sequence length for the model, if exceeded the cached freqs will be recomputed
         base: int
             The base used to compute rotation angles
 

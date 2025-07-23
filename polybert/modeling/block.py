@@ -27,7 +27,7 @@ class PolyBertBlock(nn.Module):
     3. Optional layer normalization (pre/post/both/none)
 
     Args:
-        config (PolyBertConfig): Configuration object determining poly_model hyperparameters.
+        config (PolyBertConfig): Configuration object determining model hyperparameters.
 
     References:
          - "Attention Is All You Need" (https://arxiv.org/pdf/1706.03762)
@@ -43,7 +43,7 @@ class PolyBertBlock(nn.Module):
         when not needed according to the norm_kind setting.
 
         Args:
-            config (PolyBertConfig): Configuration object determining poly_model hyperparameters.
+            config (PolyBertConfig): Configuration object determining model hyperparameters.
 
         """
         super().__init__()
@@ -111,7 +111,7 @@ class PolyBertEncoder(nn.Module):
         Creates a stack of transformer blocks. Each block is independently initialized with the same configuration.
 
         Args:
-            config (PolyBertConfig): Configuration object determining poly_model hyperparameters.
+            config (PolyBertConfig): Configuration object determining model hyperparameters.
 
         """
         super().__init__()

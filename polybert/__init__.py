@@ -5,8 +5,8 @@ and research purposes. It provides a flexible framework for experimenting with
 different transformer configurations, attention mechanisms, and training strategies.
 
 This package includes:
-- Core poly_model implementations (PolyBertModel, PolyBertConfig)
-- Task-specific poly_model heads for various NLP tasks
+- Core model implementations (PolyBertModel, PolyBertConfig)
+- Task-specific model heads for various NLP tasks
 - Pretraining utilities for masked language modeling
 - Flexible architecture components for research
 

@@ -1,9 +1,9 @@
 """PolyBert modeling components and architectures.
 
-This module contains the core transformer poly_model implementation including:
+This module contains the core transformer model implementation including:
 - Model configuration (PolyBertConfig)
-- Base transformer poly_model (PolyBertModel)
-- Task-specific poly_model variants for different NLP applications
+- Base transformer model (PolyBertModel)
+- Task-specific model variants for different NLP applications
 
 The models support flexible architecture configurations including:
 - Different attention mechanisms

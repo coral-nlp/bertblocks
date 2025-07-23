@@ -38,7 +38,7 @@ class PolyBertAttention(nn.Module):
         """Initialize the PolyBERT attention mechanism.
 
         Args:
-            config (PolyBertConfig): Configuration object determining poly_model hyperparameters.
+            config (PolyBertConfig): Configuration object determining model hyperparameters.
 
         """
         super().__init__()

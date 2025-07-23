@@ -46,9 +46,9 @@ class PolyBertConfig(PretrainedConfig):
 
         Args:
             vocab_size: The size of the vocabulary. This determines the number of unique tokens
-                the poly_model can process. Common values: 30522 (BERT), 50257 (GPT-2), 32000 (T5).
+                the model can process. Common values: 30522 (BERT), 50257 (GPT-2), 32000 (T5).
                 Must be greater than 0.
-            max_sequence_length: Maximum number of tokens the poly_model can process in a single sequence.
+            max_sequence_length: Maximum number of tokens the model can process in a single sequence.
                 This affects memory usage and determines the size of positional embeddings (if used).
                 Common values: 512 (BERT), 1024, 2048. Longer sequences require more memory.
                 Must be greater than 0.
@@ -56,13 +56,13 @@ class PolyBertConfig(PretrainedConfig):
                 This token is ignored during attention computation. Common values: 0 (BERT),
                 1 (RoBERTa). Must be non-negative and within the vocabulary range.
             hidden_size: The dimensionality of the hidden layers. This is the primary dimension
-                of the poly_model and affects memory usage and computational requirements.
+                of the model and affects memory usage and computational requirements.
                 Common values: 768 (BERT-base), 1024 (BERT-large). Must be divisible by
                 num_attention_heads. Must be greater than 0.
             intermediate_size: The dimensionality of the feed-forward layers. This is typically
                 4x the hidden_size (e.g., 3072 for hidden_size=768). Must be greater than 0.
-            num_blocks: The number of transformer layers in the poly_model. More layers generally
-                improve poly_model capacity but increase computational cost. Common values: 12 (BERT-base),
+            num_blocks: The number of transformer layers in the model. More layers generally
+                improve model capacity but increase computational cost. Common values: 12 (BERT-base),
                 24 (BERT-large). Must be at least 1.
             num_attention_heads: The number of attention heads in the multi-head attention mechanism.
                 Each head has dimension hidden_size // num_attention_heads. More heads can capture

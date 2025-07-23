@@ -1,15 +1,15 @@
 """Masked Language Modeling (MLM) pretraining implementation for PolyBert.
 
 This module provides a complete MLM pretraining setup using PyTorch Lightning,
-including data loading, poly_model configuration, optimization, and training logic.
-It supports streaming datasets, flexible poly_model compilation, and various
+including data loading, model configuration, optimization, and training logic.
+It supports streaming datasets, flexible model compilation, and various
 optimization strategies.
 
 The implementation includes:
 - MaskedLanguageModelingCollator for dynamic masking
 - PolyBertPretrainingDataModule for data loading
 - PolyBertPretrainingModule for training logic
-- Support for poly_model compilation and advanced optimization
+- Support for model compilation and advanced optimization
 """
 
 from pathlib import Path
@@ -112,11 +112,11 @@ class PolyBertPretrainingModule(L.LightningModule):
     """PyTorch Lightning module for PolyBert MLM pretraining.
 
     This module encapsulates the complete training logic for PolyBert pretraining,
-    including poly_model initialization, optimization setup, and training step implementation.
-    It supports advanced features like poly_model compilation, sophisticated learning rate
+    including model initialization, optimization setup, and training step implementation.
+    It supports advanced features like model compilation, sophisticated learning rate
     scheduling, and automatic checkpoint saving.
 
-    The module automatically configures the PolyBert poly_model based on the provided
+    The module automatically configures the PolyBert model based on the provided
     hyperparameters and handles all aspects of the training loop.
     """
 
@@ -144,14 +144,14 @@ class PolyBertPretrainingModule(L.LightningModule):
                 Defaults to 0.1 (starts at 10% of peak LR).
             learning_rate_decay: Exponential decay factor after warmup.
                 Defaults to 0.99999 (very gradual decay).
-            compile_model: Whether to compile the poly_model with torch.compile.
+            compile_model: Whether to compile the model with torch.compile.
                 Defaults to True for better performance.
             pretrained_tokenizer_name_or_path: str
-                Tokenizer name; if provided, will overwrite the poly_model vocab size using the given tokenizer.
+                Tokenizer name; if provided, will overwrite the model vocab size using the given tokenizer.
             optimizer_class: Optimizer class name. Defaults to "adamw".
             optimizer_kwargs: Optional arguments to pass to torch.optim.optimizer.
             model_config_kwargs: dict[str, Any] or None
-                Optional dictionary of poly_model configuration options passed to PolyBertConfig for instantiation.
+                Optional dictionary of model configuration options passed to PolyBertConfig for instantiation.
 
         """
         super().__init__()
@@ -159,7 +159,7 @@ class PolyBertPretrainingModule(L.LightningModule):
         if model_config_kwargs is None:
             model_config_kwargs = {}
         self.model_config = PolyBertConfig(**model_config_kwargs)
-        # Patch poly_model config with tokenizer vocab size if given
+        # Patch model config with tokenizer vocab size if given
         if self.hparams.pretrained_tokenizer_name_or_path is not None:
             tokenizer = AutoTokenizer.from_pretrained(self.hparams.pretrained_tokenizer_name_or_path)
             self.model_config.vocab_size = tokenizer.vocab_size
@@ -240,10 +240,10 @@ class PolyBertPretrainingModule(L.LightningModule):
         return output.loss
 
     def on_save_checkpoint(self, *args: Any, **kwargs: Any) -> None:
-        """Save poly_model checkpoint in HuggingFace format.
+        """Save model checkpoint in HuggingFace format.
 
         This method is called whenever Lightning saves a checkpoint and
-        additionally saves the poly_model in HuggingFace format for easy loading
+        additionally saves the model in HuggingFace format for easy loading
         and deployment. Only saves on the main process in distributed training.
 
         Args:

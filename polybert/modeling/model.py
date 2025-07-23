@@ -29,7 +29,7 @@ class PolyBertPreTrainedModel(PreTrainedModel):
     """Base class for all PolyBert models.
 
     This class provides the base configuration and weight initialization
-    for all PolyBert poly_model variants. It inherits from HuggingFace's
+    for all PolyBert model variants. It inherits from HuggingFace's
     PreTrainedModel to provide compatibility with the transformers library.
     """
 
@@ -131,15 +131,15 @@ class PolyBertPreTrainedModel(PreTrainedModel):
 
 
 class PolyBertModel(PolyBertPreTrainedModel):
-    """Core PolyBert poly_model for encoding sequences.
+    """Core PolyBert model for encoding sequences.
 
-    This is the base PolyBert poly_model that outputs hidden states without any
+    This is the base PolyBert model that outputs hidden states without any
     task-specific head. It can be used as a feature extractor for downstream tasks.
 
     """
 
     def __init__(self, config: "PolyBertConfig", add_pooling_layer: bool = True) -> None:
-        """Initialize the PolyBert poly_model.
+        """Initialize the PolyBert model.
 
         Args:
             config: Model configuration containing hyperparameters.
@@ -155,12 +155,12 @@ class PolyBertModel(PolyBertPreTrainedModel):
 
     @property
     def dtype(self) -> "torch.dtype":
-        """Get the dtype of the poly_model parameters."""
+        """Get the dtype of the model parameters."""
         return next(self.parameters()).dtype
 
     @property
     def device(self) -> "torch.device":
-        """Get the device of the poly_model parameters."""
+        """Get the device of the model parameters."""
         return next(self.parameters()).device
 
     def get_input_embeddings(self) -> "nn.Embedding":
@@ -188,7 +188,7 @@ class PolyBertModel(PolyBertPreTrainedModel):
         output_attentions: "bool | None" = None,
         output_hidden_states: "bool | None" = False,
     ) -> "BaseModelOutput | BaseModelOutputWithPooling":
-        """Forward pass through the PolyBert poly_model.
+        """Forward pass through the PolyBert model.
 
         Args:
             input_ids: Tensor of token ids of shape (batch_size, sequence_length).
@@ -271,9 +271,9 @@ class PolyBertForTasksBase(PolyBertPreTrainedModel):
 
 
 class PolyBertForMaskedLM(PolyBertPreTrainedModel):
-    """PolyBert poly_model for masked language modeling tasks.
+    """PolyBert model for masked language modeling tasks.
 
-    This poly_model extends the base PolyBert poly_model with a prediction head
+    This model extends the base PolyBert model with a prediction head
     and decoder for masked language modeling. It can be used for
     pre-training or fine-tuning on masked language modeling tasks.
 
@@ -285,7 +285,7 @@ class PolyBertForMaskedLM(PolyBertPreTrainedModel):
     _tied_weight_keys: ClassVar = ["decoder.weight"]
 
     def __init__(self, config: "PolyBertConfig"):
-        """Initialize the PolyBert masked language poly_model.
+        """Initialize the PolyBert masked language model.
 
         Args:
             config: Model configuration containing hyperparameters.
@@ -364,15 +364,15 @@ class PolyBertForMaskedLM(PolyBertPreTrainedModel):
 
 
 class PolyBertForSequenceClassification(PolyBertForTasksBase):
-    """PolyBert poly_model for sequence classification tasks.
+    """PolyBert model for sequence classification tasks.
 
-    This poly_model extends the base PolyBert poly_model with a classification head
+    This model extends the base PolyBert model with a classification head
     for sequence-level prediction tasks. It supports regression,
     single-label classification, and multi-label classification.
     """
 
     def __init__(self, config: "PolyBertConfig"):
-        """Initialize the PolyBert sequence classification poly_model.
+        """Initialize the PolyBert sequence classification model.
 
         Args:
             config: Model configuration containing hyperparameters including
@@ -438,15 +438,15 @@ class PolyBertForSequenceClassification(PolyBertForTasksBase):
 
 
 class PolyBertForTokenClassification(PolyBertForTasksBase):
-    """PolyBert poly_model for token classification tasks.
+    """PolyBert model for token classification tasks.
 
-    This poly_model extends the base PolyBert poly_model with a classification head
+    This model extends the base PolyBert model with a classification head
     for token-level prediction tasks such as named entity recognition,
     part-of-speech tagging, and other sequence labeling tasks.
     """
 
     def __init__(self, config: "PolyBertConfig"):
-        """Initialize the PolyBert token classification poly_model.
+        """Initialize the PolyBert token classification model.
 
         Args:
             config: Model configuration containing hyperparameters including
@@ -509,16 +509,16 @@ class PolyBertForTokenClassification(PolyBertForTasksBase):
 
 
 class PolyBertForQuestionAnswering(PolyBertForTasksBase):
-    """PolyBert poly_model for extractive question answering tasks.
+    """PolyBert model for extractive question answering tasks.
 
-    This poly_model extends the base PolyBert poly_model with a classification head
+    This model extends the base PolyBert model with a classification head
     that predicts start and end positions of answers in the input sequence.
     It is designed for tasks like SQuAD where the answer is a span of text
     within the provided context.
     """
 
     def __init__(self, config: "PolyBertConfig"):
-        """Initialize the PolyBert question answering poly_model.
+        """Initialize the PolyBert question answering model.
 
         Args:
             config: Model configuration containing hyperparameters.
@@ -582,7 +582,7 @@ class PolyBertForQuestionAnswering(PolyBertForTasksBase):
                 start_positions = start_positions.squeeze(-1)
             if len(end_positions.size()) > 1:
                 end_positions = end_positions.squeeze(-1)
-            # Sometimes the start/end positions are outside our poly_model inputs, we ignore these terms
+            # Sometimes the start/end positions are outside our model inputs, we ignore these terms
             ignored_index = start_logits.size(1)
             start_positions = start_positions.clamp(0, ignored_index)
             end_positions = end_positions.clamp(0, ignored_index)

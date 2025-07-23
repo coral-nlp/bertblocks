@@ -5,7 +5,7 @@ from polybert.modeling.model import PolyBertModel
 
 
 def from_bert_model(pretrained_model_name_or_path: str) -> "PolyBertModel":
-    """Instantiate an equivalent PolyBERT poly_model from BERT weights and config."""
+    """Instantiate an equivalent PolyBERT model from BERT weights and config."""
     from transformers import BertConfig, BertModel
 
     def _bert_config_to_polybert_config(pretrained_model_name_or_path: str) -> "PolyBertConfig":
@@ -89,8 +89,8 @@ if __name__ == "__main__":
 
     poly_model = from_bert_model("bert-base-uncased")
     bert_model = AutoModel.from_pretrained("bert-base-uncased", add_pooling_layer=False)
-    bert_model.eval()
     poly_model.eval()
+    bert_model.eval()
 
     tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
     seq = tokenizer(["I like cats.", "Cats are the ultimate pet."], return_tensors="pt", padding="max_length")
