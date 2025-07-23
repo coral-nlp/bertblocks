@@ -1,6 +1,10 @@
-# PolyBERT
+<div align="center">
 
-A comprehensive framework for exploring transformer encoders, based on Pytorch and Lightning.
+<img alt="polyBERT" src="./assets/polybert.png" width="800px" style="max-width: 100%;">
+
+<br/>
+<br/>
+</div>
 
 ## Overview
 
