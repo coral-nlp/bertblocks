@@ -9,7 +9,7 @@ ENV UV_COMPILE_BYTECODE=1
 # Install dependencies; mount in cache/uv files to avoid extra copy layer
 RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
-    uv sync --group pretraining --no-install-project \
+    uv sync --group pretraining --no-install-project
 # Activate uv venv
 ENV PATH="/app/.venv/bin:$PATH"
 # Copy sources
