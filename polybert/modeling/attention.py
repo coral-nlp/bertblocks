@@ -38,7 +38,14 @@ class PolyBertAttention(nn.Module):
         """Initialize the PolyBERT attention mechanism.
 
         Args:
-            config (PolyBertConfig): Configuration object determining model hyperparameters.
+            config (PolyBertConfig): Configuration object containing:
+                - num_attention_heads: Number of attention heads in multi-head attention
+                - hidden_size: Dimensionality of hidden layers (must be divisible by num_attention_heads)
+                - max_sequence_length: Maximum sequence length for positional encodings
+                - attn_proj_bias: Whether to include bias in QKV projection
+                - attn_out_bias: Whether to include bias in output projection
+                - attn_dropout_prob: Dropout probability for attention weights
+                - pos_emb_kind: Type of positional embedding ("alibi", "rope", "relative", etc.)
 
         """
         super().__init__()
@@ -58,13 +65,13 @@ class PolyBertAttention(nn.Module):
         """Initialize score modification function based on positional encoding type.
 
         Args:
-            score_mod_type: Type of positional encoding to use. Supported values:
+            score_mod_type (str): Type of positional encoding to use. Supported values:
                           - "alibi": ALIBI linear bias score modification
                           - "relative": relative positional bias score modification
                           - Any other value: No score modification
 
         Returns:
-            Score modification function compatible with flex_attention, or None
+            _score_mod_signature | None: Score modification function compatible with flex_attention, or None
             if no score modification is needed for the given type.
 
         """
@@ -80,12 +87,12 @@ class PolyBertAttention(nn.Module):
         """Initialize query-key modification module based on positional encoding type.
 
         Args:
-            qk_mod_type: Type of positional encoding to use. Supported values:
+            qk_mod_type (str): Type of positional encoding to use. Supported values:
                         - "rope": Rotary Position Embedding
                         - Any other value: No modification
 
         Returns:
-            PyTorch module that modifies query-key projections, or Identity module
+            nn.Module: PyTorch module that modifies query-key projections, or Identity module
             if no modification is needed.
 
         """
@@ -107,18 +114,15 @@ class PolyBertAttention(nn.Module):
         and block masking. Uses PyTorch's flex_attention.
 
         Args:
-            x: Tensor of shape (batch_size, seq_len, hidden_size).
-                The input hidden state.
-            attention_mask: BlockMask
-                Flex attention block mask to ignore padding tokens.
-            output_attention: bool
-                Whether to return attention weights along with the output.
+            x (torch.Tensor, shape [batch_size, seq_len, hidden_size]): The input hidden state.
+            attention_mask (BlockMask): Flex attention block mask to ignore padding tokens.
+            output_attention (bool): Whether to return attention weights along with the output.
 
         Returns:
-            A tuple containing:
-            - output: Attention output tensor of shape (batch_size, seq_len, hidden_size).
-            - attention_weights: Log-sum-exp attention weights if output_attention is True,
-                               otherwise None. Shape is (batch_size, num_heads, seq_len, seq_len).
+            tuple[torch.Tensor, torch.Tensor | None]: A tuple containing:
+                - output: Attention output tensor of shape [batch_size, seq_len, hidden_size].
+                - attention_weights: Log-sum-exp attention weights if output_attention is True,
+                  otherwise None. Shape [batch_size, num_heads, seq_len, seq_len].
 
         """
         n_batch, n_seq = x.size()[:-1]

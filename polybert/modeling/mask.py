@@ -12,7 +12,7 @@ def doc_mask(attention_mask: "torch.Tensor") -> "_mask_mod_signature":
     Transforms a given binary attention mask into a block mask compatible with flex-attention.
 
     Args:
-        attention_mask: Binary attention mask of shape (n_batch, n_seq).
+        attention_mask (torch.Tensor, shape [n_batch, n_seq]): Binary attention mask.
 
     Returns:
         _mask_mod_signature: A mask function compatible with flex_attention that
@@ -28,10 +28,10 @@ def doc_mask(attention_mask: "torch.Tensor") -> "_mask_mod_signature":
         """Inner mask function that checks if query and key indices are in the same document.
 
         Args:
-            b: Batch index.
-            _h: Head index (unused but required by signature).
-            q_idx: Query token indices.
-            kv_idx: Key/value token indices.
+            b (torch.Tensor): Batch index.
+            _h (torch.Tensor): Head index (unused but required by signature).
+            q_idx (torch.Tensor): Query token indices.
+            kv_idx (torch.Tensor): Key/value token indices.
 
         Returns:
             torch.Tensor: Boolean mask where True indicates the query and key

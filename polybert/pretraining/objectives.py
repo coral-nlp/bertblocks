@@ -25,13 +25,13 @@ class MaskedLanguageModelingCollator:
         """Initialize the MLM collator.
 
         Args:
-            tokenizer: HuggingFace tokenizer for text processing.
-            text_column: Name of the column containing text data in the dataset.
-            max_sequence_length: Maximum sequence length after tokenization.
+            tokenizer (PreTrainedTokenizer): HuggingFace tokenizer for text processing.
+            text_column (str): Name of the column containing text data in the dataset.
+            max_sequence_length (int | None): Maximum sequence length after tokenization.
                 Defaults to 256.
-            mlm_probability: Probability of masking tokens for MLM.
+            mlm_probability (float | None): Probability of masking tokens for MLM.
                 Defaults to 0.3 (30% of tokens will be masked).
-            pretokenized: Whether the input data is already tokenized.
+            pretokenized (bool | None): Whether the input data is already tokenized.
                 Defaults to False.
 
         """

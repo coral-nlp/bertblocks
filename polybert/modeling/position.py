@@ -10,12 +10,9 @@ class SinusoidalPositionalEncoding(nn.Module):
     """Implementation of Sinusoidal Positional Encodings.
 
     Args:
-        dim: int
-            Embedding dimension, usually set to embed_dim // num_heads
-        max_seq_len: int
-            Maximum sequence length for the model.
-        base: int
-            The base used to compute frequencies.
+        dim (int): Embedding dimension, usually set to embed_dim // num_heads.
+        max_seq_len (int): Maximum sequence length for the model.
+        base (float): The base used to compute frequencies.
 
     References:
         - "Attention Is All You Need" (https://arxiv.org/pdf/1706.03762)
@@ -40,12 +37,10 @@ class SinusoidalPositionalEncoding(nn.Module):
         """Add sinusoidal positional encoding to a given tensor.
 
         Args:
-            x: Tensor, shape `[batch_size, seq_len, embedding_dim]`
-                The tensor to add positional encoding to.
+            x (torch.Tensor, shape [batch_size, seq_len, embedding_dim]): The tensor to add positional encoding to.
 
         Returns:
-            Tensor, shape `[batch_size, seq_len, embedding_dim]`
-            The tensor after adding positional encoding.
+            torch.Tensor: The tensor after adding positional encoding. Shape [batch_size, seq_len, embedding_dim].
 
         """
         return x + self.sin[: x.size(1), :]
@@ -69,12 +64,11 @@ class LearnedPositionalEncoding(nn.Module):
         """Add learned positional encodings to a given tensor.
 
         Args:
-            x: Tensor, shape `[seq_len, batch_size, num_heads, embedding_dim]`
-                The tensor to add positional encodings to.
+            x (torch.Tensor, shape [batch_size, seq_len, embedding_dim]): The tensor to add positional encodings to.
 
         Returns:
-            Tensor, shape `[seq_len, batch_size, num_heads, embedding_dim]`
-            The tensor after adding learned positional encodings.
+            torch.Tensor: The tensor after adding learned positional encodings.
+                Shape [batch_size, seq_len, embedding_dim].
 
         """
         return x + self.embd(self.position_ids)
@@ -84,12 +78,10 @@ class RotaryPositionalEncoding(nn.Module):
     """Implementation of Rotary Positional Encodings.
 
     Args:
-        dim: int
-            Embedding dimension, usually set to embed_dim // num_heads
-        max_seq_len: int
-            Maximum expected sequence length for the model, if exceeded the cached freqs will be recomputed
-        base: int
-            The base used to compute rotation angles
+        dim (int): Embedding dimension, usually set to embed_dim // num_heads.
+        max_seq_len (int): Maximum expected sequence length for the model, if exceeded
+            the cached freqs will be recomputed.
+        base (float): The base used to compute rotation angles.
 
     References:
         - "RoFormer: Enhanced Transformer with Rotary Position Embedding" (https://arxiv.org/abs/2104.09864)
@@ -122,12 +114,12 @@ class RotaryPositionalEncoding(nn.Module):
         """Add RoPE positional encodings to a given tensor.
 
         Args:
-            x: Tensor, shape `[seq_len, batch_size, num_heads, embedding_dim]`
-                The tensor to add RoPE positional encodings to.
+            x (torch.Tensor, shape [seq_len, batch_size, num_heads, embedding_dim]): The tensor to add
+                RoPE positional encodings to.
 
         Returns:
-            Tensor, shape `[seq_len, batch_size, num_heads, embedding_dim]`
-            The tensor after adding RoPE positional encodings.
+            torch.Tensor: The tensor after adding RoPE positional encodings.
+                Shape [seq_len, batch_size, num_heads, embedding_dim].
 
         """
         if x.shape[0] > self.cos.shape[0]:  # type: ignore
@@ -144,8 +136,7 @@ class AlibiPositionalEncoding:
     extrapolation beyond training sequence lengths.
 
     Args:
-        num_heads: int
-            Number of attention heads.
+        num_heads (int): Number of attention heads.
 
     References:
         - "Train Short, Test Long: Attention with Linear Biases Enables Input Length Extrapolation" (https://arxiv.org/abs/2108.12409)
@@ -167,16 +158,16 @@ class AlibiPositionalEncoding:
         """FlexAttention score mod function that adds ALiBi bias.
 
         Args:
-            score: Raw attention scores of shape (batch_size, num_heads, seq_len, seq_len).
-            _b: Batch index tensor (unused in this implementation).
-            h: Head index tensor of shape (num_heads,).
-            q_idx: Query position indices of shape (seq_len,).
-            kv_idx: Key-value position indices of shape (seq_len,).
-            slopes: Head-specific slope values of shape (num_heads,). Smaller slopes
+            score (torch.Tensor, shape [batch_size, num_heads, seq_len, seq_len]): Raw attention scores.
+            _b (torch.Tensor): Batch index tensor (unused in this implementation).
+            h (torch.Tensor, shape [num_heads]): Head index tensor.
+            q_idx (torch.Tensor, shape [seq_len]): Query position indices.
+            kv_idx (torch.Tensor, shape [seq_len]): Key-value position indices.
+            slopes (torch.Tensor, shape [num_heads]): Head-specific slope values. Smaller slopes
                    for heads that focus on closer positions.
 
         Returns:
-            Modified attention scores with ALiBi bias applied, same shape as input score.
+            torch.Tensor: Modified attention scores with ALiBi bias applied, same shape as input score.
 
         """
         scale = slopes[h]
@@ -189,11 +180,8 @@ class AlibiPositionalEncoding:
         This method generates head-specific slopes and returns a partially applied
         ALIBI function that can be used with flex_attention.
 
-        Args:
-            num_heads: Number of attention heads. Must be positive.
-
         Returns:
-            A partially applied ALIBI score modification function with the signature
+            _score_mod_signature: A partially applied ALIBI score modification function with the signature
             expected by flex_attention.
 
         """
@@ -222,14 +210,14 @@ class RelativePositionalEncoding:
         """FlexAttention score mod function that adds relative positional bias.
 
         Args:
-            score: Raw attention scores of shape (batch_size, num_heads, seq_len, seq_len).
-            _b: Batch index tensor (unused).
-            _h: Head index tensor of shape (unused).
-            q_idx: Query position indices of shape (seq_len,).
-            kv_idx: Key-value position indices of shape (seq_len,).
+            score (torch.Tensor, shape [batch_size, num_heads, seq_len, seq_len]): Raw attention scores.
+            _b (torch.Tensor): Batch index tensor (unused).
+            _h (torch.Tensor): Head index tensor (unused).
+            q_idx (torch.Tensor, shape [seq_len]): Query position indices.
+            kv_idx (torch.Tensor, shape [seq_len]): Key-value position indices.
 
         Returns:
-            Modified attention scores with relative positional bias applied, same shape as input score.
+            torch.Tensor: Modified attention scores with relative positional bias applied, same shape as input score.
 
         """
         return score + (q_idx - kv_idx)
@@ -238,7 +226,8 @@ class RelativePositionalEncoding:
         """Create a relative positional score modification function.
 
         Returns:
-            A score relative positional score modification function with the signature expected by flex_attention.
+            _score_mod_signature: A score relative positional score modification function with the
+                signature expected by flex_attention.
 
         """
         return RelativePositionalEncoding._relative_positional
