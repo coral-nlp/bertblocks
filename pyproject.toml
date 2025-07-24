@@ -1,15 +1,13 @@
 [project]
-name = "encoder-architecture-search"
+name = "polybert"
 version = "0.1.0"
-description = "Add your description here"
+description = "A comprehensive framework for exploring transformer encoders"
 requires-python = ">=3.12"
 dependencies = [
     "datasets>=4.0.0",
-    "einops>=0.8.1",
     "jsonargparse[signatures]>=4.27.7",
     "lightning>=2.5.2",
     "omegaconf>=2.3.0",
-    "pydantic>=2.11.7",
     "torch==2.7.1",
     "transformers>=4.53.2",
 ]
@@ -35,7 +33,6 @@ optimizers = [
 docs = [
     "furo>=2025.7.19",
     "sphinx>=6.0.0",
-    "sphinx-rtd-theme>=1.2.0",
     "sphinx-autoapi>=3.0.0",
     "sphinx-autodoc-typehints>=1.24.0",
     "myst-parser>=1.0.0"
