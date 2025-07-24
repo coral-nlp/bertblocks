@@ -4,10 +4,6 @@ version = "0.1.0"
 description = "A comprehensive framework for exploring transformer encoders"
 requires-python = ">=3.12"
 dependencies = [
-    "datasets>=4.0.0",
-    "jsonargparse[signatures]>=4.27.7",
-    "lightning>=2.5.2",
-    "omegaconf>=2.3.0",
     "torch==2.7.1",
     "transformers>=4.53.2",
 ]
@@ -26,8 +22,12 @@ dev = [
     "pydocstyle>=6.3.0",
 ]
 
-optimizers = [
-    "pytorch_optimizer>=3.6.1"
+pretraining = [
+    "pytorch_optimizer>=3.6.1",
+    "datasets>=4.0.0",
+    "jsonargparse[signatures]>=4.27.7",
+    "lightning>=2.5.2",
+    "omegaconf>=2.3.0",
 ]
 
 docs = [
@@ -35,7 +35,7 @@ docs = [
     "sphinx>=6.0.0",
     "sphinx-autoapi>=3.0.0",
     "sphinx-autodoc-typehints>=1.24.0",
-    "myst-parser>=1.0.0"
+    "myst-parser>=1.0.0",
 ]
 
 [tool.isort]
