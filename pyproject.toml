@@ -3,13 +3,21 @@ name = "polybert"
 version = "0.1.0"
 description = "A comprehensive framework for exploring transformer encoders"
 requires-python = ">=3.11"
-dependencies = [
+
+[dependency-groups]
+base = [
     "torch==2.7.1",
     "transformers>=4.53.2",
 ]
 
+pretraining = [
+    "pytorch_optimizer>=3.6.1",
+    "datasets>=4.0.0",
+    "jsonargparse[signatures]>=4.27.7",
+    "lightning>=2.5.2",
+    "omegaconf>=2.3.0",
+]
 
-[project.optional-dependencies]
 dev = [
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
@@ -22,14 +30,6 @@ dev = [
     "pydocstyle>=6.3.0",
 ]
 
-pretraining = [
-    "pytorch_optimizer>=3.6.1",
-    "datasets>=4.0.0",
-    "jsonargparse[signatures]>=4.27.7",
-    "lightning>=2.5.2",
-    "omegaconf>=2.3.0",
-]
-
 docs = [
     "furo>=2025.7.19",
     "sphinx>=6.0.0",
@@ -37,6 +37,9 @@ docs = [
     "sphinx-autodoc-typehints>=1.24.0",
     "myst-parser>=1.0.0",
 ]
+
+[tool.uv]
+default-groups = ["base", "pretraining"]
 
 [tool.isort]
 profile = "black"
