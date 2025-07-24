@@ -1240,12 +1240,12 @@ wheels = [
 name = "polybert"
 version = "0.1.0"
 source = { virtual = "." }
-dependencies = [
+
+[package.dev-dependencies]
+base = [
     { name = "torch" },
     { name = "transformers" },
 ]
-
-[package.optional-dependencies]
 dev = [
     { name = "bandit" },
     { name = "black" },
@@ -1273,30 +1273,37 @@ pretraining = [
 ]
 
 [package.metadata]
-requires-dist = [
-    { name = "bandit", marker = "extra == 'dev'", specifier = ">=1.7.0" },
-    { name = "black", marker = "extra == 'dev'", specifier = ">=23.0.0" },
-    { name = "datasets", marker = "extra == 'pretraining'", specifier = ">=4.0.0" },
-    { name = "furo", marker = "extra == 'docs'", specifier = ">=2025.7.19" },
-    { name = "isort", marker = "extra == 'dev'", specifier = ">=5.12.0" },
-    { name = "jsonargparse", extras = ["signatures"], marker = "extra == 'pretraining'", specifier = ">=4.27.7" },
-    { name = "lightning", marker = "extra == 'pretraining'", specifier = ">=2.5.2" },
-    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.0.0" },
-    { name = "myst-parser", marker = "extra == 'docs'", specifier = ">=1.0.0" },
-    { name = "omegaconf", marker = "extra == 'pretraining'", specifier = ">=2.3.0" },
-    { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=3.0.0" },
-    { name = "pydocstyle", marker = "extra == 'dev'", specifier = ">=6.3.0" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0.0" },
-    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0.0" },
-    { name = "pytorch-optimizer", marker = "extra == 'pretraining'", specifier = ">=3.6.1" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6.0" },
-    { name = "sphinx", marker = "extra == 'docs'", specifier = ">=6.0.0" },
-    { name = "sphinx-autoapi", marker = "extra == 'docs'", specifier = ">=3.0.0" },
-    { name = "sphinx-autodoc-typehints", marker = "extra == 'docs'", specifier = ">=1.24.0" },
+
+[package.metadata.requires-dev]
+base = [
     { name = "torch", specifier = "==2.7.1" },
     { name = "transformers", specifier = ">=4.53.2" },
 ]
-provides-extras = ["dev", "pretraining", "docs"]
+dev = [
+    { name = "bandit", specifier = ">=1.7.0" },
+    { name = "black", specifier = ">=23.0.0" },
+    { name = "isort", specifier = ">=5.12.0" },
+    { name = "mypy", specifier = ">=1.0.0" },
+    { name = "pre-commit", specifier = ">=3.0.0" },
+    { name = "pydocstyle", specifier = ">=6.3.0" },
+    { name = "pytest", specifier = ">=7.0.0" },
+    { name = "pytest-cov", specifier = ">=4.0.0" },
+    { name = "ruff", specifier = ">=0.6.0" },
+]
+docs = [
+    { name = "furo", specifier = ">=2025.7.19" },
+    { name = "myst-parser", specifier = ">=1.0.0" },
+    { name = "sphinx", specifier = ">=6.0.0" },
+    { name = "sphinx-autoapi", specifier = ">=3.0.0" },
+    { name = "sphinx-autodoc-typehints", specifier = ">=1.24.0" },
+]
+pretraining = [
+    { name = "datasets", specifier = ">=4.0.0" },
+    { name = "jsonargparse", extras = ["signatures"], specifier = ">=4.27.7" },
+    { name = "lightning", specifier = ">=2.5.2" },
+    { name = "omegaconf", specifier = ">=2.3.0" },
+    { name = "pytorch-optimizer", specifier = ">=3.6.1" },
+]
 
 [[package]]
 name = "pre-commit"
