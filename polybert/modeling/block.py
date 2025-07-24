@@ -43,7 +43,10 @@ class PolyBertBlock(nn.Module):
         when not needed according to the norm_kind setting.
 
         Args:
-            config (PolyBertConfig): Configuration object determining model hyperparameters.
+            config (PolyBertConfig): Configuration object containing:
+                - norm_kind: When to apply normalization ("pre", "post", "both", "none")
+                - attn_dropout_prob: Dropout probability for attention weights
+                - hidden_dropout_prob: Dropout probability for hidden layer outputs
 
         """
         super().__init__()
@@ -65,18 +68,18 @@ class PolyBertBlock(nn.Module):
         connections. Supports both pre-normalization and post-normalization schemes.
 
         Args:
-            x (torch.Tensor): Input tensor of shape (batch_size, seq_len, hidden_size)
-                The hidden state of the previous transformer block.
+            x (torch.Tensor, shape [batch_size, seq_len, hidden_size]): The hidden state of
+                the previous transformer block.
             attention_mask (BlockMask): Block mask for efficient attention computation,
                 typically created using torch.nn.attention.flex_attention.create_block_mask.
-            output_attention (bool | None, optional): Whether to return attention weights.
+            output_attention (bool | None): Whether to return attention weights.
                 Defaults to False.
 
         Returns:
             tuple[torch.Tensor, torch.Tensor | None]: A tuple containing:
                 - output (torch.Tensor): Transformed hidden state with same shape as input
                 - attention_weights (torch.Tensor | None): Attention weights if requested,
-                  None otherwise. Shape (batch_size, seq_len, seq_len)
+                  None otherwise. Shape [batch_size, seq_len, seq_len]
 
         """
         # Attention component
@@ -111,7 +114,9 @@ class PolyBertEncoder(nn.Module):
         Creates a stack of transformer blocks. Each block is independently initialized with the same configuration.
 
         Args:
-            config (PolyBertConfig): Configuration object determining model hyperparameters.
+            config (PolyBertConfig): Configuration object containing:
+                - num_blocks: Number of transformer layers in the model
+                - num_attention_heads: Number of attention heads (used for block mask creation)
 
         """
         super().__init__()
@@ -131,10 +136,9 @@ class PolyBertEncoder(nn.Module):
         prevent attention across document boundaries.
 
         Args:
-            x (torch.FloatTensor): Input embeddings tensor of shape (batch_size, seq_len, hidden_size).
-                Each sequence in the batch may have different lengths when using attention_mask.
+            x (torch.FloatTensor, shape [batch_size, seq_len, hidden_size]): Input embeddings tensor.
             attention_mask (torch.Tensor | None, optional): Boolean mask indicating which tokens
-                should attend to each other. Shape (batch_size, seq_len) where True means the token
+                should attend to each other. Shape [batch_size, seq_len] where True means the token
                 should be attended to. None means all tokens attend to each other. Defaults to None.
             output_attentions (bool | None, optional): Whether to return attention weights from
                 all layers. Defaults to False.
@@ -144,10 +148,10 @@ class PolyBertEncoder(nn.Module):
         Returns:
             tuple containing:
                 - last_hidden_state (torch.Tensor): Output of the final transformer layer.
-                  Shape (batch_size, seq_len, hidden_size).
+                  Shape [batch_size, seq_len, hidden_size].
                 - all_hidden_states (tuple[torch.Tensor, ...] | None): Hidden states from all layers
                   if output_hidden_states=True, None otherwise. Each tensor has shape
-                  (batch_size, seq_len, hidden_size).
+                  [batch_size, seq_len, hidden_size].
                 - all_attentions (tuple[torch.Tensor, ...] | None): Attention weights from all layers
                   if output_attentions=True, None otherwise. Shape depends on attention implementation.
 

@@ -142,8 +142,9 @@ class PolyBertModel(PolyBertPreTrainedModel):
         """Initialize the PolyBert model.
 
         Args:
-            config: Model configuration containing hyperparameters.
-            add_pooling_layer: Whether to add a pooling layer after the encoder layers.
+            config (PolyBertConfig): Configuration object containing:
+                - num_attention_heads: Number of attention heads (used for initialization)
+            add_pooling_layer (bool): Whether to add a pooling layer after the encoder layers.
 
         """
         super().__init__(config)
@@ -288,7 +289,9 @@ class PolyBertForMaskedLM(PolyBertPreTrainedModel):
         """Initialize the PolyBert masked language model.
 
         Args:
-            config: Model configuration containing hyperparameters.
+            config (PolyBertConfig): Configuration object containing:
+                - vocab_size: Size of the vocabulary for token embeddings
+                - hidden_size: Dimensionality of hidden layers
 
         """
         super().__init__(config)
@@ -375,8 +378,10 @@ class PolyBertForSequenceClassification(PolyBertForTasksBase):
         """Initialize the PolyBert sequence classification model.
 
         Args:
-            config: Model configuration containing hyperparameters including
-                task type and number of classes.
+            config (PolyBertConfig): Configuration object containing:
+                - hidden_size: Dimensionality of hidden layers
+                - num_labels: Number of output labels for classification tasks
+                - problem_type: Problem type for automatic loss selection
 
         """
         super().__init__(config=config)
@@ -449,8 +454,9 @@ class PolyBertForTokenClassification(PolyBertForTasksBase):
         """Initialize the PolyBert token classification model.
 
         Args:
-            config: Model configuration containing hyperparameters including
-                the number of classes for token classification.
+            config (PolyBertConfig): Configuration object containing:
+                - hidden_size: Dimensionality of hidden layers
+                - num_labels: Number of output labels for classification tasks
 
         """
         super().__init__(config=config)
@@ -521,7 +527,8 @@ class PolyBertForQuestionAnswering(PolyBertForTasksBase):
         """Initialize the PolyBert question answering model.
 
         Args:
-            config: Model configuration containing hyperparameters.
+            config (PolyBertConfig): Configuration object containing:
+                - hidden_size: Dimensionality of hidden layers
 
         """
         super().__init__(config=config)

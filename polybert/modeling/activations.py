@@ -24,7 +24,7 @@ def get_actv_fn(config: "PolyBertConfig") -> "nn.Module":
         config (PolyBertConfig): Configuration object determining model hyperparameters.
 
     Returns:
-        An activation function module (nn.Module) that can be called on tensors.
+        nn.Module: An activation function module that can be called on tensors.
 
     Raises:
         ValueError: If the specified activation function is not supported.

@@ -21,11 +21,10 @@ class PolyBertGLU(nn.Module):
         """Initialize the GLU layer.
 
         Args:
-            config: PolyBert configuration object containing:
-                - hidden_size: Input/output dimension size
-                - intermediate_size: Intermediate layer dimension size
-                - actv_fn: Activation function type for gating
-                - hidden_dropout_prob: Dropout probability (0 means no dropout)
+            config (PolyBertConfig): Configuration object containing:
+                - hidden_size: Dimensionality of hidden layers (input/output dimension)
+                - intermediate_size: Dimensionality of feed-forward layers
+                - actv_fn: Activation function used in feed-forward networks
 
         """
         super().__init__()
@@ -43,11 +42,11 @@ class PolyBertGLU(nn.Module):
         where both value and gate are linear projections of the input.
 
         Args:
-            x: Input tensor. Shape: (batch_size, sequence_length, hidden_size)
+            x (torch.Tensor, shape [batch_size, sequence_length, hidden_size]): Input tensor.
 
         Returns:
-            Transformed tensor after gated projection, down-projection, and dropout.
-            Shape: (batch_size, sequence_length, hidden_size)
+            torch.Tensor: Transformed tensor after gated projection, down-projection, and dropout.
+            Shape [batch_size, sequence_length, hidden_size].
 
         """
         x, gate = self.Uprj(x).chunk(2, axis=-1)
@@ -67,13 +66,12 @@ class PolyBertMLP(nn.Module):
         """Initialize the MLP layer.
 
         Args:
-            config: PolyBert configuration object containing:
-                - hidden_size: Input/output dimension size
-                - intermediate_size: Intermediate layer dimension size
-                - mlp_in_bias: Whether to use bias in the input projection
-                - mlp_out_bias: Whether to use bias in the output projection
-                - actv_fn: Activation function type
-                - hidden_dropout_prob: Dropout probability (0 means no dropout)
+            config (PolyBertConfig): Configuration object containing:
+                - hidden_size: Dimensionality of hidden layers (input/output dimension)
+                - intermediate_size: Dimensionality of feed-forward layers
+                - mlp_in_bias: Whether to include bias in input projection of MLP layers
+                - mlp_out_bias: Whether to include bias in output projection of MLP layers
+                - actv_fn: Activation function used in feed-forward networks
 
         """
         super().__init__()
@@ -91,11 +89,11 @@ class PolyBertMLP(nn.Module):
         where biases are optional based on configuration.
 
         Args:
-            x: Input tensor. Shape: (batch_size, sequence_length, hidden_size)
+            x (torch.Tensor, shape [batch_size, sequence_length, hidden_size]): Input tensor.
 
         Returns:
-            Transformed tensor after two linear projections, activation, and dropout.
-            Shape: (batch_size, sequence_length, hidden_size)
+            torch.Tensor: Transformed tensor after two linear projections, activation, and dropout.
+            Shape [batch_size, sequence_length, hidden_size].
 
         """
         x = self.Uprj(x)

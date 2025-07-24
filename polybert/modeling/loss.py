@@ -9,11 +9,11 @@ def get_loss_function(
     """Return the applicable loss function for a given problem type.
 
     Args:
-        problem_type: The type of problem ('regression', 'single_label_classification',
-                     'multi_label_classification')
+        problem_type (Literal["regression", "single_label_classification", "multi_label_classification"] | None):
+            The type of problem.
 
     Returns:
-        The appropriate loss function module.
+        nn.Module: The appropriate loss function module.
 
     Raises:
         ValueError: If the problem type is not supported.
