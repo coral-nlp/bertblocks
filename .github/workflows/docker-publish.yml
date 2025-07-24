@@ -34,6 +34,10 @@ jobs:
       id-token: write
 
     steps:
+      # Free up disk, otherwise the docker build process runs out of space
+      - name: Free Disk Space
+        uses: jlumbroso/free-disk-space@v1.3.1
+        
       - name: Checkout repository
         uses: actions/checkout@v4
 
