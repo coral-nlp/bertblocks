@@ -1,0 +1,137 @@
+[project]
+name = "encoder-architecture-search"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.12"
+dependencies = [
+    "datasets>=4.0.0",
+    "einops>=0.8.1",
+    "jsonargparse[signatures]>=4.27.7",
+    "lightning>=2.5.2",
+    "omegaconf>=2.3.0",
+    "pydantic>=2.11.7",
+    "torch==2.7.1",
+    "transformers>=4.53.2",
+]
+
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "black>=23.0.0",
+    "isort>=5.12.0",
+    "ruff>=0.6.0",
+    "mypy>=1.0.0",
+    "pre-commit>=3.0.0",
+    "bandit>=1.7.0",
+    "pydocstyle>=6.3.0",
+]
+
+optimizers = [
+    "pytorch_optimizer>=3.6.1"
+]
+
+docs = [
+    "furo>=2025.7.19",
+    "sphinx>=6.0.0",
+    "sphinx-rtd-theme>=1.2.0",
+    "sphinx-autoapi>=3.0.0",
+    "sphinx-autodoc-typehints>=1.24.0",
+    "myst-parser>=1.0.0"
+]
+
+[tool.isort]
+profile = "black"
+line_length = 120
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+ignore_missing_imports = true
+exclude = [
+    "tests/",
+    "docs/",
+    "examples/",
+]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+exclude = [
+    ".git",
+    ".venv",
+    "__pycache__",
+    "build",
+    "dist",
+    "*.egg-info",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "UP",  # pyupgrade
+    "SIM", # flake8-simplify
+    "RUF", # ruff specific rules
+    "D",   # pydocstyle
+    #"DOC", # pydoclint
+]
+ignore = [
+    "B008",  # do not perform function calls in argument _defaults
+    "B006",  # do not use mutable data structures for argument _defaults
+    "B904",  # Within `except` clause, raise exceptions with `raise ... from err`
+    "RUF013", # PEP 484 prohibits implicit Optional (to be fixed later)
+    "D100", "D104", "D107", # Missing docstrings (to be fixed later)
+    "D213", "D203" # Superseeded by other rules
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*" = ["E501", "F401", "F811", "F841"]  # Allow unused variables in tests
+"__init__.py" = ["F401", "F403"]  # Allow unused imports and star imports in init files
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "auto"
+
+[tool.bandit]
+exclude_dirs = ["examples", "docs"]
+exclude = 'test_*.py'
+skips = ["B101", "B601"]
+
+[tool.coverage.run]
+source = ["llmdata"]
+omit = [
+    "tests/*",
+    "examples/*",
+    "docs/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+]
+
+[tool.sphinx-build]
+source-dir = "docs/source"
+build-dir = "docs/_build"
+doctree-dir = "docs/_build/doctrees"
+builder = "html"

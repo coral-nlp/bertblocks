@@ -1,0 +1,5 @@
+.venv
+assets
+docs
+.pre-commit-config.yaml
+README.md
