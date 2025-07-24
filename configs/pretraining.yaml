@@ -1,7 +1,7 @@
 # lightning.pytorch==2.0.0
 seed_everything: 153201820 # For reproducibility
 trainer:
-  accelerator: "cpu"
+  accelerator: "gpu"
   default_root_dir: "./checkpoints"
   #logger:
   #  - class_path: lightning.pytorch.loggers.WandbLogger
@@ -12,7 +12,7 @@ trainer:
   max_epochs: 1
   log_every_n_steps: 1
 model:
-  class_path: polybert.pretraining.mlm.PolyBertPretrainingModule
+  class_path: polybert.pretraining.train.PolyBertPretrainingModule
   init_args:
     learning_rate: 1e-4
     weight_decay: 1e-5
@@ -20,7 +20,7 @@ model:
     warmup_decay: 0.1
     learning_rate_decay: 1
     pretrained_tokenizer_name_or_path: ${data.init_args.pretrained_tokenizer_name_or_path}
-    compile_model: false
+    compile_model: true
     model_config_kwargs:
       hidden_size: 512
       num_blocks: 6
@@ -32,7 +32,7 @@ model:
       pos_emb_kind: "alibi"
       max_sequence_length: ${data.init_args.max_sequence_length}
 data:
-  class_path: polybert.pretraining.mlm.PolyBertPretrainingDataModule
+  class_path: polybert.pretraining.train.PolyBertPretrainingDataModule
   init_args:
     pretrained_tokenizer_name_or_path: "bert-base-uncased"
     max_sequence_length: 512

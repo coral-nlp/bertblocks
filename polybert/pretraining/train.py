@@ -174,9 +174,7 @@ class PolyBertPretrainingModule(L.LightningModule):
             torch._functorch.config.enable_autograd_cache = False
             torch._inductor.config.triton.cudagraph_trees = False  # Bug with cudagraph trees in this case
 
-            self.model = torch.compile(
-                self.model, options={"shape_padding": True, "trace.enabled": True, "trace.graph_diagram": True}
-            )
+            self.model = torch.compile(self.model)
 
     def configure_optimizers(self) -> tuple[list["torch.optim.Optimizer"], list[dict[str, Any]]]:
         """Configure optimizers and learning rate schedulers.

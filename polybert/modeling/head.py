@@ -18,12 +18,28 @@ class PolyBertPooler(nn.Module):
     """
 
     def __init__(self, config: "PolyBertConfig") -> None:
+        """Initialize the pooling layer.
+
+        Args:
+            config (PolyBertConfig): Configuration object containing:
+                - hidden_size: Dimensionality of hidden layers
+                - actv_fn: Activation function used in feed-forward networks
+
+        """
         super().__init__()
         self.ffwd = nn.Linear(config.hidden_size, config.hidden_size)
         self.actv = get_actv_fn(config)
 
     def forward(self, x: "torch.Tensor") -> "torch.Tensor":
-        """Forward pass through the pooling layer."""
+        """Forward pass through the pooling layer.
+
+        Args:
+            x (torch.Tensor, shape [batch_size, seq_len, hidden_size]): Input hidden states.
+
+        Returns:
+            torch.Tensor: Pooled representation of the first token. Shape [batch_size, hidden_size].
+
+        """
         x = self.ffwd(x[:, 0])
         x = self.actv(x)
         return x
@@ -41,12 +57,10 @@ class PolyBertGLUPredictionHead(nn.Module):
         """Initialize the prediction head.
 
         Args:
-            config: PolyBert configuration object containing:
-                - hidden_size: Dimensionality of the hidden states
-                - actv_fn: Activation function type for gating
-                - norm_kind: Normalization placement ("pre", "post", "both", or "none")
-                - norm_type: Type of normalization layer
-                - norm_eps: Epsilon for numerical stability in normalization
+            config (PolyBertConfig): Configuration object containing:
+                - hidden_size: Dimensionality of hidden layers
+                - actv_fn: Activation function used in feed-forward networks
+                - norm_kind: When to apply normalization ("pre", "post", "both", "none")
 
         """
         super().__init__()
@@ -59,11 +73,11 @@ class PolyBertGLUPredictionHead(nn.Module):
         """Forward pass through the prediction head.
 
         Args:
-            x: Input tensor. Shape: (batch_size, sequence_length, hidden_size)
+            x (torch.Tensor, shape [batch_size, sequence_length, hidden_size]): Input tensor.
 
         Returns:
-            Transformed tensor after gated projection and normalization.
-            Shape: (batch_size, sequence_length, hidden_size)
+            torch.Tensor: Transformed tensor after gated projection and normalization.
+            Shape [batch_size, sequence_length, hidden_size].
 
         """
         x = self.pre_norm(x)
@@ -85,12 +99,13 @@ class PolyBertMLPPredictionHead(nn.Module):
         """Initialize the prediction head.
 
         Args:
-            config: PolyBert configuration object containing:
-                - hidden_size: Dimensionality of the hidden states
-                - actv_fn: Activation function type for gating
-                - norm_kind: Normalization placement ("pre", "post", "both", or "none")
-                - norm_type: Type of normalization layer
-                - norm_eps: Epsilon for numerical stability in normalization
+            config (PolyBertConfig): Configuration object containing:
+                - hidden_size: Dimensionality of hidden layers
+                - intermediate_size: Dimensionality of feed-forward layers
+                - actv_fn: Activation function used in feed-forward networks
+                - mlp_in_bias: Whether to include bias in input projection of MLP layers
+                - mlp_out_bias: Whether to include bias in output projection of MLP layers
+                - norm_kind: When to apply normalization ("pre", "post", "both", "none")
 
         """
         super().__init__()
@@ -109,11 +124,11 @@ class PolyBertMLPPredictionHead(nn.Module):
         """Forward pass through the prediction head.
 
         Args:
-            x: Input tensor. Shape: (batch_size, sequence_length, hidden_size)
+            x (torch.Tensor, shape [batch_size, sequence_length, hidden_size]): Input tensor.
 
         Returns:
-            Transformed tensor after projection and normalization.
-            Shape: (batch_size, sequence_length, hidden_size)
+            torch.Tensor: Transformed tensor after projection and normalization.
+            Shape [batch_size, sequence_length, hidden_size].
 
         """
         x = self.pre_norm(x)

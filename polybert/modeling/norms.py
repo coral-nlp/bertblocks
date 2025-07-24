@@ -26,7 +26,15 @@ class DynamicTanhNorm(nn.Module):
         self.beta = nn.Parameter(torch.zeros(dim))
 
     def forward(self, x: "torch.Tensor") -> "torch.Tensor":
-        """Apply dynamic tanh normalization."""
+        """Apply dynamic tanh normalization.
+
+        Args:
+            x (torch.Tensor): Input tensor to normalize.
+
+        Returns:
+            torch.Tensor: Normalized tensor.
+
+        """
         x = torch.tanh(self.alpha * x)
         return self.gamma * x + self.beta
 
@@ -47,7 +55,16 @@ class DeepNorm(nn.Module):
         self.layer_norm = LayerNorm(normalized_shape=normalized_shape, eps=eps, **norm_kwargs)
 
     def forward(self, x: "torch.Tensor", gx: "torch.Tensor") -> "torch.Tensor":
-        """Apply DeepNorm."""
+        """Apply DeepNorm.
+
+        Args:
+            x (torch.Tensor): Input tensor.
+            gx (torch.Tensor): Gradient tensor to be scaled and added.
+
+        Returns:
+            torch.Tensor: Normalized tensor.
+
+        """
         return self.layer_norm(x + self.alpha * gx)
 
 

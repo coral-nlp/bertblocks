@@ -18,7 +18,10 @@ class PolyBertTokenTypeEmbedding(nn.Module):
         """Instantiate token type embedding module.
 
         Args:
-            config (PolyBertConfig): PolyBERT model config to instantiate token type embeddings with.
+            config (PolyBertConfig): Configuration object containing:
+                - type_vocab_size: Size of the token type vocabulary
+                - hidden_size: Dimensionality of embeddings and hidden states
+                - max_sequence_length: Maximum sequence length for token type buffer
 
         """
         super().__init__()
@@ -33,14 +36,13 @@ class PolyBertTokenTypeEmbedding(nn.Module):
         Uses supplied token type ids if given, otherwise defaults to constant token type ids.
 
         Args:
-            x: Tensor, shape: (batch_size, sequence_length, hidden_size)
-                Hidden state to add token type ids to.
-            token_type_ids: Tensor, shape: (batch_size, sequence_length)
-                Indicates the token type of each token in the sequence.
+            x (torch.Tensor, shape [batch_size, sequence_length, hidden_size]): Hidden state to add token type ids to.
+            token_type_ids (torch.Tensor, shape [batch_size, sequence_length], optional): Indicates the token type of
+                each token in the sequence.
 
         Returns:
-            Hidden state with token type embedding added.
-            Shape: (batch_size, sequence_length, hidden_size)
+            torch.Tensor: Hidden state with token type embedding added.
+                Shape [batch_size, sequence_length, hidden_size].
 
         """
         if token_type_ids is not None:
@@ -60,7 +62,15 @@ class PolyBertEmbeddings(nn.Module):
         """Initialize the embedding layer.
 
         Args:
-            config (PolyBertConfig): Configuration object determining model hyperparameters.
+            config (PolyBertConfig): Configuration object containing:
+                - vocab_size: Size of the vocabulary for token embeddings
+                - hidden_size: Dimensionality of embeddings and hidden states
+                - pad_token_id: Token ID used for padding sequences
+                - pos_emb_kind: Type of positional embedding ("sinusoidal", "learned", etc.)
+                - max_sequence_length: Maximum sequence length for positional encodings
+                - add_token_type_emb: Whether to add token type embeddings
+                - norm_kind: When to apply normalization ("post", "both", etc.)
+                - emb_dropout_prob: Dropout probability for embedding layer output
 
         """
         super().__init__()
@@ -84,11 +94,11 @@ class PolyBertEmbeddings(nn.Module):
         """Forward pass through the embedding layer.
 
         Args:
-            input_ids: Token IDs to embed. Shape: (batch_size, sequence_length)
+            input_ids (torch.LongTensor, shape [batch_size, sequence_length]): Token IDs to embed.
 
         Returns:
-            Embedded token representations with optional dropout applied.
-            Shape: (batch_size, sequence_length, hidden_size)
+            torch.Tensor: Embedded token representations with optional dropout applied.
+            Shape [batch_size, sequence_length, hidden_size].
 
         """
         # Input embeddings

@@ -3,12 +3,12 @@ import math
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
-from polybert.modeling.block import PolyBertEncoder
-
 if TYPE_CHECKING:
-    import torch
+    from torch.nn.attention.flex_attention import BlockMask
 
+import torch
 from torch import nn
+from torch.nn.attention.flex_attention import create_block_mask
 from transformers.modeling_outputs import (
     BaseModelOutput,
     BaseModelOutputWithPooling,
@@ -19,6 +19,7 @@ from transformers.modeling_outputs import (
 )
 from transformers.modeling_utils import PreTrainedModel
 
+from polybert.modeling.block import PolyBertEncoder
 from polybert.modeling.config import PolyBertConfig
 from polybert.modeling.embedding import PolyBertEmbeddings
 from polybert.modeling.head import PolyBertPooler, get_prediction_head
@@ -142,8 +143,9 @@ class PolyBertModel(PolyBertPreTrainedModel):
         """Initialize the PolyBert model.
 
         Args:
-            config: Model configuration containing hyperparameters.
-            add_pooling_layer: Whether to add a pooling layer after the encoder layers.
+            config (PolyBertConfig): Configuration object containing:
+                - num_attention_heads: Number of attention heads (used for initialization)
+            add_pooling_layer (bool): Whether to add a pooling layer after the encoder layers.
 
         """
         super().__init__(config)
@@ -181,6 +183,22 @@ class PolyBertModel(PolyBertPreTrainedModel):
         """
         self.embd.embd = value
 
+    @torch.compile(fullgraph=True, dynamic=True)
+    def flex_forward(
+        self,
+        input_ids: "torch.Tensor",
+        block_mask: "BlockMask | None",
+        output_attentions: "bool | None" = None,
+        output_hidden_states: "bool | None" = False,
+    ) -> "tuple[torch.Tensor, torch.Tensor | None, torch.Tensor | None]":
+        """Fused forward pass for flex-attention.
+
+        Extra function since create_block_mask breaks full-graph compile-ability.
+        """
+        x = self.embd(input_ids)
+        x, hidden_states, attentions = self.encd(x, block_mask, output_attentions, output_hidden_states)
+        return x, hidden_states, attentions
+
     def forward(
         self,
         input_ids: "torch.Tensor",
@@ -207,8 +225,19 @@ class PolyBertModel(PolyBertPreTrainedModel):
                 - attentions: Attention weights from all layers (optional)
 
         """
-        x = self.embd(input_ids)
-        x, hidden_states, attentions = self.encd(x, attention_mask, output_attentions, output_hidden_states)
+        # Transform attention mask into blockmask for flex attention
+        B, S = input_ids.shape
+        if attention_mask is None:
+            attention_mask = torch.ones(B, S, device=input_ids.device)
+        attention_mask = attention_mask.to(torch.bool)
+
+        def partial_mask(b, h, q_idx, kv_idx):  # type: ignore
+            return attention_mask[b, q_idx] & attention_mask[b, kv_idx]
+
+        block_mask = create_block_mask(partial_mask, B, 1, S, S, device=input_ids.device, _compile=True)
+
+        x, hidden_states, attentions = self.flex_forward(input_ids, block_mask, output_attentions, output_hidden_states)
+
         if self.pool is not None:
             pooler_output = self.pool(x)
             return BaseModelOutputWithPooling(
@@ -288,7 +317,9 @@ class PolyBertForMaskedLM(PolyBertPreTrainedModel):
         """Initialize the PolyBert masked language model.
 
         Args:
-            config: Model configuration containing hyperparameters.
+            config (PolyBertConfig): Configuration object containing:
+                - vocab_size: Size of the vocabulary for token embeddings
+                - hidden_size: Dimensionality of hidden layers
 
         """
         super().__init__(config)
@@ -375,8 +406,10 @@ class PolyBertForSequenceClassification(PolyBertForTasksBase):
         """Initialize the PolyBert sequence classification model.
 
         Args:
-            config: Model configuration containing hyperparameters including
-                task type and number of classes.
+            config (PolyBertConfig): Configuration object containing:
+                - hidden_size: Dimensionality of hidden layers
+                - num_labels: Number of output labels for classification tasks
+                - problem_type: Problem type for automatic loss selection
 
         """
         super().__init__(config=config)
@@ -449,8 +482,9 @@ class PolyBertForTokenClassification(PolyBertForTasksBase):
         """Initialize the PolyBert token classification model.
 
         Args:
-            config: Model configuration containing hyperparameters including
-                the number of classes for token classification.
+            config (PolyBertConfig): Configuration object containing:
+                - hidden_size: Dimensionality of hidden layers
+                - num_labels: Number of output labels for classification tasks
 
         """
         super().__init__(config=config)
@@ -521,7 +555,8 @@ class PolyBertForQuestionAnswering(PolyBertForTasksBase):
         """Initialize the PolyBert question answering model.
 
         Args:
-            config: Model configuration containing hyperparameters.
+            config (PolyBertConfig): Configuration object containing:
+                - hidden_size: Dimensionality of hidden layers
 
         """
         super().__init__(config=config)
