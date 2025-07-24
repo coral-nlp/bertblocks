@@ -1,6 +1,6 @@
 from typing import TYPE_CHECKING
 
-from torch.nn.attention.flex_attention import BlockMask, create_block_mask
+from torch.nn.attention.flex_attention import BlockMask
 
 if TYPE_CHECKING:
     import torch
@@ -10,7 +10,6 @@ if TYPE_CHECKING:
 from torch import nn
 
 from polybert.modeling.attention import PolyBertAttention
-from polybert.modeling.mask import doc_mask
 from polybert.modeling.mlp import get_mlp
 from polybert.modeling.norms import get_norm
 
@@ -126,7 +125,7 @@ class PolyBertEncoder(nn.Module):
     def forward(
         self,
         x: "torch.FloatTensor",
-        attention_mask: "torch.Tensor | None" = None,
+        block_mask: "BlockMask | None" = None,
         output_attentions: "bool | None" = False,
         output_hidden_states: "bool | None" = False,
     ) -> "tuple[torch.Tensor, tuple[torch.Tensor, ...] | None, tuple[torch.Tensor, ...] | None]":
@@ -137,9 +136,8 @@ class PolyBertEncoder(nn.Module):
 
         Args:
             x (torch.FloatTensor, shape [batch_size, seq_len, hidden_size]): Input embeddings tensor.
-            attention_mask (torch.Tensor | None, optional): Boolean mask indicating which tokens
-                should attend to each other. Shape [batch_size, seq_len] where True means the token
-                should be attended to. None means all tokens attend to each other. Defaults to None.
+            block_mask (BlockMask| None, optional): Flex-attention block mask indicating which tokens
+                should attend to each other (inferred from attention_mask).
             output_attentions (bool | None, optional): Whether to return attention weights from
                 all layers. Defaults to False.
             output_hidden_states (bool | None, optional): Whether to return hidden states from
@@ -159,8 +157,6 @@ class PolyBertEncoder(nn.Module):
         all_attentions = []
         all_hidden_states = [x]
         B, S, _ = x.shape
-        # Create document block mask to reuse throughout all layers for this batch
-        block_mask = create_block_mask(doc_mask(attention_mask), None, None, S, S, device=x.device)
         # Apply layers
         for block in self.blocks:
             x, w = block(x, block_mask, output_attentions)

@@ -1,3 +1,4 @@
+import functools
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -58,30 +59,51 @@ class PolyBertAttention(nn.Module):
         self.ffwd = nn.Linear(config.hidden_size, config.hidden_size, bias=config.attn_out_bias)
         self.drop = nn.Dropout(config.attn_dropout_prob) if config.attn_dropout_prob > 0 else nn.Identity()
         # Positional embeddings (they apply at different stages of attention depending on type)
+        self.pos_emb_kind = config.pos_emb_kind
         self.qk_mod = self._qk_mod(config.pos_emb_kind)
-        self.score_mod = self._score_mod(config.pos_emb_kind)
+        self._initialize_pos_buffers(config.pos_emb_kind)
+        self._cached_score_mod: _score_mod_signature | None = None
+        self._cached_device: str | torch.device | None = None
 
-    def _score_mod(self, score_mod_type: str) -> "_score_mod_signature | None":
-        """Initialize score modification function based on positional encoding type.
+    def _initialize_pos_buffers(self, pos_emb_kind: str) -> None:
+        """Initialize positional encoding buffers if needed.
 
         Args:
-            score_mod_type (str): Type of positional encoding to use. Supported values:
-                          - "alibi": ALIBI linear bias score modification
-                          - "relative": relative positional bias score modification
-                          - Any other value: No score modification
+            pos_emb_kind (str): Type of positional encoding to use.
+
+        """
+        match pos_emb_kind:
+            case "alibi":
+                slopes = torch.exp2(torch.arange(self.num_heads, dtype=torch.float32) * (-8.0 / self.num_heads))
+                self.register_buffer("alibi_slopes", slopes)
+            case _:
+                pass
+
+    @property
+    def score_mod(self) -> "_score_mod_signature | None":
+        """Get score modification function based on positional encoding type.
+
+        Caches the partial function and only recreates it when the device changes
+        to avoid performance overhead.
 
         Returns:
             _score_mod_signature | None: Score modification function compatible with flex_attention, or None
-            if no score modification is needed for the given type.
+            if no score modification is needed.
 
         """
-        match score_mod_type:
+        match self.pos_emb_kind:
             case "alibi":
-                return AlibiPositionalEncoding(self.num_heads)()
+                current_device = self.alibi_slopes.device
+                if self._cached_score_mod is None or self._cached_device != current_device:
+                    self._cached_score_mod = functools.partial(
+                        AlibiPositionalEncoding.score_mod, slopes=self.alibi_slopes
+                    )
+                    self._cached_device = current_device
             case "relative":
-                return RelativePositionalEncoding()()
+                self._cached_score_mod = RelativePositionalEncoding.score_mod
             case _:
-                return None
+                self._cached_score_mod = None
+        return self._cached_score_mod
 
     def _qk_mod(self, qk_mod_type: str) -> "nn.Module":
         """Initialize query-key modification module based on positional encoding type.

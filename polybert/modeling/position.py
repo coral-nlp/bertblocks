@@ -1,9 +1,7 @@
-import functools
 import math
 
 import torch
 from torch import nn
-from torch.nn.attention.flex_attention import _score_mod_signature
 
 
 class SinusoidalPositionalEncoding(nn.Module):
@@ -135,19 +133,16 @@ class AlibiPositionalEncoding:
     query and key positions, with head-specific slopes. This enables length
     extrapolation beyond training sequence lengths.
 
-    Args:
-        num_heads (int): Number of attention heads.
+    This class provides static methods for ALIBI computation and is designed
+    to be used without instantiation.
 
     References:
         - "Train Short, Test Long: Attention with Linear Biases Enables Input Length Extrapolation" (https://arxiv.org/abs/2108.12409)
 
     """
 
-    def __init__(self, num_heads: int) -> None:
-        self.slopes = torch.exp2(torch.arange(num_heads, dtype=torch.float32) * (-8.0 / num_heads))
-
     @staticmethod
-    def _alibi(
+    def score_mod(
         score: "torch.Tensor",
         _b: "torch.Tensor",
         h: "torch.Tensor",
@@ -174,19 +169,6 @@ class AlibiPositionalEncoding:
         bias = (kv_idx - q_idx) * scale
         return score + bias
 
-    def __call__(self) -> "_score_mod_signature":
-        """Create an ALIBI score modification function.
-
-        This method generates head-specific slopes and returns a partially applied
-        ALIBI function that can be used with flex_attention.
-
-        Returns:
-            _score_mod_signature: A partially applied ALIBI score modification function with the signature
-            expected by flex_attention.
-
-        """
-        return functools.partial(AlibiPositionalEncoding._alibi, slopes=self.slopes)
-
 
 class RelativePositionalEncoding:
     """Add Relative Positional Encoding score modification.
@@ -200,7 +182,7 @@ class RelativePositionalEncoding:
         pass
 
     @staticmethod
-    def _relative_positional(
+    def score_mod(
         score: "torch.Tensor",
         _b: "torch.Tensor",
         _h: "torch.Tensor",
@@ -221,13 +203,3 @@ class RelativePositionalEncoding:
 
         """
         return score + (q_idx - kv_idx)
-
-    def __call__(self) -> "_score_mod_signature":
-        """Create a relative positional score modification function.
-
-        Returns:
-            _score_mod_signature: A score relative positional score modification function with the
-                signature expected by flex_attention.
-
-        """
-        return RelativePositionalEncoding._relative_positional

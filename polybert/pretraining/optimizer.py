@@ -8,7 +8,7 @@ def get_optimizer(
     optimizer_name: Literal["sgd", "adam", "adamw", "adafactor", "shampoo", "lion", "sophia", "muon", "galore", "soap"],
     params: list[dict[str, Any]],
     optimizer_kwargs: dict[str, Any],
-) -> Optimizer:
+) -> "Optimizer":
     """Instantiate a specific optimizer with params and hyperparameters and return it.
 
     Args:
@@ -36,6 +36,9 @@ def get_optimizer(
         - `soap`
 
     """
+    if optimizer_kwargs is None:
+        optimizer_kwargs = {}
+
     match optimizer_name:
         case "sgd":
             from torch.optim.sgd import SGD
