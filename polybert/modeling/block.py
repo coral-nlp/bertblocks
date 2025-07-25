@@ -156,7 +156,6 @@ class PolyBertEncoder(nn.Module):
         """
         all_attentions = []
         all_hidden_states = [x]
-        B, S, _ = x.shape
         # Apply layers
         for block in self.blocks:
             x, w = block(x, block_mask, output_attentions)

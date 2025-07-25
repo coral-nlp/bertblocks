@@ -6,6 +6,7 @@ if TYPE_CHECKING:
 
 
 import torch
+from einops import rearrange
 from torch import nn
 from torch.nn.attention.flex_attention import BlockMask, flex_attention
 
@@ -147,16 +148,14 @@ class PolyBertAttention(nn.Module):
                   otherwise None. Shape [batch_size, num_heads, seq_len, seq_len].
 
         """
-        n_batch, n_seq = x.size()[:-1]
-
-        # Projection for Q, K, V
+        # Fused projection for Q, K, V
         qkv = self.proj(x)
-        q, k, v = qkv.chunk(3, dim=-1)
+        q, k, v = rearrange(qkv, "... (x d) -> x ... d", x=3)
 
         # Reshape for multi-head attention
-        q = q.reshape(n_batch, n_seq, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
-        k = k.reshape(n_batch, n_seq, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
-        v = v.reshape(n_batch, n_seq, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
+        q = rearrange(q, "s (h d) -> 1 h s d", h=self.num_heads)
+        k = rearrange(k, "s (h d) -> 1 h s d", h=self.num_heads)
+        v = rearrange(v, "s (h d) -> 1 h s d", h=self.num_heads)
 
         # Add qk-mod (RoPE) if applicable (will be nn.Identity otherwise)
         q = self.qk_mod(q)
@@ -172,7 +171,7 @@ class PolyBertAttention(nn.Module):
             x, w = flx_out, None
 
         # Reshape back
-        x = x.permute(0, 2, 1, 3).contiguous().reshape(n_batch, n_seq, -1)
+        x = rearrange(x, "1 h s d -> s (h d)")
 
         # Output projection
         x = self.ffwd(x)

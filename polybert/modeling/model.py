@@ -1,10 +1,11 @@
 import functools
 import math
+import warnings
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
 if TYPE_CHECKING:
-    from torch.nn.attention.flex_attention import _mask_mod_signature
+    pass
 
 import torch
 from torch import nn
@@ -24,6 +25,7 @@ from polybert.modeling.config import PolyBertConfig
 from polybert.modeling.embedding import PolyBertEmbeddings
 from polybert.modeling.head import PolyBertPooler, get_prediction_head
 from polybert.modeling.loss import get_loss_function
+from polybert.modeling.padding import get_block_mask_mod, pad_sequence, unpad_sequence
 
 
 class PolyBertPreTrainedModel(PreTrainedModel):
@@ -183,30 +185,12 @@ class PolyBertModel(PolyBertPreTrainedModel):
         """
         self.embd.embd = value
 
-    def get_mask_mod(self, attention_mask: "torch.Tensor") -> "_mask_mod_signature":
-        """Build a mask mod function given a binary attention mask.
-
-        Args:
-            attention_mask (torch.Tensor): The binary attention mask.
-
-        Returns:
-            The mask mod function.
-
-        """
-        attention_mask = attention_mask.bool()
-
-        # 1 is to be attended, 0 is masked
-        def mask_mod(b, _h, q_idx, kv_idx):  # type: ignore
-            return attention_mask[b, q_idx] & attention_mask[b, kv_idx]
-
-        return mask_mod
-
     def forward(
         self,
         input_ids: "torch.Tensor",
         attention_mask: "torch.Tensor | None" = None,
-        output_attentions: "bool | None" = None,
-        output_hidden_states: "bool | None" = False,
+        output_attentions: "bool" = False,
+        output_hidden_states: "bool" = False,
     ) -> "BaseModelOutput | BaseModelOutputWithPooling":
         """Forward pass through the PolyBert model.
 
@@ -227,16 +211,25 @@ class PolyBertModel(PolyBertPreTrainedModel):
                 - attentions: Attention weights from all layers (optional)
 
         """
-        # Transform attention mask into block mask for flex attention
-        B, S = input_ids.shape
-        if attention_mask is None:
-            block_mask = None
-        else:
-            mask_mod = self.get_mask_mod(attention_mask)
-            block_mask = create_block_mask(mask_mod, B=1, H=None, Q_LEN=S, KV_LEN=S)
+        if output_attentions:
+            warnings.warn("Returning attentions is currently not supported, will return None.", stacklevel=2)
+            output_attentions = False
 
+        # Get input embeddings
         x = self.embd(input_ids)
+
+        # Unpad input sequence
+        B, S = input_ids.shape
+        x, indices, cu_seqlens, max_seq_len = unpad_sequence(x, attention_mask=attention_mask)
+        block_mask = create_block_mask(
+            get_block_mask_mod(cu_seqlens), None, None, x.size(0), x.size(0), device=x.device
+        )
+
         x, hidden_states, attentions = self.encd(x, block_mask, output_attentions, output_hidden_states)
+
+        x = pad_sequence(x, indices, B, S)
+        if hidden_states is not None:
+            hidden_states = [pad_sequence(h, indices, B, S) for h in hidden_states]
 
         if self.pool is not None:
             pooler_output = self.pool(x)

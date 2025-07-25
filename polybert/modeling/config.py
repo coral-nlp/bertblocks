@@ -69,7 +69,7 @@ class PolyBertConfig(PretrainedConfig):
             num_attention_heads: The number of attention heads in the multi-head attention mechanism.
                 Each head has dimension hidden_size // num_attention_heads. More heads can capture
                 different types of relationships. Common values: 12 (BERT-base), 16 (BERT-large).
-                Must be at least 1 and hidden_size must be divisible by this value.
+                Must be at least 2 and hidden_size must be divisible by this value.
             pos_emb_kind: The type of positional embedding to use. Available options:
                 "alibi" (ALiBi positional encoding), "sinusoidal" (Sinusoidal positional encoding),
                 "rope" (Rotary positional encoding), "relative" (Relative positional encoding),
@@ -142,8 +142,8 @@ class PolyBertConfig(PretrainedConfig):
         if num_blocks < 1:
             raise ValueError(f"num_blocks must be at least 1, got {num_blocks}")
 
-        if num_attention_heads < 1:
-            raise ValueError(f"num_attention_heads must be at least 1, got {num_attention_heads}")
+        if num_attention_heads <= 1:
+            raise ValueError(f"num_attention_heads must be at least 2, got {num_attention_heads}")
 
         if hidden_size % num_attention_heads != 0:
             raise ValueError(

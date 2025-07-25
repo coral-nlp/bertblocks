@@ -8,6 +8,7 @@ requires-python = ">=3.11"
 base = [
     "torch==2.7.1",
     "transformers>=4.53.2",
+    "einops>=0.8.1",
 ]
 
 pretraining = [
