@@ -159,16 +159,22 @@ class PolyBertAttention(nn.Module):
         v = v.reshape(n_batch, n_seq, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
 
         # Add qk-mod (RoPE) if applicable (will be nn.Identity otherwise)
-        # q = self.qk_mod(q)
-        # k = self.qk_mod(k)
+        q = self.qk_mod(q)
+        k = self.qk_mod(k)
 
         # Apply flex attention kernel
-        x, w = flex_attention(q, k, v, block_mask=attention_mask, score_mod=self.score_mod, return_lse=True)
-        w = None
+        flx_out = flex_attention(
+            q, k, v, block_mask=attention_mask, score_mod=self.score_mod, return_lse=output_attention
+        )
+        if output_attention:
+            x, w = flx_out
+        else:
+            x, w = flx_out, None
+
         # Reshape back
         x = x.permute(0, 2, 1, 3).contiguous().reshape(n_batch, n_seq, -1)
 
         # Output projection
         x = self.ffwd(x)
 
-        return x, w if output_attention else None
+        return x, w

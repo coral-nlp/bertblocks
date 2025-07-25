@@ -4,7 +4,7 @@ from polybert.modeling.config import PolyBertConfig
 from polybert.modeling.model import PolyBertModel
 
 
-def from_bert_model(pretrained_model_name_or_path: str) -> "PolyBertModel":
+def from_bert_model(pretrained_model_name_or_path: str, add_pooling_layer: bool = False) -> "PolyBertModel":
     """Instantiate an equivalent PolyBERT model from BERT weights and config."""
     from transformers import BertConfig, BertModel
 
@@ -42,8 +42,8 @@ def from_bert_model(pretrained_model_name_or_path: str) -> "PolyBertModel":
         )
 
     config = _bert_config_to_polybert_config(pretrained_model_name_or_path)
-    model = PolyBertModel(config, add_pooling_layer=False)
-    bert_model = BertModel.from_pretrained(pretrained_model_name_or_path)
+    model = PolyBertModel(config, add_pooling_layer=add_pooling_layer)
+    bert_model = BertModel.from_pretrained(pretrained_model_name_or_path, add_pooling_layer=add_pooling_layer)
 
     # Embedding layer
     model.embd.embd = bert_model.embeddings.word_embeddings
