@@ -1,6 +1,9 @@
+import warnings
 from typing import TYPE_CHECKING
 
-from torch.nn.attention.flex_attention import BlockMask
+from torch.nn.attention.flex_attention import BlockMask, create_block_mask
+
+from polybert.modeling.padding import get_block_mask_mod, pad_sequence, unpad_sequence
 
 if TYPE_CHECKING:
     import torch
@@ -124,8 +127,8 @@ class PolyBertEncoder(nn.Module):
 
     def forward(
         self,
-        x: "torch.FloatTensor",
-        block_mask: "BlockMask | None" = None,
+        x: "torch.Tensor",
+        attention_mask: "torch.Tensor | None" = None,
         output_attentions: "bool | None" = False,
         output_hidden_states: "bool | None" = False,
     ) -> "tuple[torch.Tensor, tuple[torch.Tensor, ...] | None, tuple[torch.Tensor, ...] | None]":
@@ -135,9 +138,9 @@ class PolyBertEncoder(nn.Module):
         prevent attention across document boundaries.
 
         Args:
-            x (torch.FloatTensor, shape [batch_size, seq_len, hidden_size]): Input embeddings tensor.
-            block_mask (BlockMask| None, optional): Flex-attention block mask indicating which tokens
-                should attend to each other (inferred from attention_mask).
+            x (torch.Tensor, shape [batch_size, seq_len, hidden_size]): Input embeddings tensor.
+            attention_mask (torch.Tensor | None, optional): Binary mask indicating which tokens
+                should be attended to.
             output_attentions (bool | None, optional): Whether to return attention weights from
                 all layers. Defaults to False.
             output_hidden_states (bool | None, optional): Whether to return hidden states from
@@ -154,6 +157,17 @@ class PolyBertEncoder(nn.Module):
                   if output_attentions=True, None otherwise. Shape depends on attention implementation.
 
         """
+        if output_attentions:
+            warnings.warn("Returning attentions is currently not supported, will return None.", stacklevel=2)
+            output_attentions = False
+
+        # Unpad input sequence
+        B, S, _ = x.shape
+        x, indices, cu_seqlens, max_seq_len = unpad_sequence(x, attention_mask=attention_mask)
+        block_mask = create_block_mask(
+            get_block_mask_mod(cu_seqlens), None, None, x.size(0), x.size(0), device=x.device
+        )
+        # Keep track of states throughout block stack
         all_attentions = []
         all_hidden_states = [x]
         # Apply layers
@@ -163,6 +177,11 @@ class PolyBertEncoder(nn.Module):
                 all_attentions.append(w)
             if output_hidden_states:
                 all_hidden_states.append(x)
+
+        x = pad_sequence(x, indices, B, S)
+        if output_hidden_states:
+            all_hidden_states = [pad_sequence(h, indices, B, S) for h in all_hidden_states]
+
         return (
             x,
             tuple(all_hidden_states) if output_hidden_states else None,

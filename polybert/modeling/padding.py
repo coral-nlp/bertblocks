@@ -124,7 +124,7 @@ index_put_first_axis = IndexPutFirstAxis.apply
 
 def unpad_sequence(
     hidden_states: "torch.Tensor", attention_mask: "torch.Tensor | None"
-) -> tuple["torch.Tensor", "torch.Tensor", "torch.Tensor", int]:
+) -> tuple["torch.Tensor", "torch.Tensor", "torch.Tensor", "torch.Tensor"]:
     """Pack variable-length sequences into a dense tensor by removing padding.
 
     This function takes batched sequences with padding and unpads them into a single
@@ -156,7 +156,7 @@ def unpad_sequence(
         attention_mask = torch.ones_like(hidden_states)
     seqlens_in_batch = attention_mask.sum(dim=-1, dtype=torch.int32)
     indices = torch.nonzero(attention_mask.flatten(), as_tuple=False).flatten()
-    max_seqlen_in_batch: int = seqlens_in_batch.max().item()
+    max_seqlen_in_batch = seqlens_in_batch.max()
     cu_seqlens = F.pad(torch.cumsum(seqlens_in_batch, dim=0, dtype=torch.int32), (1, 0))
     return (
         index_first_axis(rearrange(hidden_states, "b s ... -> (b s) ..."), indices),
@@ -214,38 +214,15 @@ def get_block_mask_mod(cu_seqlens: "torch.Tensor") -> "_mask_mod_signature":
             returns True if query and key tokens are in the same document,
             False otherwise.
 
-    Example:
-        >>> # Two documents with lengths [3, 2]
-        >>> cu_seqlens = torch.tensor([0, 3, 5])
-        >>> mask_fn = get_block_mask_mod(cu_seqlens)
-        >>> # Now tokens 0,1,2 can only attend to each other
-        >>> # and tokens 3,4 can only attend to each other
-
     """
 
     def __inner__(
         _b: "torch.Tensor", _h: "torch.Tensor", q_idx: "torch.Tensor", kv_idx: torch.Tensor
     ) -> "torch.Tensor":
-        """Inner mask function that checks if query and key indices are in the same document.
-
-        Args:
-            _b: Batch index (unused but required by signature).
-            _h: Head index (unused but required by signature).
-            q_idx: Query token indices.
-            kv_idx: Key/value token indices.
-
-        Returns:
-            torch.Tensor: Boolean mask where True indicates the query and key
-                tokens are in the same document and can attend to each other.
-
-        """
-        # Broadcasting comparison: [..., num_docs]
-        q_mask = q_idx.unsqueeze(-1) < cu_seqlens
-        kv_mask = kv_idx.unsqueeze(-1) < cu_seqlens
-        # Find matching doc for each q_idx/kv_idx
-        # Handle edge case: if no True values, token belongs to last document
-        q_doc_id = torch.where(q_mask.any(dim=-1), q_mask.long().argmax(dim=-1), len(cu_seqlens) - 1)
-        kv_doc_id = torch.where(kv_mask.any(dim=-1), kv_mask.long().argmax(dim=-1), len(cu_seqlens) - 1)
+        """Inner mask function that checks if query and key indices are in the same document."""
+        # Compare pseudo-docids (number of cumulative lengths exceeded)
+        q_doc_id = (q_idx >= cu_seqlens).sum(-1)
+        kv_doc_id = (kv_idx >= cu_seqlens).sum(-1)
         return q_doc_id == kv_doc_id
 
     return __inner__

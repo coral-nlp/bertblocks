@@ -1,6 +1,5 @@
 import functools
 import math
-import warnings
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
@@ -9,7 +8,6 @@ if TYPE_CHECKING:
 
 import torch
 from torch import nn
-from torch.nn.attention.flex_attention import create_block_mask
 from transformers.modeling_outputs import (
     BaseModelOutput,
     BaseModelOutputWithPooling,
@@ -25,7 +23,6 @@ from polybert.modeling.config import PolyBertConfig
 from polybert.modeling.embedding import PolyBertEmbeddings
 from polybert.modeling.head import PolyBertPooler, get_prediction_head
 from polybert.modeling.loss import get_loss_function
-from polybert.modeling.padding import get_block_mask_mod, pad_sequence, unpad_sequence
 
 
 class PolyBertPreTrainedModel(PreTrainedModel):
@@ -211,25 +208,8 @@ class PolyBertModel(PolyBertPreTrainedModel):
                 - attentions: Attention weights from all layers (optional)
 
         """
-        if output_attentions:
-            warnings.warn("Returning attentions is currently not supported, will return None.", stacklevel=2)
-            output_attentions = False
-
-        # Get input embeddings
         x = self.embd(input_ids)
-
-        # Unpad input sequence
-        B, S = input_ids.shape
-        x, indices, cu_seqlens, max_seq_len = unpad_sequence(x, attention_mask=attention_mask)
-        block_mask = create_block_mask(
-            get_block_mask_mod(cu_seqlens), None, None, x.size(0), x.size(0), device=x.device
-        )
-
-        x, hidden_states, attentions = self.encd(x, block_mask, output_attentions, output_hidden_states)
-
-        x = pad_sequence(x, indices, B, S)
-        if hidden_states is not None:
-            hidden_states = [pad_sequence(h, indices, B, S) for h in hidden_states]
+        x, hidden_states, attentions = self.encd(x, attention_mask, output_attentions, output_hidden_states)
 
         if self.pool is not None:
             pooler_output = self.pool(x)
