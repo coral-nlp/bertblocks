@@ -77,9 +77,9 @@ class PolyBertEmbeddings(nn.Module):
         self.embd = nn.Embedding(config.vocab_size, config.hidden_size, padding_idx=config.pad_token_id)
         match config.pos_emb_kind:
             case "sinusoidal":
-                self.pose = SinusoidalPositionalEncoding(config.hidden_size, config.max_sequence_length)
+                self.pose = SinusoidalPositionalEncoding(**config.pos_emb_kwargs)
             case "learned":
-                self.pose = LearnedPositionalEncoding(config.hidden_size, config.max_sequence_length)
+                self.pose = LearnedPositionalEncoding(**config.pos_emb_kwargs)
             case _:
                 self.pose = nn.Identity()
         self.tokt = PolyBertTokenTypeEmbedding(config) if config.add_token_type_emb else nn.Identity()

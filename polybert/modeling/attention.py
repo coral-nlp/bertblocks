@@ -61,6 +61,7 @@ class PolyBertAttention(nn.Module):
         self.drop = nn.Dropout(config.attn_dropout_prob) if config.attn_dropout_prob > 0 else nn.Identity()
         # Positional embeddings (they apply at different stages of attention depending on type)
         self.pos_emb_kind = config.pos_emb_kind
+        self.pos_emb_kwargs = config.pos_emb_kwargs
         self.qk_mod = self._qk_mod(config.pos_emb_kind)
         self._initialize_pos_buffers(config.pos_emb_kind)
         self._cached_score_mod: _score_mod_signature | None = None
@@ -121,7 +122,7 @@ class PolyBertAttention(nn.Module):
         """
         match qk_mod_type:
             case "rope":
-                return RotaryPositionalEncoding(self.head_dim, self.max_seq_len)
+                return RotaryPositionalEncoding(**self.pos_emb_kwargs)
             case _:
                 return nn.Identity()
 
@@ -129,6 +130,7 @@ class PolyBertAttention(nn.Module):
         self,
         x: "torch.Tensor",
         attention_mask: "BlockMask",
+        cu_seqlens: "torch.Tensor",
         output_attention: bool = False,
     ) -> "tuple[torch.Tensor, torch.Tensor | None]":
         """Forward pass of the PolyBERT attention mechanism.
@@ -139,6 +141,7 @@ class PolyBertAttention(nn.Module):
         Args:
             x (torch.Tensor, shape [batch_size, seq_len, hidden_size]): The input hidden state.
             attention_mask (BlockMask): Flex attention block mask to ignore padding tokens.
+            cu_seqlens (torch.Tensor, shape [batch_size + 1]): Cumulative sequence lengths of batch.
             output_attention (bool): Whether to return attention weights along with the output.
 
         Returns:
@@ -158,8 +161,8 @@ class PolyBertAttention(nn.Module):
         v = rearrange(v, "s (h d) -> 1 h s d", h=self.num_heads)
 
         # Add qk-mod (RoPE) if applicable (will be nn.Identity otherwise)
-        q = self.qk_mod(q)
-        k = self.qk_mod(k)
+        q = self.qk_mod(q, cu_seqlens=cu_seqlens)
+        k = self.qk_mod(k, cu_seqlens=cu_seqlens)
 
         # Apply flex attention kernel
         flx_out = flex_attention(

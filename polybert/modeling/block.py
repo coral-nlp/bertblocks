@@ -62,7 +62,11 @@ class PolyBertBlock(nn.Module):
         self.hidden_drop = nn.Dropout(config.hidden_dropout_prob) if config.hidden_dropout_prob > 0 else nn.Identity()
 
     def forward(
-        self, x: "torch.Tensor", attention_mask: "BlockMask", output_attention: "bool | None" = False
+        self,
+        x: "torch.Tensor",
+        attention_mask: "BlockMask",
+        cu_seqlens: "torch.Tensor",
+        output_attention: "bool | None" = False,
     ) -> "tuple[torch.Tensor, torch.Tensor | None]":
         """Forward pass through the transformer block.
 
@@ -74,6 +78,7 @@ class PolyBertBlock(nn.Module):
                 the previous transformer block.
             attention_mask (BlockMask): Block mask for efficient attention computation,
                 typically created using torch.nn.attention.flex_attention.create_block_mask.
+            cu_seqlens (torch.Tensor, shape [batch_size + 1]): Cumulative sequence lengths of batch.
             output_attention (bool | None): Whether to return attention weights.
                 Defaults to False.
 
@@ -87,7 +92,7 @@ class PolyBertBlock(nn.Module):
         # Attention component
         residual = x
         x = self.pre_norm_attn(x)
-        x, w = self.attn(x, attention_mask, output_attention)
+        x, w = self.attn(x, attention_mask, cu_seqlens, output_attention)
         x = self.attn_drop(x)
         x = self.post_norm_attn(x + residual)
         # Feed-forward component
@@ -172,7 +177,7 @@ class PolyBertEncoder(nn.Module):
         all_hidden_states = [x]
         # Apply layers
         for block in self.blocks:
-            x, w = block(x, block_mask, output_attentions)
+            x, w = block(x, block_mask, cu_seqlens, output_attentions)
             if output_attentions:
                 all_attentions.append(w)
             if output_hidden_states:

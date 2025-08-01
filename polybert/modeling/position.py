@@ -94,13 +94,13 @@ class RotaryPositionalEncoding(nn.Module):
         self.register_buffer("sin", sin)
 
     @staticmethod
-    def _build_cache(dim: int, max_seq_len: int, base: float) -> "tuple[torch.Tensor, torch.Tensor]":
+    def _build_cache(dim: int, max_seq_len: "int | torch.Tensor", base: float) -> "tuple[torch.Tensor, torch.Tensor]":
         theta = 1.0 / (base ** (torch.arange(0, dim, 2).float() / dim))
         seq = torch.arange(max_seq_len, dtype=theta.dtype)
         freqs = torch.outer(seq, theta)
         emb = torch.cat((freqs, freqs), dim=-1)
-        cos = emb.cos()[:, None, None, :]
-        sin = emb.sin()[:, None, None, :]
+        cos = emb.cos()
+        sin = emb.sin()
         return cos, sin
 
     @staticmethod
@@ -108,22 +108,41 @@ class RotaryPositionalEncoding(nn.Module):
         x1, x2 = torch.chunk(x, 2, dim=-1)
         return torch.cat((-x2, x1), dim=-1)
 
-    def forward(self, x: "torch.Tensor") -> "torch.Tensor":
+    def forward(self, x: "torch.Tensor", cu_seqlens: "torch.Tensor") -> "torch.Tensor":
         """Add RoPE positional encodings to a given tensor.
 
         Args:
-            x (torch.Tensor, shape [seq_len, batch_size, num_heads, embedding_dim]): The tensor to add
-                RoPE positional encodings to.
+            x (torch.Tensor, shape [1, num_heads, total_seq_len, head_dim]): The unpadded tensor to
+                add RoPE positional encodings to.
+            cu_seqlens (torch.Tensor, shape [batch_size + 1,]): The cumulative sequence lengths of
+                the sequences contained in x.
 
         Returns:
             torch.Tensor: The tensor after adding RoPE positional encodings.
-                Shape [seq_len, batch_size, num_heads, embedding_dim].
+                Shape [1, num_heads, total_seq_len, head_dim].
 
         """
-        if x.shape[0] > self.cos.shape[0]:  # type: ignore
-            # Rebuild cache if maximum sequence length is exceeded
-            self.cos, self.sin = self._build_cache(self.dim, x.shape[0], self.base)
-        return x * self.cos[: x.shape[0], :, :, :] + self._rotate_half(x) * self.sin[: x.shape[0], :, :, :]
+        batch_size, num_heads, total_seq_len, head_dim = x.shape
+
+        if total_seq_len == 0:
+            return x
+
+        device = x.device
+
+        # Create position indices for each token within its sequence
+        arange_tensor = torch.arange(total_seq_len, device=device)
+        sequence_ids = torch.searchsorted(cu_seqlens[1:], arange_tensor, right=False)
+        positions = arange_tensor - cu_seqlens[sequence_ids]
+
+        # Check if we need to rebuild cache based on maximum length in batch
+        max_pos = positions.max()
+        if max_pos >= self.cos.shape[0]:  # type: ignore
+            self.cos, self.sin = self._build_cache(self.dim, max_pos.item() + 1, self.base)
+
+        # Apply RoPE using the computed positions
+        cos = self.cos[None, None, positions, :]  # [1, 1, total_seq_len, head_dim]
+        sin = self.sin[None, None, positions, :]  # [1, 1, total_seq_len, head_dim]
+        return x * cos + self._rotate_half(x) * sin
 
 
 class AlibiPositionalEncoding:
