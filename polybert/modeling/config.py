@@ -18,6 +18,7 @@ class PolyBertConfig(PretrainedConfig):
         num_blocks: int = 12,
         num_attention_heads: int = 12,
         pos_emb_kind: Literal["alibi", "sinusoidal", "rope", "relative", "learned"] = "alibi",
+        pos_emb_kwargs: dict[str, Any] | None = None,
         add_token_type_emb: bool = False,
         type_vocab_size: int = 1,
         mlp_type: Literal["mlp", "glu"] = "mlp",
@@ -69,11 +70,14 @@ class PolyBertConfig(PretrainedConfig):
             num_attention_heads: The number of attention heads in the multi-head attention mechanism.
                 Each head has dimension hidden_size // num_attention_heads. More heads can capture
                 different types of relationships. Common values: 12 (BERT-base), 16 (BERT-large).
-                Must be at least 1 and hidden_size must be divisible by this value.
+                Must be at least 2 and hidden_size must be divisible by this value.
             pos_emb_kind: The type of positional embedding to use. Available options:
                 "alibi" (ALiBi positional encoding), "sinusoidal" (Sinusoidal positional encoding),
                 "rope" (Rotary positional encoding), "relative" (Relative positional encoding),
                 "learned" (Learned positional encoding).
+            pos_emb_kwargs: Additional keyword arguments to pass to the positional embedding class. Values dependent
+                on chosen pos_emb_kind. All positional embeddings receive `dim` and `max_seq_len` automatically, these
+                do not need to be specified.
             add_token_type_emb: Whether to add token type embeddings to the model.
             type_vocab_size: The size of the token_type vocabulary. Only used if add_token_type_emb is True.
             mlp_type: The type of MLP (feed-forward) layer architecture. Available options:
@@ -142,8 +146,8 @@ class PolyBertConfig(PretrainedConfig):
         if num_blocks < 1:
             raise ValueError(f"num_blocks must be at least 1, got {num_blocks}")
 
-        if num_attention_heads < 1:
-            raise ValueError(f"num_attention_heads must be at least 1, got {num_attention_heads}")
+        if num_attention_heads <= 1:
+            raise ValueError(f"num_attention_heads must be at least 2, got {num_attention_heads}")
 
         if hidden_size % num_attention_heads != 0:
             raise ValueError(
@@ -197,6 +201,7 @@ class PolyBertConfig(PretrainedConfig):
         self.intermediate_size = intermediate_size
         self.num_attention_heads = num_attention_heads
         self.pos_emb_kind = pos_emb_kind
+        self.pos_emb_kwargs = pos_emb_kwargs or {}
         self.add_token_type_emb = add_token_type_emb
         self.type_vocab_size = type_vocab_size
         # MLP parameters
@@ -226,3 +231,8 @@ class PolyBertConfig(PretrainedConfig):
         # Downstream task parameters
         self.problem_type = problem_type
         self.num_labels = num_labels
+
+        # Dependent parameters
+        self.pos_emb_kwargs.update(
+            {"dim": self.hidden_size // self.num_attention_heads, "max_seq_len": self.max_sequence_length}
+        )

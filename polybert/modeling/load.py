@@ -1,115 +1,168 @@
+import warnings
+
 import torch
 
 from polybert.modeling.config import PolyBertConfig
 from polybert.modeling.model import PolyBertModel
 
 
-def from_bert_model(pretrained_model_name_or_path: str) -> "PolyBertModel":
+def from_bert_model(pretrained_model_name_or_path: str, add_pooling_layer: bool = False) -> "PolyBertModel":
     """Instantiate an equivalent PolyBERT model from BERT weights and config."""
     from transformers import BertConfig, BertModel
 
-    def _bert_config_to_polybert_config(pretrained_model_name_or_path: str) -> "PolyBertConfig":
-        """Construct an equivalent PolyBERT config from a given BERT config."""
-        config = BertConfig.from_pretrained(pretrained_model_name_or_path)
-        return PolyBertConfig(
-            vocab_size=config.vocab_size,
-            max_sequence_length=config.max_position_embeddings,
-            pad_token_id=config.pad_token_id,
-            hidden_size=config.hidden_size,
-            num_blocks=config.num_hidden_layers,
-            intermediate_size=config.intermediate_size,
-            num_attention_heads=config.num_attention_heads,
-            pos_emb_kind="learned" if config.position_embedding_type == "absolute" else "relative",
-            add_token_type_emb=True,
-            type_vocab_size=config.type_vocab_size,
-            mlp_type="mlp",
-            mlp_in_bias=True,
-            mlp_out_bias=True,
-            attn_proj_bias=True,
-            attn_out_bias=True,
-            initializer_kind="trunc_normal",
-            initializer_range=config.initializer_range,
-            initializer_cutoff_factor=4.0,
-            initializer_gain=1.0,
-            actv_fn=config.hidden_act,
-            norm_kind="post",
-            norm_fn="layer",
-            norm_eps=config.layer_norm_eps,
-            emb_dropout_prob=config.hidden_dropout_prob or 0.0,
-            attn_dropout_prob=config.attention_probs_dropout_prob or 0.0,
-            hidden_dropout_prob=config.hidden_dropout_prob or 0.0,
-            classifier_dropout_prob=config.classifier_dropout or 0.0,
-        )
-
-    config = _bert_config_to_polybert_config(pretrained_model_name_or_path)
-    model = PolyBertModel(config, add_pooling_layer=False)
-    bert_model = BertModel.from_pretrained(pretrained_model_name_or_path)
+    orig_config = BertConfig.from_pretrained(pretrained_model_name_or_path)
+    poly_config = PolyBertConfig(
+        vocab_size=orig_config.vocab_size,
+        max_sequence_length=orig_config.max_position_embeddings,
+        pad_token_id=orig_config.pad_token_id,
+        hidden_size=orig_config.hidden_size,
+        num_blocks=orig_config.num_hidden_layers,
+        intermediate_size=orig_config.intermediate_size,
+        num_attention_heads=orig_config.num_attention_heads,
+        pos_emb_kind="learned" if orig_config.position_embedding_type == "absolute" else "relative",
+        add_token_type_emb=True,
+        type_vocab_size=orig_config.type_vocab_size,
+        mlp_type="mlp",
+        mlp_in_bias=True,
+        mlp_out_bias=True,
+        attn_proj_bias=True,
+        attn_out_bias=True,
+        initializer_kind="trunc_normal",
+        initializer_range=orig_config.initializer_range,
+        initializer_cutoff_factor=4.0,
+        initializer_gain=1.0,
+        actv_fn=orig_config.hidden_act,
+        norm_kind="post",
+        norm_fn="layer",
+        norm_eps=orig_config.layer_norm_eps,
+        emb_dropout_prob=orig_config.hidden_dropout_prob or 0.0,
+        attn_dropout_prob=orig_config.attention_probs_dropout_prob or 0.0,
+        hidden_dropout_prob=orig_config.hidden_dropout_prob or 0.0,
+        classifier_dropout_prob=orig_config.classifier_dropout or 0.0,
+    )
+    poly_model = PolyBertModel(poly_config, add_pooling_layer=add_pooling_layer)
+    orig_model = BertModel(orig_config, add_pooling_layer=add_pooling_layer)
 
     # Embedding layer
-    model.embd.embd = bert_model.embeddings.word_embeddings
-    model.embd.pose.embd = bert_model.embeddings.position_embeddings
-    model.embd.norm.weight = bert_model.embeddings.LayerNorm.weight
-    model.embd.norm.bias = bert_model.embeddings.LayerNorm.bias
-    model.embd.tokt.embd = bert_model.embeddings.token_type_embeddings
+    poly_model.embd.embd = orig_model.embeddings.word_embeddings
+    poly_model.embd.pose.embd = orig_model.embeddings.position_embeddings
+    poly_model.embd.norm.weight = orig_model.embeddings.LayerNorm.weight
+    poly_model.embd.norm.bias = orig_model.embeddings.LayerNorm.bias
+    poly_model.embd.tokt.embd = orig_model.embeddings.token_type_embeddings
 
-    for i in range(len(model.encd.blocks)):
+    for i in range(len(poly_model.encd.blocks)):
         # QKV Projection
-        model.encd.blocks[i].attn.proj.weight = torch.nn.Parameter(
+        poly_model.encd.blocks[i].attn.proj.weight = torch.nn.Parameter(
             torch.cat(
                 (
-                    bert_model.encoder.layer[i].attention.self.query.weight,
-                    bert_model.encoder.layer[i].attention.self.key.weight,
-                    bert_model.encoder.layer[i].attention.self.value.weight,
+                    orig_model.encoder.layer[i].attention.self.query.weight,
+                    orig_model.encoder.layer[i].attention.self.key.weight,
+                    orig_model.encoder.layer[i].attention.self.value.weight,
                 ),
                 0,
             )
         )
-        model.encd.blocks[i].attn.proj.bias = torch.nn.Parameter(
+        poly_model.encd.blocks[i].attn.proj.bias = torch.nn.Parameter(
             torch.cat(
                 (
-                    bert_model.encoder.layer[i].attention.self.query.bias,
-                    bert_model.encoder.layer[i].attention.self.key.bias,
-                    bert_model.encoder.layer[i].attention.self.value.bias,
+                    orig_model.encoder.layer[i].attention.self.query.bias,
+                    orig_model.encoder.layer[i].attention.self.key.bias,
+                    orig_model.encoder.layer[i].attention.self.value.bias,
                 ),
                 0,
             )
         )
         # Attention output projection
-        model.encd.blocks[i].attn.ffwd.weight = bert_model.encoder.layer[i].attention.output.dense.weight
-        model.encd.blocks[i].attn.ffwd.bias = bert_model.encoder.layer[i].attention.output.dense.bias
+        poly_model.encd.blocks[i].attn.ffwd.weight = orig_model.encoder.layer[i].attention.output.dense.weight
+        poly_model.encd.blocks[i].attn.ffwd.bias = orig_model.encoder.layer[i].attention.output.dense.bias
         # Feed-forward up and down projection
-        model.encd.blocks[i].ffwd.Uprj.weight = bert_model.encoder.layer[i].intermediate.dense.weight
-        model.encd.blocks[i].ffwd.Uprj.bias = bert_model.encoder.layer[i].intermediate.dense.bias
-        model.encd.blocks[i].ffwd.Dprj.weight = bert_model.encoder.layer[i].output.dense.weight
-        model.encd.blocks[i].ffwd.Dprj.bias = bert_model.encoder.layer[i].output.dense.bias
+        poly_model.encd.blocks[i].ffwd.Uprj.weight = orig_model.encoder.layer[i].intermediate.dense.weight
+        poly_model.encd.blocks[i].ffwd.Uprj.bias = orig_model.encoder.layer[i].intermediate.dense.bias
+        poly_model.encd.blocks[i].ffwd.Dprj.weight = orig_model.encoder.layer[i].output.dense.weight
+        poly_model.encd.blocks[i].ffwd.Dprj.bias = orig_model.encoder.layer[i].output.dense.bias
         # Norms
-        model.encd.blocks[i].post_norm_attn.weight = bert_model.encoder.layer[i].attention.output.LayerNorm.weight
-        model.encd.blocks[i].post_norm_attn.bias = bert_model.encoder.layer[i].attention.output.LayerNorm.bias
-        model.encd.blocks[i].post_norm_ffwd.weight = bert_model.encoder.layer[i].output.LayerNorm.weight
-        model.encd.blocks[i].post_norm_ffwd.bias = bert_model.encoder.layer[i].output.LayerNorm.bias
+        poly_model.encd.blocks[i].post_norm_attn.weight = orig_model.encoder.layer[i].attention.output.LayerNorm.weight
+        poly_model.encd.blocks[i].post_norm_attn.bias = orig_model.encoder.layer[i].attention.output.LayerNorm.bias
+        poly_model.encd.blocks[i].post_norm_ffwd.weight = orig_model.encoder.layer[i].output.LayerNorm.weight
+        poly_model.encd.blocks[i].post_norm_ffwd.bias = orig_model.encoder.layer[i].output.LayerNorm.bias
 
-    return model
+    return poly_model
 
 
-if __name__ == "__main__":
-    from transformers import AutoModel, AutoTokenizer
+def from_modernbert_model(pretrained_model_name_or_path: str, add_pooling_layer: bool = False) -> "PolyBertModel":
+    """Instantiate an equivalent PolyBERT model from ModernBERT weights and config."""
+    from transformers import ModernBertConfig, ModernBertModel
 
-    poly_model = from_bert_model("bert-base-uncased")
-    bert_model = AutoModel.from_pretrained("bert-base-uncased", add_pooling_layer=False)
-    poly_model.eval()
-    bert_model.eval()
+    orig_config = ModernBertConfig.from_pretrained(pretrained_model_name_or_path)
+    if orig_config.global_attn_every_n_layers != 1:
+        warnings.warn(
+            "Local attention is currently unsupported, falling back to global attention at every layer.", stacklevel=2
+        )
+        orig_config.global_attn_every_n_layers = 1
+    poly_config = PolyBertConfig(
+        vocab_size=orig_config.vocab_size,
+        max_sequence_length=orig_config.max_position_embeddings,
+        pad_token_id=orig_config.pad_token_id,
+        hidden_size=orig_config.hidden_size,
+        num_blocks=orig_config.num_hidden_layers,
+        intermediate_size=orig_config.intermediate_size,
+        num_attention_heads=orig_config.num_attention_heads,
+        pos_emb_kind="rope",
+        pos_emb_kwargs={"base": orig_config.global_rope_theta},
+        add_token_type_emb=False,
+        mlp_type="glu",
+        mlp_in_bias=orig_config.mlp_bias,
+        mlp_out_bias=orig_config.mlp_bias,
+        attn_proj_bias=orig_config.attention_bias,
+        attn_out_bias=orig_config.attention_bias,
+        initializer_kind="trunc_normal",
+        initializer_range=orig_config.initializer_range,
+        initializer_cutoff_factor=4.0,
+        initializer_gain=1.0,
+        actv_fn=orig_config.hidden_activation or "gelu",
+        norm_kind="pre",
+        norm_fn="layer",
+        norm_eps=orig_config.layer_norm_eps,
+        emb_dropout_prob=orig_config.embedding_dropout or 0.0,
+        attn_dropout_prob=orig_config.attention_dropout or 0.0,
+        hidden_dropout_prob=orig_config.mlp_dropout or 0.0,
+        classifier_dropout_prob=orig_config.classifier_dropout or 0.0,
+    )
 
-    tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
-    seq = tokenizer(["I like cats.", "Cats are the ultimate pet."], return_tensors="pt", padding="max_length")
+    orig_model = ModernBertModel(orig_config)
+    poly_model = PolyBertModel(poly_config)
 
-    with torch.no_grad():
-        seq1_bert, seq2_bert = bert_model(seq["input_ids"], attention_mask=seq["attention_mask"]).last_hidden_state[
-            :, 0, :
-        ]
-        seq1_poly, seq2_poly = poly_model(seq["input_ids"], attention_mask=seq["attention_mask"]).last_hidden_state[
-            :, 0, :
-        ]
+    # Embedding layer
+    poly_model.embd.embd = orig_model.embeddings.tok_embeddings
+    poly_model.embd.norm.weight = orig_model.embeddings.norm.weight
+    poly_model.embd.norm.bias = orig_model.embeddings.norm.bias
 
-    # Assert that both produced same output
-    torch.testing.assert_close(seq1_bert, seq1_poly)
-    torch.testing.assert_close(seq2_bert, seq2_poly)
+    for i in range(len(poly_model.encd.blocks)):
+        # QKV Projection
+        poly_model.encd.blocks[i].attn.proj.weight = orig_model.layers[i].attn.Wqkv.weight
+        if poly_config.attn_proj_bias:
+            poly_model.encd.blocks[i].attn.proj.bias = orig_model.layers[i].attn.Wqkv.bias
+        # Attention output projection
+        poly_model.encd.blocks[i].attn.ffwd.weight = orig_model.layers[i].attn.Wo.weight
+        if poly_config.attn_out_bias:
+            poly_model.encd.blocks[i].attn.ffwd.bias = orig_model.layers[i].attn.Wo.bias
+        # Feed-forward up and down projection
+        poly_model.encd.blocks[i].ffwd.Uprj.weight = orig_model.layers[i].mlp.Wi.weight
+        if poly_config.mlp_in_bias:
+            poly_model.encd.blocks[i].ffwd.Uprj.bias = orig_model.layers[i].mlp.Wi.bias
+        poly_model.encd.blocks[i].ffwd.Dprj.weight = orig_model.layers[i].mlp.Wo.weight
+        if poly_config.mlp_out_bias:
+            poly_model.encd.blocks[i].ffwd.Dprj.bias = orig_model.layers[i].mlp.Wo.bias
+        # Norms
+        if i == 0:
+            # If first layer, the norm is in the embedding (pre-norm)
+            poly_model.encd.blocks[i].pre_norm_attn.weight = orig_model.embeddings.norm.weight
+            poly_model.encd.blocks[i].pre_norm_attn.bias = orig_model.embeddings.norm.bias
+        else:
+            poly_model.encd.blocks[i].pre_norm_attn.weight = orig_model.layers[i].attn_norm.weight
+            poly_model.encd.blocks[i].pre_norm_attn.bias = orig_model.layers[i].attn_norm.bias
+
+        poly_model.encd.blocks[i].pre_norm_ffwd.weight = orig_model.layers[i].mlp_norm.weight
+        poly_model.encd.blocks[i].pre_norm_ffwd.bias = orig_model.layers[i].mlp_norm.bias
+
+    return poly_model

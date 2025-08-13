@@ -1,6 +1,13 @@
+import warnings
 from typing import TYPE_CHECKING
 
-from torch.nn.attention.flex_attention import BlockMask
+from transformers.modeling_utils import is_flash_attn_2_available
+
+if is_flash_attn_2_available():
+    from flash_attn.bert_padding import pad_input, unpad_input
+else:
+    raise ImportError("This implementation currently critically depends on flash_attn. ")
+
 
 if TYPE_CHECKING:
     import torch
@@ -9,7 +16,7 @@ if TYPE_CHECKING:
 
 from torch import nn
 
-from polybert.modeling.attention import PolyBertAttention
+from polybert.modeling.attention_flash import PolyBertAttention
 from polybert.modeling.mlp import get_mlp
 from polybert.modeling.norms import get_norm
 
@@ -59,8 +66,11 @@ class PolyBertBlock(nn.Module):
         self.hidden_drop = nn.Dropout(config.hidden_dropout_prob) if config.hidden_dropout_prob > 0 else nn.Identity()
 
     def forward(
-        self, x: "torch.Tensor", attention_mask: "BlockMask", output_attention: "bool | None" = False
-    ) -> "tuple[torch.Tensor, torch.Tensor | None]":
+        self,
+        x: "torch.Tensor",
+        cu_seqlens: "torch.Tensor",
+        max_seq_len: int,
+    ) -> "tuple[torch.Tensor, torch.Tensor]":
         """Forward pass through the transformer block.
 
         Processes input through attention and feed-forward layers with residual
@@ -69,22 +79,19 @@ class PolyBertBlock(nn.Module):
         Args:
             x (torch.Tensor, shape [batch_size, seq_len, hidden_size]): The hidden state of
                 the previous transformer block.
-            attention_mask (BlockMask): Block mask for efficient attention computation,
-                typically created using torch.nn.attention.flex_attention.create_block_mask.
-            output_attention (bool | None): Whether to return attention weights.
-                Defaults to False.
+            cu_seqlens (torch.Tensor, shape [batch_size + 1]): Cumulative sequence lengths of batch.
+            max_seq_len (int): Maximum sequence length of batch.
 
         Returns:
             tuple[torch.Tensor, torch.Tensor | None]: A tuple containing:
                 - output (torch.Tensor): Transformed hidden state with same shape as input
-                - attention_weights (torch.Tensor | None): Attention weights if requested,
-                  None otherwise. Shape [batch_size, seq_len, seq_len]
+                - attention_weights (torch.Tensor | None): Attention weights. Shape [batch_size, seq_len, seq_len]
 
         """
         # Attention component
         residual = x
         x = self.pre_norm_attn(x)
-        x, w = self.attn(x, attention_mask, output_attention)
+        x, w = self.attn(x, cu_seqlens, max_seq_len)
         x = self.attn_drop(x)
         x = self.post_norm_attn(x + residual)
         # Feed-forward component
@@ -124,8 +131,8 @@ class PolyBertEncoder(nn.Module):
 
     def forward(
         self,
-        x: "torch.FloatTensor",
-        block_mask: "BlockMask | None" = None,
+        x: "torch.Tensor",
+        attention_mask: "torch.Tensor | None" = None,
         output_attentions: "bool | None" = False,
         output_hidden_states: "bool | None" = False,
     ) -> "tuple[torch.Tensor, tuple[torch.Tensor, ...] | None, tuple[torch.Tensor, ...] | None]":
@@ -135,9 +142,9 @@ class PolyBertEncoder(nn.Module):
         prevent attention across document boundaries.
 
         Args:
-            x (torch.FloatTensor, shape [batch_size, seq_len, hidden_size]): Input embeddings tensor.
-            block_mask (BlockMask| None, optional): Flex-attention block mask indicating which tokens
-                should attend to each other (inferred from attention_mask).
+            x (torch.Tensor, shape [batch_size, seq_len, hidden_size]): Input embeddings tensor.
+            attention_mask (torch.Tensor | None, optional): Binary mask indicating which tokens
+                should be attended to.
             output_attentions (bool | None, optional): Whether to return attention weights from
                 all layers. Defaults to False.
             output_hidden_states (bool | None, optional): Whether to return hidden states from
@@ -154,16 +161,29 @@ class PolyBertEncoder(nn.Module):
                   if output_attentions=True, None otherwise. Shape depends on attention implementation.
 
         """
+        if output_attentions:
+            warnings.warn("Returning attentions is currently not supported, will return None.", stacklevel=2)
+            output_attentions = False
+
+        # Unpad input sequence
+        B, S, _ = x.shape
+        x, indices, cu_seqlens, max_seq_len, _ = unpad_input(x, attention_mask=attention_mask)
+
+        # Keep track of states throughout block stack
         all_attentions = []
         all_hidden_states = [x]
-        B, S, _ = x.shape
         # Apply layers
         for block in self.blocks:
-            x, w = block(x, block_mask, output_attentions)
+            x, w = block(x, cu_seqlens, max_seq_len)
             if output_attentions:
                 all_attentions.append(w)
             if output_hidden_states:
                 all_hidden_states.append(x)
+
+        x = pad_input(x, indices, B, S)
+        if output_hidden_states:
+            all_hidden_states = [pad_input(h, indices, B, S) for h in all_hidden_states]
+
         return (
             x,
             tuple(all_hidden_states) if output_hidden_states else None,

@@ -8,14 +8,17 @@ requires-python = ">=3.11"
 base = [
     "torch==2.7.1",
     "transformers>=4.53.2",
+    "einops>=0.8.1",
+    "flash-attn>=2.8.2"
 ]
 
 pretraining = [
-    "pytorch_optimizer>=3.6.1",
+    "pytorch_optimizer>=3.8.0",
     "datasets>=4.0.0",
     "jsonargparse[signatures]>=4.27.7",
     "lightning>=2.5.2",
     "omegaconf>=2.3.0",
+    "wandb>=0.21.1"
 ]
 
 dev = [
@@ -40,6 +43,7 @@ docs = [
 
 [tool.uv]
 default-groups = ["base", "pretraining"]
+no-build-isolation-package = ["flash-attn"]
 
 [tool.isort]
 profile = "black"

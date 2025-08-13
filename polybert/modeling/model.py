@@ -4,11 +4,10 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
 if TYPE_CHECKING:
-    from torch.nn.attention.flex_attention import BlockMask
+    pass
 
 import torch
 from torch import nn
-from torch.nn.attention.flex_attention import create_block_mask
 from transformers.modeling_outputs import (
     BaseModelOutput,
     BaseModelOutputWithPooling,
@@ -183,28 +182,12 @@ class PolyBertModel(PolyBertPreTrainedModel):
         """
         self.embd.embd = value
 
-    @torch.compile(fullgraph=True, dynamic=True)
-    def flex_forward(
-        self,
-        input_ids: "torch.Tensor",
-        block_mask: "BlockMask | None",
-        output_attentions: "bool | None" = None,
-        output_hidden_states: "bool | None" = False,
-    ) -> "tuple[torch.Tensor, torch.Tensor | None, torch.Tensor | None]":
-        """Fused forward pass for flex-attention.
-
-        Extra function since create_block_mask breaks full-graph compile-ability.
-        """
-        x = self.embd(input_ids)
-        x, hidden_states, attentions = self.encd(x, block_mask, output_attentions, output_hidden_states)
-        return x, hidden_states, attentions
-
     def forward(
         self,
         input_ids: "torch.Tensor",
         attention_mask: "torch.Tensor | None" = None,
-        output_attentions: "bool | None" = None,
-        output_hidden_states: "bool | None" = False,
+        output_attentions: "bool" = False,
+        output_hidden_states: "bool" = False,
     ) -> "BaseModelOutput | BaseModelOutputWithPooling":
         """Forward pass through the PolyBert model.
 
@@ -225,18 +208,8 @@ class PolyBertModel(PolyBertPreTrainedModel):
                 - attentions: Attention weights from all layers (optional)
 
         """
-        # Transform attention mask into blockmask for flex attention
-        B, S = input_ids.shape
-        if attention_mask is None:
-            attention_mask = torch.ones(B, S, device=input_ids.device)
-        attention_mask = attention_mask.to(torch.bool)
-
-        def partial_mask(b, h, q_idx, kv_idx):  # type: ignore
-            return attention_mask[b, q_idx] & attention_mask[b, kv_idx]
-
-        block_mask = create_block_mask(partial_mask, B, 1, S, S, device=input_ids.device, _compile=True)
-
-        x, hidden_states, attentions = self.flex_forward(input_ids, block_mask, output_attentions, output_hidden_states)
+        x = self.embd(input_ids)
+        x, hidden_states, attentions = self.encd(x, attention_mask, output_attentions, output_hidden_states)
 
         if self.pool is not None:
             pooler_output = self.pool(x)

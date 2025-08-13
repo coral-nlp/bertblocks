@@ -12,6 +12,7 @@ The implementation includes:
 - Support for model compilation and advanced optimization
 """
 
+import os.path
 from pathlib import Path
 from typing import Any
 
@@ -82,12 +83,15 @@ class PolyBertPretrainingDataModule(L.LightningDataModule):
         self.dataset = None
 
     def prepare_data(self) -> None:
-        """Prepare the dataset for training.
-
-        This method loads the TinyStories dataset in streaming mode
-        for efficient large-scale pretraining. Called once per node.
-        """
-        self.dataset = load_dataset("roneneldan/TinyStories", split="train", streaming=True)
+        """Prepare the dataset for training. Called once per node."""
+        if os.path.isdir(self.hparams.dataset_name_or_path):
+            # If local path, load from disk (future: not only support JSON?)
+            self.dataset = load_dataset(
+                "json", data_dir=self.hparams.dataset_name_or_path, split="train", streaming=True
+            )
+        else:
+            # If not local path, try HF
+            self.dataset = load_dataset(self.hparams.dataset_name_or_path, split="train", streaming=True)
 
     def train_dataloader(self) -> DataLoader:
         """Create the training data loader.
@@ -166,15 +170,8 @@ class PolyBertPretrainingModule(L.LightningModule):
             del tokenizer
         self.model = PolyBertForMaskedLM(self.model_config)
         if self.hparams.compile_model:
-            # Some needed compile settings
-            torch._inductor.config.coordinate_descent_tuning = True
-            torch._inductor.config.triton.unique_kernel_names = True
-            # Experimental features to reduce compilation times, will be on by default in future
-            torch._inductor.config.fx_graph_cache = False
-            torch._functorch.config.enable_autograd_cache = False
-            torch._inductor.config.triton.cudagraph_trees = False  # Bug with cudagraph trees in this case
-
-            self.model = torch.compile(self.model)
+            torch.set_float32_matmul_precision("medium")
+            self.model = torch.compile(self.model, dynamic=True)
 
     def configure_optimizers(self) -> tuple[list["torch.optim.Optimizer"], list[dict[str, Any]]]:
         """Configure optimizers and learning rate schedulers.
