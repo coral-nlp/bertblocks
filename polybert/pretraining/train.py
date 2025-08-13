@@ -12,6 +12,7 @@ The implementation includes:
 - Support for model compilation and advanced optimization
 """
 
+import os.path
 from pathlib import Path
 from typing import Any
 
@@ -87,7 +88,14 @@ class PolyBertPretrainingDataModule(L.LightningDataModule):
         This method loads the TinyStories dataset in streaming mode
         for efficient large-scale pretraining. Called once per node.
         """
-        self.dataset = load_dataset("roneneldan/TinyStories", split="train", streaming=True)
+        # Test if local path or HF identifier
+        if os.path.isdir(self.hparams.dataset_name_or_path):
+            self.dataset = load_dataset(
+                "jsonl",
+                data_dir=self.hparams.dataset_name_or_path,
+            )
+        else:
+            self.dataset = load_dataset(self.hparams.dataset_name_or_path, split="train", streaming=True)
 
     def train_dataloader(self) -> DataLoader:
         """Create the training data loader.
