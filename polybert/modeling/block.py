@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 
 from torch import nn
 
-from polybert.modeling.attention_flash import PolyBertAttention
+from polybert.modeling.attention import PolyBertAttention
 from polybert.modeling.mlp import get_mlp
 from polybert.modeling.norms import get_norm
 
