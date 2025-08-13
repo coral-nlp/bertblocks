@@ -81,8 +81,21 @@ def get_optimizer(
 
             return SOAP(params, **optimizer_kwargs)
         case "splus":
-            # see: https://github.com/kozistr/pytorch_optimizer/issues/396
-            raise NotImplementedError
+            from pytorch_optimizer import SPlus
+
+            raise SPlus(params, **optimizer_kwargs)
         case _:
-            supported = ["sgd", "adam", "adamw", "adafactor", "shampoo", "lion", "sophia", "muon", "galore", "soap"]
+            supported = [
+                "sgd",
+                "adam",
+                "adamw",
+                "adafactor",
+                "shampoo",
+                "lion",
+                "sophia",
+                "muon",
+                "galore",
+                "soap",
+                "splus",
+            ]
             raise ValueError(f"Unknown optimizer name: {optimizer_name}", f"Supported optimizers: {supported}")

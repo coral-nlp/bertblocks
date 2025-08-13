@@ -1,21 +1,23 @@
-import functools
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from torch.nn.attention.flex_attention import _score_mod_signature
-
-
 import torch
 from einops import rearrange
 from torch import nn
-from torch.nn.attention.flex_attention import BlockMask, flex_attention
+from transformers.modeling_utils import is_flash_attn_2_available
 
 from polybert.modeling.config import PolyBertConfig
-from polybert.modeling.position import AlibiPositionalEncoding, RelativePositionalEncoding, RotaryPositionalEncoding
+
+if is_flash_attn_2_available():
+    from flash_attn import flash_attn_varlen_qkvpacked_func
+    from flash_attn.layers.rotary import RotaryEmbedding
+    from flash_attn.modules.mha import get_alibi_slopes
+
+    # Otherwise triggers graph break
+    torch._dynamo.config.capture_scalar_outputs = True
+else:
+    raise ImportError("This implementation currently critically depends on flash_attn. ")
 
 
 class PolyBertAttention(nn.Module):
-    """Extended PolyBERT attention mechanism with configurable positional encodings.
+    """PolyBERT attention with configurable positional encodings.
 
     This class implements a flexible attention mechanism using flex_attention for efficient
     computation. Applies block masking for document-level attention patterns.
@@ -27,12 +29,9 @@ class PolyBertAttention(nn.Module):
     Attributes:
         num_heads: Number of attention heads.
         head_dim: Dimension of each attention head.
-        scale: Scaling factor for attention scores (1/sqrt(head_dim)).
         proj: Fused linear projection for Q, K, V (3 * hidden_size output).
         ffwd: Output projection layer.
-        drop: Dropout layer for attention weights.
-        qk_mod: Query-key modification module (for positional encodings like RoPE).
-        score_mod: Score modification function (for positional biases like ALIBI).
+        dropout_p: Dropout probability for attention weights.
 
     """
 
@@ -58,80 +57,39 @@ class PolyBertAttention(nn.Module):
         # Fused linear layers for better performance
         self.proj = nn.Linear(config.hidden_size, 3 * config.hidden_size, bias=config.attn_proj_bias)
         self.ffwd = nn.Linear(config.hidden_size, config.hidden_size, bias=config.attn_out_bias)
-        self.drop = nn.Dropout(config.attn_dropout_prob) if config.attn_dropout_prob > 0 else nn.Identity()
-        # Positional embeddings (they apply at different stages of attention depending on type)
-        self.pos_emb_kind = config.pos_emb_kind
-        self.pos_emb_kwargs = config.pos_emb_kwargs
-        self.qk_mod = self._qk_mod(config.pos_emb_kind)
-        self._initialize_pos_buffers(config.pos_emb_kind)
-        self._cached_score_mod: _score_mod_signature | None = None
-        self._cached_device: str | torch.device | None = None
+        self.dropout_p = config.attn_dropout_prob
+        self._initialize_pos_buffers(config)
 
-    def _initialize_pos_buffers(self, pos_emb_kind: str) -> None:
+    def _initialize_pos_buffers(self, config: PolyBertConfig) -> None:
         """Initialize positional encoding buffers if needed.
 
         Args:
-            pos_emb_kind (str): Type of positional encoding to use.
+            config (PolyBertConfig): Model config.
 
         """
-        match pos_emb_kind:
+        self.rotary_emb = None
+        self.slopes = None
+        match config.pos_emb_kind:
             case "alibi":
-                slopes = torch.exp2(torch.arange(self.num_heads, dtype=torch.float32) * (-8.0 / self.num_heads))
-                self.register_buffer("alibi_slopes", slopes)
+                self.slopes = nn.Parameter(
+                    torch.tensor(get_alibi_slopes(config.num_attention_heads), dtype=torch.float32)
+                )
+            case "rope":
+                self.rotary_emb = RotaryEmbedding(
+                    dim=config.pos_emb_kwargs["dim"],
+                    base=config.pos_emb_kwargs["base"],
+                    scale_base=config.pos_emb_kwargs["scale"],
+                    # If scale_base is not None, this implements XPos (Sun et al., https://arxiv.org/abs/2212.10554).
+                    interleaved=config.pos_emb_kwargs["interleaved"],
+                )
             case _:
                 pass
-
-    @property
-    def score_mod(self) -> "_score_mod_signature | None":
-        """Get score modification function based on positional encoding type.
-
-        Caches the partial function and only recreates it when the device changes
-        to avoid performance overhead.
-
-        Returns:
-            _score_mod_signature | None: Score modification function compatible with flex_attention, or None
-            if no score modification is needed.
-
-        """
-        match self.pos_emb_kind:
-            case "alibi":
-                current_device = self.alibi_slopes.device
-                if self._cached_score_mod is None or self._cached_device != current_device:
-                    self._cached_score_mod = functools.partial(
-                        AlibiPositionalEncoding.score_mod, slopes=self.alibi_slopes
-                    )
-                    self._cached_device = current_device
-            case "relative":
-                self._cached_score_mod = RelativePositionalEncoding.score_mod
-            case _:
-                self._cached_score_mod = None
-        return self._cached_score_mod
-
-    def _qk_mod(self, qk_mod_type: str) -> "nn.Module":
-        """Initialize query-key modification module based on positional encoding type.
-
-        Args:
-            qk_mod_type (str): Type of positional encoding to use. Supported values:
-                        - "rope": Rotary Position Embedding
-                        - Any other value: No modification
-
-        Returns:
-            nn.Module: PyTorch module that modifies query-key projections, or Identity module
-            if no modification is needed.
-
-        """
-        match qk_mod_type:
-            case "rope":
-                return RotaryPositionalEncoding(**self.pos_emb_kwargs)
-            case _:
-                return nn.Identity()
 
     def forward(
         self,
         x: "torch.Tensor",
-        attention_mask: "BlockMask",
         cu_seqlens: "torch.Tensor",
-        output_attention: bool = False,
+        max_seq_len: int,
     ) -> "tuple[torch.Tensor, torch.Tensor | None]":
         """Forward pass of the PolyBERT attention mechanism.
 
@@ -140,43 +98,40 @@ class PolyBertAttention(nn.Module):
 
         Args:
             x (torch.Tensor, shape [batch_size, seq_len, hidden_size]): The input hidden state.
-            attention_mask (BlockMask): Flex attention block mask to ignore padding tokens.
             cu_seqlens (torch.Tensor, shape [batch_size + 1]): Cumulative sequence lengths of batch.
-            output_attention (bool): Whether to return attention weights along with the output.
+            max_seq_len (int): Maximum sequence length for positional encodings.
 
         Returns:
             tuple[torch.Tensor, torch.Tensor | None]: A tuple containing:
                 - output: Attention output tensor of shape [batch_size, seq_len, hidden_size].
-                - attention_weights: Log-sum-exp attention weights if output_attention is True,
-                  otherwise None. Shape [batch_size, num_heads, seq_len, seq_len].
+                - attention_weights: Log-sum-exp attention weights of shape [batch_size, num_heads, seq_len, seq_len].
 
         """
-        # Fused projection for Q, K, V
+        # Fused projection
         qkv = self.proj(x)
-        q, k, v = rearrange(qkv, "... (x d) -> x ... d", x=3)
-
-        # Reshape for multi-head attention
-        q = rearrange(q, "s (h d) -> 1 h s d", h=self.num_heads)
-        k = rearrange(k, "s (h d) -> 1 h s d", h=self.num_heads)
-        v = rearrange(v, "s (h d) -> 1 h s d", h=self.num_heads)
-
-        # Add qk-mod (RoPE) if applicable (will be nn.Identity otherwise)
-        q = self.qk_mod(q, cu_seqlens=cu_seqlens)
-        k = self.qk_mod(k, cu_seqlens=cu_seqlens)
-
-        # Apply flex attention kernel
-        flx_out = flex_attention(
-            q, k, v, block_mask=attention_mask, score_mod=self.score_mod, return_lse=output_attention
+        # Reshape for multihead attention
+        qkv = rearrange(qkv, "... (t h d) -> ... t h d", t=3, h=self.num_heads, d=self.head_dim)
+        if self.rotary_emb is not None:
+            qkv = self.rotary_emb(qkv, seqlen_offset=0, max_seqlen=None)
+        orig_dtype = qkv.dtype
+        qkv = qkv.to(torch.bfloat16)
+        # Apply attention kernel
+        x, _, w = flash_attn_varlen_qkvpacked_func(
+            qkv,
+            cu_seqlens.to(torch.int32),
+            max_seq_len,
+            dropout_p=self.dropout_p if self.training else 0.0,
+            # softmax_scale=self.config.scale,
+            causal=False,
+            # window_size=self.window_size,
+            softcap=0.0,  # 0.0 means deactivated
+            alibi_slopes=self.slopes,
+            # deterministic=self.deterministic,
+            return_attn_probs=True,
         )
-        if output_attention:
-            x, w = flx_out
-        else:
-            x, w = flx_out, None
-
         # Reshape back
-        x = rearrange(x, "1 h s d -> s (h d)")
-
+        x = x.to(orig_dtype)
+        x = rearrange(x, "... h d -> ... (h d)")
         # Output projection
         x = self.ffwd(x)
-
         return x, w

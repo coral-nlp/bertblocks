@@ -1,9 +1,13 @@
 import warnings
 from typing import TYPE_CHECKING
 
-from torch.nn.attention.flex_attention import BlockMask, create_block_mask
+from transformers.modeling_utils import is_flash_attn_2_available
 
-from polybert.modeling.padding import get_block_mask_mod, pad_sequence, unpad_sequence
+if is_flash_attn_2_available():
+    from flash_attn.bert_padding import pad_input, unpad_input
+else:
+    raise ImportError("This implementation currently critically depends on flash_attn. ")
+
 
 if TYPE_CHECKING:
     import torch
@@ -12,7 +16,7 @@ if TYPE_CHECKING:
 
 from torch import nn
 
-from polybert.modeling.attention import PolyBertAttention
+from polybert.modeling.attention_flash import PolyBertAttention
 from polybert.modeling.mlp import get_mlp
 from polybert.modeling.norms import get_norm
 
@@ -64,10 +68,9 @@ class PolyBertBlock(nn.Module):
     def forward(
         self,
         x: "torch.Tensor",
-        attention_mask: "BlockMask",
         cu_seqlens: "torch.Tensor",
-        output_attention: "bool | None" = False,
-    ) -> "tuple[torch.Tensor, torch.Tensor | None]":
+        max_seq_len: int,
+    ) -> "tuple[torch.Tensor, torch.Tensor]":
         """Forward pass through the transformer block.
 
         Processes input through attention and feed-forward layers with residual
@@ -76,23 +79,19 @@ class PolyBertBlock(nn.Module):
         Args:
             x (torch.Tensor, shape [batch_size, seq_len, hidden_size]): The hidden state of
                 the previous transformer block.
-            attention_mask (BlockMask): Block mask for efficient attention computation,
-                typically created using torch.nn.attention.flex_attention.create_block_mask.
             cu_seqlens (torch.Tensor, shape [batch_size + 1]): Cumulative sequence lengths of batch.
-            output_attention (bool | None): Whether to return attention weights.
-                Defaults to False.
+            max_seq_len (int): Maximum sequence length of batch.
 
         Returns:
             tuple[torch.Tensor, torch.Tensor | None]: A tuple containing:
                 - output (torch.Tensor): Transformed hidden state with same shape as input
-                - attention_weights (torch.Tensor | None): Attention weights if requested,
-                  None otherwise. Shape [batch_size, seq_len, seq_len]
+                - attention_weights (torch.Tensor | None): Attention weights. Shape [batch_size, seq_len, seq_len]
 
         """
         # Attention component
         residual = x
         x = self.pre_norm_attn(x)
-        x, w = self.attn(x, attention_mask, cu_seqlens, output_attention)
+        x, w = self.attn(x, cu_seqlens, max_seq_len)
         x = self.attn_drop(x)
         x = self.post_norm_attn(x + residual)
         # Feed-forward component
@@ -168,24 +167,22 @@ class PolyBertEncoder(nn.Module):
 
         # Unpad input sequence
         B, S, _ = x.shape
-        x, indices, cu_seqlens, max_seq_len = unpad_sequence(x, attention_mask=attention_mask)
-        block_mask = create_block_mask(
-            get_block_mask_mod(cu_seqlens), None, None, x.size(0), x.size(0), device=x.device
-        )
+        x, indices, cu_seqlens, max_seq_len, _ = unpad_input(x, attention_mask=attention_mask)
+
         # Keep track of states throughout block stack
         all_attentions = []
         all_hidden_states = [x]
         # Apply layers
         for block in self.blocks:
-            x, w = block(x, block_mask, cu_seqlens, output_attentions)
+            x, w = block(x, cu_seqlens, max_seq_len)
             if output_attentions:
                 all_attentions.append(w)
             if output_hidden_states:
                 all_hidden_states.append(x)
 
-        x = pad_sequence(x, indices, B, S)
+        x = pad_input(x, indices, B, S)
         if output_hidden_states:
-            all_hidden_states = [pad_sequence(h, indices, B, S) for h in all_hidden_states]
+            all_hidden_states = [pad_input(h, indices, B, S) for h in all_hidden_states]
 
         return (
             x,
