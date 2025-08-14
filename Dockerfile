@@ -1,10 +1,10 @@
 # pytorch/pytorch:2.7.1-cuda12.6-cudnn9-devel
 FROM pytorch/pytorch@sha256:639b8229ccfd8a3aa803cf49c33d6d6fe406750d79aaf723fe8c0eb1060d8cff
-# Install uv 0.8.2
-COPY --from=ghcr.io/astral-sh/uv@sha256:a7999d42cba0e5af47ef3c06ac310229c7f29c5314e35902f8353e8e170eeed1 /uv /bin/uv
+# Install uv 0.8.11
+COPY --from=ghcr.io/astral-sh/uv@sha256:8101ad825250a114e7bef89eefaa73c31e34e10ffbe5aff01562740bac97553c /uv /bin/uv
 # Change the working directory to the `app` directory
 WORKDIR /app
-# Set UV settings 
+# Set UV settings
 ENV UV_COMPILE_BYTECODE=1 UV_TORCH_BACKEND=auto UV_LINK_MODE=copy
 # Install dependencies; mount in cache/uv files to avoid extra copy layer
 RUN --mount=type=cache,target=/root/.cache/uv \
