@@ -4,8 +4,9 @@ FROM pytorch/pytorch@sha256:639b8229ccfd8a3aa803cf49c33d6d6fe406750d79aaf723fe8c
 COPY --from=ghcr.io/astral-sh/uv@sha256:a7999d42cba0e5af47ef3c06ac310229c7f29c5314e35902f8353e8e170eeed1 /uv /bin/uv
 # Change the working directory to the `app` directory
 WORKDIR /app
-# Flash attention needs is run with no-build-isolation, so this to be installed system-wide
-RUN pip install setuptools wheel ninja
+# Flash attention needs is run with no-build-isolation, so this needs to be installed system-wide
+RUN conda install -y setuptools wheel ninja packaging && \
+    conda clean -ya
 # Set UV settings for faster startup times
 ENV UV_COMPILE_BYTECODE=1
 # Install dependencies; mount in cache/uv files to avoid extra copy layer
