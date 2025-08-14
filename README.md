@@ -60,9 +60,9 @@ If you use this code in your research, please cite:
 
 ```bibtex
 @software{polybert,
-  title={PolyBERT - a comprehensive framework for exploring transformer encoders},
-  author={CORAL Project Contributors},
-  year={2025},
-  url={https://github.com/your-repo/encoder-architecture-search}
+  title  = {PolyBERT - a comprehensive framework for exploring transformer encoders},
+  author = {CORAL Project Contributors},
+  year   = {2025},
+  url    = {https://github.com/coral-nlp/polybert}
 }
 ```
