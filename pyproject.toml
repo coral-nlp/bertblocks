@@ -41,6 +41,15 @@ docs = [
     "myst-parser>=1.0.0",
 ]
 
+[build-system]
+requires = [
+    "setuptools>=61.0",
+    "wheel",
+    "packaging",
+    "ninja",
+]
+build-backend = "setuptools.build_meta"
+
 [tool.uv]
 default-groups = ["base", "pretraining"]
 no-build-isolation-package = ["flash-attn"]
