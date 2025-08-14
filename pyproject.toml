@@ -43,7 +43,7 @@ docs = [
 
 [tool.uv]
 default-groups = ["base", "pretraining"]
-no-build-isolation-package = ["flash-attn"]
+no-build-isolation-package = ["flash-attn", "setuptools"]
 
 [tool.isort]
 profile = "black"
