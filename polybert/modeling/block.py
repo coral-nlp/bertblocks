@@ -1,12 +1,4 @@
-import warnings
 from typing import TYPE_CHECKING
-
-from transformers.modeling_utils import is_flash_attn_2_available
-
-if is_flash_attn_2_available():
-    from flash_attn.bert_padding import pad_input, unpad_input
-else:
-    raise ImportError("This implementation currently critically depends on flash_attn. ")
 
 if TYPE_CHECKING:
     import torch
@@ -56,6 +48,7 @@ class PolyBertBlock(nn.Module):
 
         """
         super().__init__()
+        self.layer_id = layer_id
         self.attn = PolyBertAttention(config, layer_id=layer_id)
         self.ffwd = get_mlp(config)
         self.pre_norm_attn = get_norm(config) if config.norm_kind in ("pre", "both") else nn.Identity()
@@ -89,8 +82,12 @@ class PolyBertBlock(nn.Module):
 
         """
         # Attention component
-        residual = x
-        x = self.pre_norm_attn(x)
+        if self.layer_id == 0:
+            x = self.pre_norm_attn(x)
+            residual = x
+        else:
+            residual = x
+            x = self.pre_norm_attn(x)
         x, w = self.attn(x, cu_seqlens, max_seq_len)
         x = self.attn_drop(x)
         x = self.post_norm_attn(x + residual)
@@ -127,7 +124,8 @@ class PolyBertEncoder(nn.Module):
     def forward(
         self,
         x: "torch.Tensor",
-        attention_mask: "torch.Tensor | None" = None,
+        cu_seqlens: "torch.Tensor",
+        max_seq_len: int,
         output_attentions: "bool | None" = False,
         output_hidden_states: "bool | None" = False,
     ) -> "tuple[torch.Tensor, tuple[torch.Tensor, ...] | None, tuple[torch.Tensor, ...] | None]":
@@ -137,9 +135,9 @@ class PolyBertEncoder(nn.Module):
         prevent attention across document boundaries.
 
         Args:
-            x (torch.Tensor, shape [batch_size, seq_len, hidden_size]): Input embeddings tensor.
-            attention_mask (torch.Tensor | None, optional): Binary mask indicating which tokens
-                should be attended to.
+            x (torch.Tensor, shape [total_terms, hidden_size]): Unpadded input embeddings tensor.
+            cu_seqlens (torch.Tensor): Cumulative sequence lengths of batch.
+            max_seq_len (int): Maximum sequence length of batch.
             output_attentions (bool | None, optional): Whether to return attention weights from
                 all layers. Defaults to False.
             output_hidden_states (bool | None, optional): Whether to return hidden states from
@@ -156,28 +154,16 @@ class PolyBertEncoder(nn.Module):
                   if output_attentions=True, None otherwise. Shape depends on attention implementation.
 
         """
-        if output_attentions:
-            warnings.warn("Returning attentions is currently not supported, will return None.", stacklevel=2)
-            output_attentions = False
-
-        # Unpad input sequence
-        B, S, _ = x.shape
-        x, indices, cu_seqlens, max_seq_len, _ = unpad_input(x, attention_mask=attention_mask)
-
         # Keep track of states throughout block stack
         all_attentions = []
         all_hidden_states = [x]
         # Apply layers
         for block in self.blocks:
             x, w = block(x, cu_seqlens, max_seq_len)
-            if output_attentions:
-                all_attentions.append(w)
             if output_hidden_states:
                 all_hidden_states.append(x)
-
-        x = pad_input(x, indices, B, S)
-        if output_hidden_states:
-            all_hidden_states = [pad_input(h, indices, B, S) for h in all_hidden_states]
+            if output_attentions:
+                all_attentions.append(w)
 
         return (
             x,

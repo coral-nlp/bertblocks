@@ -7,13 +7,12 @@ from polybert.modeling.config import PolyBertConfig
 
 if is_flash_attn_2_available():
     from flash_attn import flash_attn_varlen_qkvpacked_func
-    from flash_attn.layers.rotary import RotaryEmbedding as FlashRotaryEmbedding
 
     # Otherwise triggers graph break
     torch._dynamo.config.capture_scalar_outputs = True
 
 
-from polybert.modeling.position import get_alibi_slopes
+from polybert.modeling.position import RotaryEmbedding, get_alibi_slopes
 
 
 def flash_attention_forward(
@@ -21,7 +20,7 @@ def flash_attention_forward(
     cu_seqlens: "torch.Tensor",
     max_seq_len: int,
     num_heads: int,
-    rotary_emb: "FlashRotaryEmbedding | None" = None,
+    rotary_emb: "RotaryEmbedding | None" = None,
     alibi_slopes: "torch.Tensor | None" = None,
     local_attention: tuple[int, int] = (-1, -1),
     dropout_p: float = 0.0,
@@ -29,7 +28,7 @@ def flash_attention_forward(
 ) -> "tuple[torch.Tensor, torch.Tensor]":
     """Forward pass for flash attention backend."""
     if rotary_emb is not None:
-        qkv = rotary_emb(qkv, seqlen_offset=0, max_seqlen=None, num_heads_q=num_heads)
+        qkv = rotary_emb(qkv, cu_seqlens, max_seq_len)
     orig_dtype = qkv.dtype
     qkv = qkv.to(torch.bfloat16)
     x, _, w = flash_attn_varlen_qkvpacked_func(
@@ -96,7 +95,12 @@ class PolyBertAttention(nn.Module):
         self.proj = nn.Linear(config.hidden_size, 3 * config.hidden_size, bias=config.attn_proj_bias)
         self.ffwd = nn.Linear(config.hidden_size, config.hidden_size, bias=config.attn_out_bias)
         self.dropout_p = config.attn_dropout_prob
-        self.local_attention = config.local_attention if layer_id % config.global_attn_every_n_layers != 0 else (-1, -1)
+        if config.global_attention_every_n_layers != 0:
+            self.local_attention = (
+                config.local_attention if layer_id % config.global_attention_every_n_layers != 0 else (-1, -1)
+            )
+        else:
+            self.local_attention = (-1, -1)
         self._initialize_pos_buffers(config, layer_id=layer_id)
         self._attention_fn = ATTENTION_FUNCTION[config.attn_implementation]
         self.deterministic = True
@@ -126,12 +130,11 @@ class PolyBertAttention(nn.Module):
                         else:
                             theta_local = config.pos_emb_kwargs.get("base", 10_000)
 
-                        self.rotary_emb = FlashRotaryEmbedding(
+                        self.rotary_emb = RotaryEmbedding(
                             dim=config.pos_emb_kwargs["dim"],
-                            base=theta_local if layer_id % config.global_attn_every_n_layers != 0 else theta_global,
-                            scale_base=config.pos_emb_kwargs.get("scale_base", None),
-                            # If scale_base is not None, this implements XPos (Sun et al., https://arxiv.org/abs/2212.10554).
-                            interleaved=config.pos_emb_kwargs.get("interleaved", False),
+                            base=theta_local
+                            if layer_id % config.global_attention_every_n_layers != 0
+                            else theta_global,
                         )
                     case _:
                         raise NotImplementedError("Only flash attention is supported as backend for rotary encodings.")

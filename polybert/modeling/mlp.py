@@ -50,7 +50,7 @@ class PolyBertGLU(nn.Module):
 
         """
         x, gate = self.Uprj(x).chunk(2, axis=-1)
-        x = x * self.actv(gate)
+        x = gate * self.actv(x)
         x = self.Dprj(x)
         return x
 

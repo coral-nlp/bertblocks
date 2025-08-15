@@ -3,6 +3,8 @@ import math
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
+from polybert.modeling.norms import get_norm
+
 if TYPE_CHECKING:
     pass
 
@@ -23,6 +25,7 @@ from polybert.modeling.config import PolyBertConfig
 from polybert.modeling.embedding import PolyBertEmbeddings
 from polybert.modeling.head import PolyBertPooler, get_prediction_head
 from polybert.modeling.loss import get_loss_function
+from polybert.modeling.padding import pad_output, unpad_input
 
 
 class PolyBertPreTrainedModel(PreTrainedModel):
@@ -150,8 +153,8 @@ class PolyBertModel(PolyBertPreTrainedModel):
         super().__init__(config)
         self.embd = PolyBertEmbeddings(config)
         self.encd = PolyBertEncoder(config)
+        self.norm = get_norm(config) if config.include_final_norm else nn.Identity()
         self.pool = PolyBertPooler(config) if add_pooling_layer else None
-        self.num_heads = config.num_attention_heads
         self.post_init()
 
     @property
@@ -208,8 +211,18 @@ class PolyBertModel(PolyBertPreTrainedModel):
                 - attentions: Attention weights from all layers (optional)
 
         """
+        # Unpad input sequence
+        B, S = input_ids.shape
+        with torch.no_grad():
+            input_ids, indices, cu_seqlens, max_seq_len = unpad_input(input_ids, attention_mask)
+
         x = self.embd(input_ids)
-        x, hidden_states, attentions = self.encd(x, attention_mask, output_attentions, output_hidden_states)
+        x, hidden_states, attentions = self.encd(x, cu_seqlens, max_seq_len, output_attentions, output_hidden_states)
+        x = self.norm(x)
+
+        x = pad_output(x, indices, B, S)
+        if output_hidden_states:
+            hidden_states = [pad_output(h, indices, B, S) for h in hidden_states]
 
         if self.pool is not None:
             pooler_output = self.pool(x)

@@ -28,6 +28,8 @@ def from_modernbert_model(pretrained_model_name_or_path: str, add_pooling_layer:
         mlp_out_bias=orig_config.mlp_bias,
         attn_proj_bias=orig_config.attention_bias,
         attn_out_bias=orig_config.attention_bias,
+        local_attention=(orig_config.local_attention // 2, orig_config.local_attention // 2),
+        global_attention_every_n_layers=orig_config.global_attn_every_n_layers,
         initializer_kind="trunc_normal",
         initializer_range=orig_config.initializer_range,
         initializer_cutoff_factor=4.0,
@@ -37,6 +39,7 @@ def from_modernbert_model(pretrained_model_name_or_path: str, add_pooling_layer:
         norm_fn="layer",
         norm_eps=orig_config.layer_norm_eps,
         norm_bias=orig_config.norm_bias,
+        include_final_norm=True,
         emb_dropout_prob=orig_config.embedding_dropout or 0.0,
         attn_dropout_prob=orig_config.attention_dropout or 0.0,
         hidden_dropout_prob=orig_config.mlp_dropout or 0.0,
@@ -79,5 +82,9 @@ def from_modernbert_model(pretrained_model_name_or_path: str, add_pooling_layer:
         poly_model.encd.blocks[i].pre_norm_ffwd.weight.data.copy_(orig_model.layers[i].mlp_norm.weight.data)
         if poly_config.norm_bias:
             poly_model.encd.blocks[i].pre_norm_ffwd.bias.data.copy_(orig_model.layers[i].mlp_norm.bias.data)
+
+        poly_model.norm.weight.data.copy_(orig_model.final_norm.weight.data)
+        if poly_config.norm_bias:
+            poly_model.norm.bias.data.copy_(orig_model.final_norm.bias.data)
 
     return poly_model
