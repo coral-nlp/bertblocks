@@ -7,13 +7,49 @@ from polybert.modeling.config import PolyBertConfig
 
 if is_flash_attn_2_available():
     from flash_attn import flash_attn_varlen_qkvpacked_func
-    from flash_attn.layers.rotary import RotaryEmbedding
-    from flash_attn.modules.mha import get_alibi_slopes
+    from flash_attn.layers.rotary import RotaryEmbedding as FlashRotaryEmbedding
 
     # Otherwise triggers graph break
     torch._dynamo.config.capture_scalar_outputs = True
-else:
-    raise ImportError("This implementation currently critically depends on flash_attn. ")
+
+
+from polybert.modeling.position import get_alibi_slopes
+
+
+def flash_attention_forward(
+    qkv: "torch.Tensor",
+    cu_seqlens: "torch.Tensor",
+    max_seq_len: int,
+    num_heads: int,
+    rotary_emb: "FlashRotaryEmbedding | None" = None,
+    alibi_slopes: "torch.Tensor | None" = None,
+    # local_attention: tuple[int, int] | None = None,
+    dropout_p: float = 0.0,
+    deterministic: bool = False,
+) -> "tuple[torch.Tensor, torch.Tensor]":
+    """Forward pass for flash attention backend."""
+    if rotary_emb is not None:
+        qkv = rotary_emb(qkv, seqlen_offset=0, max_seqlen=None, num_heads_q=num_heads)
+    orig_dtype = qkv.dtype
+    qkv = qkv.to(torch.bfloat16)
+    x, _, w = flash_attn_varlen_qkvpacked_func(
+        qkv,
+        cu_seqlens.to(torch.int32),
+        max_seq_len,
+        dropout_p=dropout_p,
+        causal=False,
+        softcap=0.0,  # 0.0 means deactivated
+        alibi_slopes=alibi_slopes,
+        deterministic=deterministic,
+        return_attn_probs=True,
+    )
+    x = x.to(orig_dtype)
+    return x, w
+
+
+ATTENTION_FUNCTION = {
+    "fa2": flash_attention_forward,
+}
 
 
 class PolyBertAttention(nn.Module):
@@ -59,6 +95,8 @@ class PolyBertAttention(nn.Module):
         self.ffwd = nn.Linear(config.hidden_size, config.hidden_size, bias=config.attn_out_bias)
         self.dropout_p = config.attn_dropout_prob
         self._initialize_pos_buffers(config)
+        self._attention_fn = ATTENTION_FUNCTION[config.attn_implementation]
+        self.deterministic = True
 
     def _initialize_pos_buffers(self, config: PolyBertConfig) -> None:
         """Initialize positional encoding buffers if needed.
@@ -75,13 +113,17 @@ class PolyBertAttention(nn.Module):
                     torch.tensor(get_alibi_slopes(config.num_attention_heads), dtype=torch.float32)
                 )
             case "rope":
-                self.rotary_emb = RotaryEmbedding(
-                    dim=config.pos_emb_kwargs["dim"],
-                    base=config.pos_emb_kwargs["base"],
-                    scale_base=config.pos_emb_kwargs["scale"],
-                    # If scale_base is not None, this implements XPos (Sun et al., https://arxiv.org/abs/2212.10554).
-                    interleaved=config.pos_emb_kwargs["interleaved"],
-                )
+                match config.attn_implementation:
+                    case "fa2":
+                        self.rotary_emb = FlashRotaryEmbedding(
+                            dim=config.pos_emb_kwargs["dim"],
+                            base=config.pos_emb_kwargs.get("base", 10_000),
+                            scale_base=config.pos_emb_kwargs.get("scale_base", None),
+                            # If scale_base is not None, this implements XPos (Sun et al., https://arxiv.org/abs/2212.10554).
+                            interleaved=config.pos_emb_kwargs.get("interleaved", False),
+                        )
+                    case _:
+                        raise NotImplementedError("Only flash attention is supported as backend for rotary encodings.")
             case _:
                 pass
 
@@ -111,26 +153,18 @@ class PolyBertAttention(nn.Module):
         qkv = self.proj(x)
         # Reshape for multihead attention
         qkv = rearrange(qkv, "... (t h d) -> ... t h d", t=3, h=self.num_heads, d=self.head_dim)
-        if self.rotary_emb is not None:
-            qkv = self.rotary_emb(qkv, seqlen_offset=0, max_seqlen=None)
-        orig_dtype = qkv.dtype
-        qkv = qkv.to(torch.bfloat16)
-        # Apply attention kernel
-        x, _, w = flash_attn_varlen_qkvpacked_func(
+        # Apply attention mixer
+        x, w = self._attention_fn(
             qkv,
-            cu_seqlens.to(torch.int32),
+            cu_seqlens,
             max_seq_len,
-            dropout_p=self.dropout_p if self.training else 0.0,
-            # softmax_scale=self.config.scale,
-            causal=False,
-            # window_size=self.window_size,
-            softcap=0.0,  # 0.0 means deactivated
+            num_heads=self.num_heads,
+            rotary_emb=self.rotary_emb,
             alibi_slopes=self.slopes,
-            # deterministic=self.deterministic,
-            return_attn_probs=True,
+            dropout_p=self.dropout_p if self.training else 0.0,
+            deterministic=self.deterministic,
         )
-        # Reshape back
-        x = x.to(orig_dtype)
+        # Reshape back to fuse heads
         x = rearrange(x, "... h d -> ... (h d)")
         # Output projection
         x = self.ffwd(x)

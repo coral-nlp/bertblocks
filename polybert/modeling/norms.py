@@ -99,7 +99,7 @@ def get_norm(config: "PolyBertConfig") -> "nn.Module":
             except KeyError:
                 raise ValueError("When using GroupNorm, `group_size` must be specified in `config.norm_params`.")
         case "layer":
-            return LayerNorm(config.hidden_size, config.norm_eps)
+            return LayerNorm(config.hidden_size, config.norm_eps, bias=config.norm_bias)
         case "rms":
             return RMSNorm(config.hidden_size, config.norm_eps)
         case "deep":

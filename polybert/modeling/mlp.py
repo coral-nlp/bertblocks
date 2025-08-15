@@ -130,4 +130,4 @@ def get_mlp(config: "PolyBertConfig") -> "nn.Module":
         return PolyBertGLU(config)
     else:
         supported_types = ["mlp", "glu"]
-        raise ValueError(f"Unknown MLP type '{mlp_type}'. " f"Supported types: {', '.join(supported_types)}")
+        raise ValueError(f"Unknown MLP type '{mlp_type}'. Supported types: {', '.join(supported_types)}")
