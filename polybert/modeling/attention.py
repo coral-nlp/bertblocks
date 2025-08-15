@@ -23,7 +23,7 @@ def flash_attention_forward(
     num_heads: int,
     rotary_emb: "FlashRotaryEmbedding | None" = None,
     alibi_slopes: "torch.Tensor | None" = None,
-    # local_attention: tuple[int, int] | None = None,
+    local_attention: tuple[int, int] = (-1, -1),
     dropout_p: float = 0.0,
     deterministic: bool = False,
 ) -> "tuple[torch.Tensor, torch.Tensor]":
@@ -39,6 +39,7 @@ def flash_attention_forward(
         dropout_p=dropout_p,
         causal=False,
         softcap=0.0,  # 0.0 means deactivated
+        window_size=local_attention,
         alibi_slopes=alibi_slopes,
         deterministic=deterministic,
         return_attn_probs=True,
@@ -71,7 +72,7 @@ class PolyBertAttention(nn.Module):
 
     """
 
-    def __init__(self, config: "PolyBertConfig"):
+    def __init__(self, config: "PolyBertConfig", layer_id: int):
         """Initialize the PolyBERT attention mechanism.
 
         Args:
@@ -83,6 +84,7 @@ class PolyBertAttention(nn.Module):
                 - attn_out_bias: Whether to include bias in output projection
                 - attn_dropout_prob: Dropout probability for attention weights
                 - pos_emb_kind: Type of positional embedding ("alibi", "rope", "relative", etc.)
+            layer_id (int): layer id indicating index in the encoder stack.
 
         """
         super().__init__()
@@ -94,30 +96,39 @@ class PolyBertAttention(nn.Module):
         self.proj = nn.Linear(config.hidden_size, 3 * config.hidden_size, bias=config.attn_proj_bias)
         self.ffwd = nn.Linear(config.hidden_size, config.hidden_size, bias=config.attn_out_bias)
         self.dropout_p = config.attn_dropout_prob
-        self._initialize_pos_buffers(config)
+        self.local_attention = config.local_attention if layer_id % config.global_attn_every_n_layers != 0 else (-1, -1)
+        self._initialize_pos_buffers(config, layer_id=layer_id)
         self._attention_fn = ATTENTION_FUNCTION[config.attn_implementation]
         self.deterministic = True
 
-    def _initialize_pos_buffers(self, config: PolyBertConfig) -> None:
+    def _initialize_pos_buffers(self, config: PolyBertConfig, layer_id: int) -> None:
         """Initialize positional encoding buffers if needed.
 
         Args:
             config (PolyBertConfig): Model config.
+            layer_id (int): layer id indicating index in the encoder stack.
 
         """
         self.rotary_emb = None
         self.slopes = None
         match config.pos_emb_kind:
             case "alibi":
-                self.slopes = nn.Parameter(
-                    torch.tensor(get_alibi_slopes(config.num_attention_heads), dtype=torch.float32)
-                )
+                self.slopes = nn.Parameter(get_alibi_slopes(config.num_attention_heads))
             case "rope":
                 match config.attn_implementation:
                     case "fa2":
+                        if "base_global" in config.pos_emb_kwargs:
+                            theta_global = config.pos_emb_kwargs["base_global"]
+                        else:
+                            theta_global = config.pos_emb_kwargs.get("base", 10_000)
+                        if "base_local" in config.pos_emb_kwargs:
+                            theta_local = config.pos_emb_kwargs["base_local"]
+                        else:
+                            theta_local = config.pos_emb_kwargs.get("base", 10_000)
+
                         self.rotary_emb = FlashRotaryEmbedding(
                             dim=config.pos_emb_kwargs["dim"],
-                            base=config.pos_emb_kwargs.get("base", 10_000),
+                            base=theta_local if layer_id % config.global_attn_every_n_layers != 0 else theta_global,
                             scale_base=config.pos_emb_kwargs.get("scale_base", None),
                             # If scale_base is not None, this implements XPos (Sun et al., https://arxiv.org/abs/2212.10554).
                             interleaved=config.pos_emb_kwargs.get("interleaved", False),
@@ -161,6 +172,7 @@ class PolyBertAttention(nn.Module):
             num_heads=self.num_heads,
             rotary_emb=self.rotary_emb,
             alibi_slopes=self.slopes,
+            local_attention=self.local_attention,
             dropout_p=self.dropout_p if self.training else 0.0,
             deterministic=self.deterministic,
         )

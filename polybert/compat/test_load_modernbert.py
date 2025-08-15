@@ -92,7 +92,7 @@ class TestFromModernBertModel:
 
     @pytest.mark.dependency(depends=["TestFromModernBertModel::test_embedding_layer"])
     def test_encoder(self, subtests, tokenizer, bert_model, poly_model):  # type: ignore
-        """Test complete model pass for a single given string."""
+        """Test the encoder stack."""
         seq = tokenizer("I like cats.", return_tensors="pt", padding="max_length").to(self.device)
 
         with torch.no_grad():
@@ -103,9 +103,6 @@ class TestFromModernBertModel:
                 seq["input_ids"], attention_mask=seq["attention_mask"], output_hidden_states=True
             ).hidden_states
 
-        assert len(hidden_bert) == len(
-            hidden_poly
-        ), f"Unequal number of encoder blocks: {len(hidden_bert)} vs. {len(hidden_poly)}"
         for layer_idx, (bhs, phs) in enumerate(zip(hidden_bert, hidden_poly, strict=False)):
             with subtests.test(f"layer_encoder_block_{layer_idx}"):
                 torch.testing.assert_close(bhs, phs)

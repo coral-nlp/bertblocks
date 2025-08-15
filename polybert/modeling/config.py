@@ -26,6 +26,7 @@ class PolyBertConfig(PretrainedConfig):
         mlp_out_bias: bool = True,
         attn_proj_bias: bool = True,
         attn_out_bias: bool = True,
+        local_attention: tuple[int, int] = (-1, -1),
         initializer_kind: Literal[
             "trunc_normal", "kaiming_normal", "kaiming_uniform", "xavier_normal", "xavier_uniform"
         ] = "trunc_normal",
@@ -88,6 +89,8 @@ class PolyBertConfig(PretrainedConfig):
             mlp_out_bias: Whether to include bias terms in the output projection of MLP layers.
             attn_proj_bias: Whether to include bias terms in the qkv projection of attention layers.
             attn_out_bias: Whether to include bias terms in the output projection of attention layers.
+            local_attention: Whether to include local attention mechanism. Default (-1, -1) means global attention.
+            global_attention_every_n_layers: The layer step size for global attention.
             initializer_kind: The initialization method for weights. Determines the type of
                 distribution random weights are sampled from for initialization.
                 Defaults to a truncated normal distribution.
@@ -214,6 +217,7 @@ class PolyBertConfig(PretrainedConfig):
         # Attention parameters
         self.attn_proj_bias = attn_proj_bias
         self.attn_out_bias = attn_out_bias
+        self.local_attention = local_attention
         # Initialization parameters
         self.initializer_kind = initializer_kind
         self.initializer_range = initializer_range

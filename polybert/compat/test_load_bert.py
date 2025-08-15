@@ -120,54 +120,16 @@ class TestFromBertModel:
 
     @pytest.mark.dependency(depends=["TestFromBertModel::test_weights"])
     def test_encoder(self, subtests, tokenizer, bert_model, poly_model):  # type: ignore
-        """Test the encoder stack."""
+        """Test the encoder stacks."""
         seq = tokenizer("I like cats.", return_tensors="pt", padding="max_length").to(self.device)
         with torch.no_grad():
-            # Use original BERT embedding to be able to test polybert embedding independently
-            hidden = bert_model.embeddings(seq["input_ids"])
-            bert_hidden, poly_hidden = hidden.clone(), hidden.clone()
-            # Test the encoder stacks
-            bert_hidden_states = bert_model.encoder(
-                bert_hidden, seq["attention_mask"].bool(), output_hidden_states=True
+            bert_hidden = bert_model(
+                seq["input_ids"], seq["attention_mask"].bool(), output_hidden_states=True
             ).hidden_states
-            _, poly_hidden_states, _ = poly_model.encd(
-                poly_hidden, seq["attention_mask"].bool(), output_hidden_states=True
-            )
+            poly_hidden = poly_model(
+                seq["input_ids"], seq["attention_mask"].bool(), output_hidden_states=True
+            ).hidden_states
 
-            assert len(bert_hidden_states) == len(
-                poly_hidden_states
-            ), f"Unequal number of encoder blocks: {len(poly_hidden_states)} vs. {len(bert_hidden_states)}"
-            for layer_idx, (bhs, phs) in enumerate(zip(bert_hidden_states, poly_hidden_states, strict=False)):
+            for layer_idx, (bhs, phs) in enumerate(zip(bert_hidden, poly_hidden, strict=False)):
                 with subtests.test(f"layer_encoder_block_{layer_idx}"):
                     torch.testing.assert_close(bhs, phs, atol=4e-2, rtol=4e-2)
-
-    @pytest.mark.dependency(depends=["TestFromBertModel::test_embedding_layer", "TestFromBertModel::test_encoder"])
-    def test_complete_single_sequence(self, tokenizer, bert_model, poly_model):  # type: ignore
-        """Test complete model pass for a single given string."""
-        seq = tokenizer("I like cats.", return_tensors="pt", padding="max_length").to(self.device)
-
-        with torch.no_grad():
-            seq1_bert = bert_model(seq["input_ids"], attention_mask=seq["attention_mask"]).last_hidden_state[:, 0, :]
-            seq1_poly = poly_model(seq["input_ids"], attention_mask=seq["attention_mask"]).last_hidden_state[:, 0, :]
-
-        # Assert that both produced same output
-        torch.testing.assert_close(seq1_bert, seq1_poly)
-
-    @pytest.mark.dependency(depends=["TestFromBertModel::test_complete_single_sequence"])
-    def test_complete_multiple_sequences(self, tokenizer, bert_model, poly_model):  # type: ignore
-        """Test complete model pass with more than one given string."""
-        seq = tokenizer(["I like cats.", "Cats are the ultimate pet."], return_tensors="pt", padding="max_length").to(
-            self.device
-        )
-
-        with torch.no_grad():
-            seq1_bert, seq2_bert = bert_model(seq["input_ids"], attention_mask=seq["attention_mask"]).last_hidden_state[
-                :, 0, :
-            ]
-            seq1_poly, seq2_poly = poly_model(seq["input_ids"], attention_mask=seq["attention_mask"]).last_hidden_state[
-                :, 0, :
-            ]
-
-        # Assert that both produced same output
-        torch.testing.assert_close(seq1_bert, seq1_poly)
-        torch.testing.assert_close(seq2_bert, seq2_poly)

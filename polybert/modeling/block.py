@@ -8,7 +8,6 @@ if is_flash_attn_2_available():
 else:
     raise ImportError("This implementation currently critically depends on flash_attn. ")
 
-
 if TYPE_CHECKING:
     import torch
 
@@ -41,7 +40,7 @@ class PolyBertBlock(nn.Module):
 
     """
 
-    def __init__(self, config: "PolyBertConfig"):
+    def __init__(self, config: "PolyBertConfig", layer_id: int):
         """Initialize a PolyBert transformer block.
 
         Sets up the attention mechanism, feed-forward network, and normalization
@@ -53,10 +52,11 @@ class PolyBertBlock(nn.Module):
                 - norm_kind: When to apply normalization ("pre", "post", "both", "none")
                 - attn_dropout_prob: Dropout probability for attention weights
                 - hidden_dropout_prob: Dropout probability for hidden layer outputs
+            layer_id (int): layer id indicating index in the encoder stack.
 
         """
         super().__init__()
-        self.attn = PolyBertAttention(config)
+        self.attn = PolyBertAttention(config, layer_id=layer_id)
         self.ffwd = get_mlp(config)
         self.pre_norm_attn = get_norm(config) if config.norm_kind in ("pre", "both") else nn.Identity()
         self.pre_norm_ffwd = get_norm(config) if config.norm_kind in ("pre", "both") else nn.Identity()
@@ -106,12 +106,7 @@ class PolyBertBlock(nn.Module):
 class PolyBertEncoder(nn.Module):
     """Multi-layer transformer encoder for PolyBert.
 
-    This class stacks multiple PolyBertBlock instances to create a deep transformer
-    encoder. It handles sequence packing for efficient processing of variable-length
-    sequences and supports outputting intermediate hidden states and attention weights.
-
-    The encoder uses sequence packing to handle batches with sequences of different
-    lengths efficiently, reducing computational overhead from padding tokens.
+    Uses sequence packing.
     """
 
     def __init__(self, config: "PolyBertConfig"):
@@ -126,7 +121,7 @@ class PolyBertEncoder(nn.Module):
 
         """
         super().__init__()
-        self.blocks = nn.ModuleList([PolyBertBlock(config) for _ in range(config.num_blocks)])
+        self.blocks = nn.ModuleList([PolyBertBlock(config, layer_id) for layer_id in range(config.num_blocks)])
         self.num_heads = config.num_attention_heads
 
     def forward(

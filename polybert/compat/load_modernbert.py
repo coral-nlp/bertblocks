@@ -17,7 +17,11 @@ def from_modernbert_model(pretrained_model_name_or_path: str, add_pooling_layer:
         intermediate_size=orig_config.intermediate_size,
         num_attention_heads=orig_config.num_attention_heads,
         pos_emb_kind="rope",
-        pos_emb_kwargs={"base": orig_config.global_rope_theta, "scale": 1},
+        pos_emb_kwargs={
+            "base_global": orig_config.global_rope_theta,
+            "base_local": orig_config.local_rope_theta,
+            "scale": 1,
+        },
         add_token_type_emb=False,
         mlp_type="glu",
         mlp_in_bias=orig_config.mlp_bias,
