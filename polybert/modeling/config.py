@@ -41,6 +41,7 @@ class PolyBertConfig(PretrainedConfig):
         hidden_dropout_prob: float = 0.1,
         attn_dropout_prob: float = 0.1,
         classifier_dropout_prob: float = 0.1,
+        attn_implementation: Literal["fa2", "sdpa"] = "fa2",
         problem_type: Literal["regression", "single_label_classification", "multi_label_classification"] = "regression",
         num_labels: int = 2,
         **kwargs: Any,
@@ -124,6 +125,8 @@ class PolyBertConfig(PretrainedConfig):
             classifier_dropout_prob: Dropout probability for the classification head. Applied to the
                 pooled representation before the final classification layer. Helps prevent
                 overfitting in downstream tasks. Must be between 0.0 and 1.0.
+            attn_implementation: Which backend implementation of attention to use; can be "fa2" for FlashAttention2,
+                or "sdpa" for native torch.
             problem_type: The problem type for automatic loss selection (HuggingFace standard).
                 Automatically selects appropriate loss functions: "regression" (MSE loss for
                 continuous targets), "single_label_classification" (CrossEntropy loss for
@@ -228,6 +231,8 @@ class PolyBertConfig(PretrainedConfig):
         self.hidden_dropout_prob = hidden_dropout_prob
         self.attn_dropout_prob = attn_dropout_prob
         self.classifier_dropout = classifier_dropout_prob
+        # Implementation details
+        self.attn_implementation = attn_implementation
         # Downstream task parameters
         self.problem_type = problem_type
         self.num_labels = num_labels

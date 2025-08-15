@@ -27,4 +27,4 @@ def get_loss_function(
         return nn.BCEWithLogitsLoss()
     else:
         supported_types = ["regression", "single_label_classification", "multi_label_classification"]
-        raise ValueError(f"Unknown problem type '{problem_type}'. " f"Supported types: {', '.join(supported_types)}")
+        raise ValueError(f"Unknown problem type '{problem_type}'. Supported types: {', '.join(supported_types)}")
