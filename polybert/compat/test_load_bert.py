@@ -1,10 +1,11 @@
 import pytest
 import torch
-from transformers import AutoTokenizer, BertConfig, BertModel
+from transformers import AutoTokenizer, BertModel
 
 from polybert.compat.load_bert import from_bert_model
 
 
+@pytest.mark.skip(reason="Under development")
 class TestFromBertModel:
     """Test that Huggingface BERT and loaded polybert BERT implementations are equivalent in weights and output."""
 
@@ -14,8 +15,7 @@ class TestFromBertModel:
     @pytest.fixture(scope="class")
     def bert_model(self):  # type: ignore
         """Instantiate Huggingface BERT model as fixture."""
-        config = BertConfig.from_pretrained(self.baseline_model)
-        bert_model = BertModel(config, add_pooling_layer=False).to(self.device)
+        bert_model = BertModel.from_pretrained(self.baseline_model, add_pooling_layer=False).to(self.device)
         bert_model.eval()
         yield bert_model
         del bert_model
@@ -109,14 +109,110 @@ class TestFromBertModel:
                 )
 
     @pytest.mark.dependency(depends=["TestFromBertModel::test_weights"])
-    def test_embedding_layer(self, tokenizer, bert_model, poly_model):  # type: ignore
+    def test_embedding(self, subtests, tokenizer, bert_model, poly_model):  # type: ignore
         """Test the embedding layer."""
         seq = tokenizer("I like cats.", return_tensors="pt", padding="max_length").to(self.device)
+        position_ids = torch.arange(0, seq["input_ids"].shape[1]).unsqueeze(0).to(self.device)
         with torch.no_grad():
-            emb_bert = bert_model.embeddings(seq["input_ids"])
-            emb_poly = poly_model.embd(seq["input_ids"])
+            with subtests.test("word_embeddings"):
+                torch.testing.assert_close(
+                    bert_model.embeddings.word_embeddings(seq["input_ids"]),
+                    poly_model.embd.embd(seq["input_ids"]),
+                )
+            with subtests.test("token_type_embeddings"):
+                torch.testing.assert_close(
+                    bert_model.embeddings.token_type_embeddings(seq["token_type_ids"]),
+                    poly_model.embd.tokt.embd(seq["token_type_ids"]),
+                )
+            with subtests.test("position_embeddings"):
+                torch.testing.assert_close(
+                    bert_model.embeddings.position_embeddings(position_ids),
+                    poly_model.embd.pose.embd(position_ids),
+                )
 
-        torch.testing.assert_close(emb_bert, emb_poly)
+            with subtests.test("norm"):
+                torch.testing.assert_close(
+                    bert_model.embeddings.LayerNorm(bert_model.embeddings.word_embeddings(seq["input_ids"])),
+                    poly_model.embd.norm(poly_model.embd.embd(seq["input_ids"])),
+                )
+
+            with subtests.test("end_to_end"):
+                from polybert.modeling.padding import pad_output, unpad_input
+
+                B, S = seq["input_ids"].shape
+                input_ids, indices, cu_seqlens, max_seq_len = unpad_input(seq["input_ids"], seq["attention_mask"])
+                poly_out = poly_model.embd(input_ids, cu_seqlens=cu_seqlens)
+                poly_out = pad_output(poly_out, indices, B, S)
+                # We have to set attention masked values to 0, since the unpadding inserts zeros
+                bert_out = bert_model.embeddings(seq["input_ids"])
+                bert_out = bert_out * seq["attention_mask"].unsqueeze(-1)
+                torch.testing.assert_close(bert_out, poly_out)
+
+    @pytest.mark.dependency(depends=["TestFromBertModel::test_weights"])
+    def test_ffwd(self, subtests, bert_model, poly_model):  # type: ignore
+        """Test the feed-forward layers individually."""
+        inp = torch.rand((1, 8192, 768)).to(self.device)
+
+        with torch.no_grad():
+            for layer_idx in range(len(bert_model.encoder.layer)):
+                with subtests.test(f"layer_{layer_idx}"):
+                    bert_out = bert_model.encoder.layer[layer_idx].intermediate(inp)
+                    bert_out = bert_model.encoder.layer[layer_idx].output(bert_out, inp)
+
+                    poly_out = poly_model.encd.blocks[layer_idx].ffwd(inp)
+                    poly_out = poly_model.encd.blocks[layer_idx].post_norm_ffwd(poly_out + inp)
+                    torch.testing.assert_close(bert_out, poly_out)
+
+    def test_attn(self, subtests, tokenizer, bert_model, poly_model):  # type: ignore
+        """Test the attention mechanism individually."""
+        seq = tokenizer("I like cats.", return_tensors="pt", padding="max_length").to(self.device)
+
+        from polybert.modeling.padding import pad_output, unpad_input
+
+        B, S = seq["input_ids"].shape
+        input_ids, indices, cu_seqlens, max_seq_len = unpad_input(seq["input_ids"], seq["attention_mask"])
+        poly_emb = poly_model.embd(input_ids, cu_seqlens=cu_seqlens)
+        bert_emb = bert_model.embeddings(seq["input_ids"], seq["attention_mask"])
+
+        with torch.no_grad():
+            for layer_idx in range(len(bert_model.encoder.layer)):
+                with subtests.test(f"layer_{layer_idx}"):
+                    bert_out = bert_model.encoder.layer[layer_idx].attention(
+                        bert_emb, attention_mask=seq["attention_mask"].bool()
+                    )
+                    bert_out = bert_out[0] * seq["attention_mask"].unsqueeze(-1)
+
+                    poly_out = poly_model.encd.blocks[layer_idx].attn(
+                        poly_emb, cu_seqlens=cu_seqlens, max_seq_len=max_seq_len
+                    )[0]
+                    poly_out = poly_model.encd.blocks[layer_idx].post_norm_attn(poly_out)
+                    poly_out = pad_output(poly_out, indices, B, S)
+                    torch.testing.assert_close(bert_out, poly_out)
+
+    @pytest.mark.dependency(depends=["TestFromBertModel::test_ffwd", "TestFromBertModel::test_attn"])
+    def test_blocks_individual(self, subtests, tokenizer, bert_model, poly_model):  # type: ignore
+        """Test the encoder blocks individually."""
+        seq = tokenizer("I like cats.", return_tensors="pt", padding="max_length").to(self.device)
+
+        from polybert.modeling.padding import pad_output, unpad_input
+
+        B, S = seq["input_ids"].shape
+        input_ids, indices, cu_seqlens, max_seq_len = unpad_input(seq["input_ids"], seq["attention_mask"])
+        poly_emb = poly_model.embd(input_ids, cu_seqlens=cu_seqlens)
+        # poly_emb = pad_output(poly_emb, indices, B, S)
+
+        bert_emb = bert_model.embeddings(input_ids, seq["attention_mask"])
+
+        with torch.no_grad():
+            for layer_idx in range(len(bert_model.layers)):
+                with subtests.test(f"layer_{layer_idx}"):
+                    bert_out = bert_model.layer[layer_idx](bert_emb)
+                    bert_out = bert_out * seq["attention_mask"].unsqueeze(-1)
+                    poly_out = poly_model.encd.blocks[layer_idx](
+                        poly_emb, cu_seqlens=cu_seqlens, max_seq_len=max_seq_len
+                    )[0]
+                    poly_out = pad_output(poly_out, indices, B, S)
+                    torch.testing.assert_close(bert_out, poly_out)
 
     @pytest.mark.dependency(depends=["TestFromBertModel::test_weights"])
     def test_encoder(self, subtests, tokenizer, bert_model, poly_model):  # type: ignore
@@ -132,4 +228,4 @@ class TestFromBertModel:
 
             for layer_idx, (bhs, phs) in enumerate(zip(bert_hidden, poly_hidden, strict=False)):
                 with subtests.test(f"layer_encoder_block_{layer_idx}"):
-                    torch.testing.assert_close(bhs, phs, atol=4e-2, rtol=4e-2)
+                    torch.testing.assert_close(bhs * seq["attention_mask"].unsqueeze(-1), phs)

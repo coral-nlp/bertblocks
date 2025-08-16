@@ -1,6 +1,6 @@
 import pytest
 import torch
-from transformers import AutoTokenizer, ModernBertModel
+from transformers import AutoTokenizer, ModernBertConfig, ModernBertModel
 
 from polybert.compat.load_modernbert import from_modernbert_model
 
@@ -14,7 +14,10 @@ class TestFromModernBertModel:
     @pytest.fixture(scope="class")
     def bert_model(self):  # type: ignore
         """Instantiate Huggingface BERT model as fixture."""
-        bert_model = ModernBertModel.from_pretrained(self.baseline_model)
+        config = ModernBertConfig.from_pretrained(self.baseline_model)
+        config.deterministic_flash_attn = True
+        config.reference_compile = False
+        bert_model = ModernBertModel.from_pretrained(self.baseline_model, config=config)
         bert_model = bert_model.to(self.device)
         bert_model.eval()
         yield bert_model
@@ -208,6 +211,37 @@ class TestFromModernBertModel:
                 with subtests.test(f"layer_{layer_idx}"):
                     torch.testing.assert_close(bert_out, poly_out)
 
+    def test_encoder(self, subtests, tokenizer, bert_model, poly_model):  # type: ignore
+        """Test the encoder blocks sequentially."""
+        seq = tokenizer(
+            [
+                "The cat sat on the mat.",
+                "He didn't know why she left.",
+                "Can you believe it's already August?",
+                "Running late, she skipped breakfast.",
+                "Wow, that's an incredibly fast response!",
+            ],
+            return_tensors="pt",
+            padding="max_length",
+        ).to(self.device)
+
+        from polybert.modeling.padding import unpad_input
+
+        with torch.no_grad():
+            input_ids, _, cu_seqlens, max_seq_len = unpad_input(seq["input_ids"], seq["attention_mask"])
+            bert_out = bert_model.embeddings(input_ids)
+            poly_out = poly_model.embd(input_ids)
+
+            for layer_idx in range(len(bert_model.layers)):
+                bert_out = bert_model.layers[layer_idx](bert_out, cu_seqlens=cu_seqlens, max_seqlen=max_seq_len)[0]
+
+            poly_out = poly_model.encd(poly_out, cu_seqlens=cu_seqlens, max_seq_len=max_seq_len)[0]
+
+            bert_out = bert_model.final_norm(poly_out)
+            poly_out = poly_model.norm(poly_out)
+
+        torch.testing.assert_close(bert_out, poly_out)
+
     @pytest.mark.dependency(
         depends=["TestFromModernBertModel::test_embedding", "TestFromModernBertModel::test_blocks_sequential"]
     )
@@ -226,9 +260,11 @@ class TestFromModernBertModel:
         ).to(self.device)
 
         with torch.no_grad():
-            hidden_bert = bert_model(seq["input_ids"], attention_mask=seq["attention_mask"])
-            hidden_poly = poly_model(seq["input_ids"], attention_mask=seq["attention_mask"])
+            hidden_bert = bert_model.forward(seq["input_ids"], attention_mask=seq["attention_mask"])
+            hidden_poly = poly_model.forward(seq["input_ids"], attention_mask=seq["attention_mask"])
 
+        print(hidden_bert)
+        print(hidden_poly)
         torch.testing.assert_close(hidden_bert.last_hidden_state, hidden_poly.last_hidden_state)
 
         """

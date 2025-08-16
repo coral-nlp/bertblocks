@@ -141,7 +141,7 @@ class PolyBertModel(PolyBertPreTrainedModel):
 
     """
 
-    def __init__(self, config: "PolyBertConfig", add_pooling_layer: bool = True) -> None:
+    def __init__(self, config: "PolyBertConfig", add_pooling_layer: bool = False) -> None:
         """Initialize the PolyBert model.
 
         Args:
@@ -189,6 +189,7 @@ class PolyBertModel(PolyBertPreTrainedModel):
         self,
         input_ids: "torch.Tensor",
         attention_mask: "torch.Tensor | None" = None,
+        token_type_ids: "torch.Tensor | None" = None,
         output_attentions: "bool" = False,
         output_hidden_states: "bool" = False,
     ) -> "BaseModelOutput | BaseModelOutputWithPooling":
@@ -198,6 +199,7 @@ class PolyBertModel(PolyBertPreTrainedModel):
             input_ids: Tensor of token ids of shape (batch_size, sequence_length).
             attention_mask: Optional tensor indicating which tokens should be attended to.
                 Shape (batch_size, sequence_length). Defaults to None.
+            token_type_ids: Optional tensor indicating type of tokens.
             output_attentions: Whether to return attention weights from all layers.
                 Defaults to None.
             output_hidden_states: Whether to return hidden states from all layers.
@@ -216,10 +218,10 @@ class PolyBertModel(PolyBertPreTrainedModel):
         with torch.no_grad():
             input_ids, indices, cu_seqlens, max_seq_len = unpad_input(input_ids, attention_mask)
 
-        x = self.embd(input_ids)
+        x = self.embd(input_ids, token_type_ids=token_type_ids, cu_seqlens=cu_seqlens)
+
         x, hidden_states, attentions = self.encd(x, cu_seqlens, max_seq_len, output_attentions, output_hidden_states)
         x = self.norm(x)
-
         x = pad_output(x, indices, B, S)
         if output_hidden_states:
             hidden_states = [pad_output(h, indices, B, S) for h in hidden_states]

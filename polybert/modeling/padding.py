@@ -2,20 +2,20 @@ import torch
 
 
 def unpad_input(
-    inputs: torch.Tensor,
-    attention_mask: torch.Tensor,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, int]:
+    inputs: "torch.Tensor",
+    attention_mask: "torch.Tensor",
+) -> "tuple[torch.Tensor, torch.Tensor, torch.Tensor, int]":
     """Remove padding from input sequences.
 
     Args:
-        inputs: (batch, seqlen, ...) or (batch, seqlen)
-        attention_mask: (batch, seqlen), bool / int, 1 means valid and 0 means not valid.
+        inputs (torch.Tensor, shape [batch, seqlen, ...]): tensor of token IDs.
+        attention_mask (torch.Tensor, shape [batch, seqlen]): boolean token mask.
 
     Returns:
-        unpadded_inputs: (total_nnz, ...), where total_nnz = number of tokens selected in attention_mask.
-        indices: (total_nnz)
-        cu_seqlens: (batch + 1), the cumulative sequence lengths
-        max_seqlen_in_batch: int
+        unpadded_inputs (torch.Tensor, shape [total_seq_len, ...]):
+        indices (torch.Tensor, shape [total_seq_len, ...]):
+        cu_seqlens (torch.Tensor, [batch + 1,]): the cumulative sequence lengths
+        max_seqlen_in_batch (int):
 
     """
     seqlens_in_batch = attention_mask.sum(dim=-1, dtype=torch.int32)
@@ -34,21 +34,21 @@ def unpad_input(
 
 
 def pad_output(
-    inputs: torch.Tensor,
-    indices: torch.Tensor,
+    inputs: "torch.Tensor",
+    indices: "torch.Tensor",
     batch: int,
     seqlen: int,
-) -> torch.Tensor:
+) -> "torch.Tensor":
     """Add padding to sequences.
 
     Args:
-        inputs: (total_nnz, ...) or (total_nnz,), where total_nnz = number of tokens selected in attention_mask.
-        indices: (total_nnz)
-        batch: int, batch size
-        seqlen: int, max sequence length
+        inputs (torch.Tensor, shape [total_nnz, ...]): Input tensor, unpadded.
+        indices (torch.Tensor, shape [total_nnz,]): Indices tensor.
+        batch (int): batch size
+        seqlen (int): sequence length
 
     Returns:
-        padded_inputs: (batch, seqlen, ...) or (batch, seqlen)
+        padded_inputs (torch.Tensor, shape [batch, seqlen, ...])
 
     """
     if inputs.dim() == 1:

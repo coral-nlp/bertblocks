@@ -64,20 +64,37 @@ class LearnedPositionalEncoding(nn.Module):
     def __init__(self, dim: int, max_seq_len: int):
         super().__init__()
         self.embd = nn.Embedding(max_seq_len, dim)
-        self.register_buffer("position_ids", torch.arange(max_seq_len).expand((1, -1)), persistent=False)
 
-    def forward(self, x: "torch.Tensor") -> "torch.Tensor":
+    @staticmethod
+    def _get_position_ids(cu_seqlens: "torch.Tensor") -> "torch.Tensor":
+        total_seq_len = cu_seqlens[-1].item()
+        # Tensor with sequence ids for each position
+        seq_ids = torch.zeros(total_seq_len, device=cu_seqlens.device, dtype=torch.long)
+        seq_ids[cu_seqlens[1:-1]] = 1
+        seq_ids = seq_ids.cumsum(dim=0)
+        # Create position indices and subtract by corresponding sequence length to get per-sequence runs
+        pos_ids = torch.arange(total_seq_len, device=cu_seqlens.device, dtype=torch.long) - cu_seqlens[seq_ids]
+        return pos_ids
+
+    def forward(self, x: "torch.Tensor", cu_seqlens: "torch.Tensor | None" = None) -> "torch.Tensor":
         """Add learned positional encodings to a given tensor.
 
         Args:
-            x (torch.Tensor, shape [batch_size, seq_len, embedding_dim]): The tensor to add positional encodings to.
+            x (torch.Tensor, shape [total_seq_len, embedding_dim]): The tensor to add positional encodings to.
+            cu_seqlens (torch.Tensor, shape [batch_size + 1,]): Cumulative sequence lengths to infer positions from.
 
         Returns:
             torch.Tensor: The tensor after adding learned positional encodings.
-                Shape [batch_size, seq_len, embedding_dim].
+                Shape [total_seq_len, embedding_dim].
 
         """
-        return x + self.embd(self.position_ids)
+        cu_seqlens = (
+            cu_seqlens
+            if cu_seqlens is not None
+            else torch.Tensor([0, x.shape[0]]).to(device=x.device, dtype=torch.int32)
+        )
+        print(x.shape, cu_seqlens)
+        return x + self.embd(self._get_position_ids(cu_seqlens))
 
 
 def get_alibi_slopes(
@@ -86,13 +103,13 @@ def get_alibi_slopes(
     """Construct ALiBi slopes."""
 
     def __inner__(nheads: int) -> list:
-        start = 2 ** (-(2 ** -(math.log2(nheads) - 3)))
-        return [start * start**i for i in range(nheads)]
+        base = 2 ** (-(2 ** -(math.log2(nheads) - 3)))
+        return [base * base**i for i in range(nheads)]
 
     if math.log2(nheads).is_integer():
         out = __inner__(nheads)
     else:
-        # If not a power of 2, find closest one
+        # If not a power of 2, find the closest one
         po2 = 2 ** math.floor(math.log2(nheads))
         # Fill remaining to actual head size with doubled base value and step size
         out = __inner__(po2) + __inner__(2 * po2)[0::2][: nheads - po2]
