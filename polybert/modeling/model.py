@@ -3,6 +3,8 @@ import math
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
+from polybert.modeling.norms import get_norm
+
 if TYPE_CHECKING:
     pass
 
@@ -23,6 +25,7 @@ from polybert.modeling.config import PolyBertConfig
 from polybert.modeling.embedding import PolyBertEmbeddings
 from polybert.modeling.head import PolyBertPooler, get_prediction_head
 from polybert.modeling.loss import get_loss_function
+from polybert.modeling.padding import pad_output, unpad_input
 
 
 class PolyBertPreTrainedModel(PreTrainedModel):
@@ -138,7 +141,7 @@ class PolyBertModel(PolyBertPreTrainedModel):
 
     """
 
-    def __init__(self, config: "PolyBertConfig", add_pooling_layer: bool = True) -> None:
+    def __init__(self, config: "PolyBertConfig", add_pooling_layer: bool = False) -> None:
         """Initialize the PolyBert model.
 
         Args:
@@ -150,8 +153,8 @@ class PolyBertModel(PolyBertPreTrainedModel):
         super().__init__(config)
         self.embd = PolyBertEmbeddings(config)
         self.encd = PolyBertEncoder(config)
+        self.norm = get_norm(config) if config.include_final_norm else nn.Identity()
         self.pool = PolyBertPooler(config) if add_pooling_layer else None
-        self.num_heads = config.num_attention_heads
         self.post_init()
 
     @property
@@ -186,6 +189,7 @@ class PolyBertModel(PolyBertPreTrainedModel):
         self,
         input_ids: "torch.Tensor",
         attention_mask: "torch.Tensor | None" = None,
+        token_type_ids: "torch.Tensor | None" = None,
         output_attentions: "bool" = False,
         output_hidden_states: "bool" = False,
     ) -> "BaseModelOutput | BaseModelOutputWithPooling":
@@ -195,6 +199,7 @@ class PolyBertModel(PolyBertPreTrainedModel):
             input_ids: Tensor of token ids of shape (batch_size, sequence_length).
             attention_mask: Optional tensor indicating which tokens should be attended to.
                 Shape (batch_size, sequence_length). Defaults to None.
+            token_type_ids: Optional tensor indicating type of tokens.
             output_attentions: Whether to return attention weights from all layers.
                 Defaults to None.
             output_hidden_states: Whether to return hidden states from all layers.
@@ -208,8 +213,18 @@ class PolyBertModel(PolyBertPreTrainedModel):
                 - attentions: Attention weights from all layers (optional)
 
         """
-        x = self.embd(input_ids)
-        x, hidden_states, attentions = self.encd(x, attention_mask, output_attentions, output_hidden_states)
+        # Unpad input sequence
+        B, S = input_ids.shape
+        with torch.no_grad():
+            input_ids, indices, cu_seqlens, max_seq_len = unpad_input(input_ids, attention_mask)
+
+        x = self.embd(input_ids, token_type_ids=token_type_ids, cu_seqlens=cu_seqlens)
+
+        x, hidden_states, attentions = self.encd(x, cu_seqlens, max_seq_len, output_attentions, output_hidden_states)
+        x = self.norm(x)
+        x = pad_output(x, indices, B, S)
+        if output_hidden_states:
+            hidden_states = [pad_output(h, indices, B, S) for h in hidden_states]
 
         if self.pool is not None:
             pooler_output = self.pool(x)

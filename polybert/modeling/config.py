@@ -26,6 +26,8 @@ class PolyBertConfig(PretrainedConfig):
         mlp_out_bias: bool = True,
         attn_proj_bias: bool = True,
         attn_out_bias: bool = True,
+        local_attention: tuple[int, int] = (-1, -1),
+        global_attention_every_n_layers: int = 0,
         initializer_kind: Literal[
             "trunc_normal", "kaiming_normal", "kaiming_uniform", "xavier_normal", "xavier_uniform"
         ] = "trunc_normal",
@@ -36,7 +38,9 @@ class PolyBertConfig(PretrainedConfig):
         norm_kind: Literal["pre", "post", "both", "none"] = "pre",
         norm_fn: Literal["group", "layer", "rms", "deep", "dynamictanh"] = "rms",
         norm_eps: float = 1e-12,
+        norm_bias: bool = True,
         norm_params: dict | None = None,
+        include_final_norm: bool = True,
         emb_dropout_prob: float = 0.1,
         hidden_dropout_prob: float = 0.1,
         attn_dropout_prob: float = 0.1,
@@ -88,6 +92,8 @@ class PolyBertConfig(PretrainedConfig):
             mlp_out_bias: Whether to include bias terms in the output projection of MLP layers.
             attn_proj_bias: Whether to include bias terms in the qkv projection of attention layers.
             attn_out_bias: Whether to include bias terms in the output projection of attention layers.
+            local_attention: Whether to include local attention mechanism. Default (-1, -1) means global attention.
+            global_attention_every_n_layers: The layer step size for global attention.
             initializer_kind: The initialization method for weights. Determines the type of
                 distribution random weights are sampled from for initialization.
                 Defaults to a truncated normal distribution.
@@ -116,6 +122,8 @@ class PolyBertConfig(PretrainedConfig):
             norm_params: Additional parameters for custom normalization layers. This field allows
                 passing custom parameters to normalization layers that require them. For example,
                 for DeepNorm: {"alpha": 0.81} where alpha is the scaling factor.
+            norm_bias: Whether to include bias terms in the output projection of normalization layers.
+            include_final_norm: Whether to apply a final normalization of the last hidden state.
             emb_dropout_prob: Dropout probability applied to the embedding layer output.
                 Common values: 0.1 (default), 0.0 (no dropout). Must be between 0.0 and 1.0.
             hidden_dropout_prob: Dropout probability applied to hidden layer outputs.
@@ -214,6 +222,8 @@ class PolyBertConfig(PretrainedConfig):
         # Attention parameters
         self.attn_proj_bias = attn_proj_bias
         self.attn_out_bias = attn_out_bias
+        self.local_attention = local_attention
+        self.global_attention_every_n_layers = global_attention_every_n_layers
         # Initialization parameters
         self.initializer_kind = initializer_kind
         self.initializer_range = initializer_range
@@ -226,6 +236,8 @@ class PolyBertConfig(PretrainedConfig):
         self.norm_fn = norm_fn
         self.norm_eps = norm_eps
         self.norm_params = norm_params or {}
+        self.norm_bias = norm_bias
+        self.include_final_norm = include_final_norm
         # Dropout parameters
         self.emb_dropout_prob = emb_dropout_prob
         self.hidden_dropout_prob = hidden_dropout_prob

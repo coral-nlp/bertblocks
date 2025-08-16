@@ -33,6 +33,7 @@ def from_bert_model(pretrained_model_name_or_path: str, add_pooling_layer: bool 
         norm_kind="post",
         norm_fn="layer",
         norm_eps=orig_config.layer_norm_eps,
+        norm_bias=True,
         emb_dropout_prob=orig_config.hidden_dropout_prob or 0.0,
         attn_dropout_prob=orig_config.attention_probs_dropout_prob or 0.0,
         hidden_dropout_prob=orig_config.hidden_dropout_prob or 0.0,
@@ -46,7 +47,7 @@ def from_bert_model(pretrained_model_name_or_path: str, add_pooling_layer: bool 
     poly_model.embd.pose.embd.weight.data.copy_(orig_model.embeddings.position_embeddings.weight.data)
     poly_model.embd.norm.weight.data.copy_(orig_model.embeddings.LayerNorm.weight.data)
     poly_model.embd.norm.bias.data.copy_(orig_model.embeddings.LayerNorm.bias.data)
-    poly_model.embd.tokt.embd.weight.data.copy_(orig_model.embeddings.token_type_embeddings.weight.data)
+    poly_model.embd.tokt.embd.weight.data.copy_(orig_model.embeddings.token_type_embeddings.weight.data)  # type: ignore
 
     for i in range(len(poly_model.encd.blocks)):
         # QKV Projection
