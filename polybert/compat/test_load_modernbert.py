@@ -263,14 +263,4 @@ class TestFromModernBertModel:
             hidden_bert = bert_model.forward(seq["input_ids"], attention_mask=seq["attention_mask"])
             hidden_poly = poly_model.forward(seq["input_ids"], attention_mask=seq["attention_mask"])
 
-        print(hidden_bert)
-        print(hidden_poly)
         torch.testing.assert_close(hidden_bert.last_hidden_state, hidden_poly.last_hidden_state)
-
-        """
-        Notes
-
-        - maybe some normalization going wrong?
-        - double check hidden states throughout stack
-        - maybe some in-place changes somewhere that fuck up the residuals?
-        """
