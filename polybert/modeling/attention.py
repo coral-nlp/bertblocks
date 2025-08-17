@@ -130,12 +130,14 @@ class PolyBertAttention(nn.Module):
                         else:
                             theta_local = config.pos_emb_kwargs.get("base", 10_000)
 
-                        self.rotary_emb = RotaryEmbedding(
-                            dim=config.pos_emb_kwargs["dim"],
-                            base=theta_local
-                            if layer_id % config.global_attention_every_n_layers != 0
-                            else theta_global,
-                        )
+                        if config.global_attention_every_n_layers == 0:
+                            theta = theta_global
+                        else:
+                            theta = (
+                                theta_local if layer_id % config.global_attention_every_n_layers != 0 else theta_global
+                            )
+
+                        self.rotary_emb = RotaryEmbedding(dim=config.pos_emb_kwargs["dim"], base=theta)
                     case _:
                         raise NotImplementedError("Only flash attention is supported as backend for rotary encodings.")
             case _:
