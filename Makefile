@@ -34,7 +34,7 @@ test: ## Run tests
 	uv run pytest
 
 test-cov: ## Run tests with coverage
-	uv run pytest --cov=polybert --cov-report=term-missing --cov-report=html
+	uv run pytest polybert --cov=polybert.modeling --cov-report=term-missing --cov-report=html
 
 clean: ## Clean up build artifacts
 	rm -rf build/
