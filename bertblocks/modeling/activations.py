@@ -10,10 +10,10 @@ from torch.nn.modules.activation import (
     SiLU,
 )
 
-from polybert.modeling.config import PolyBertConfig
+from bertblocks.modeling.config import BertBlocksConfig
 
 
-def get_actv_fn(config: "PolyBertConfig") -> "nn.Module":
+def get_actv_fn(config: "BertBlocksConfig") -> "nn.Module":
     """Get the activation function specified in the configuration.
 
     This factory function returns the appropriate activation function module
@@ -21,7 +21,7 @@ def get_actv_fn(config: "PolyBertConfig") -> "nn.Module":
     used in transformer architectures.
 
     Args:
-        config (PolyBertConfig): Configuration object determining model hyperparameters.
+        config (BertBlocksConfig): Configuration object determining model hyperparameters.
 
     Returns:
         nn.Module: An activation function module that can be called on tensors.
