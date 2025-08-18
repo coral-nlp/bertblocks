@@ -3,25 +3,25 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     import torch
 
-    from polybert.modeling.config import PolyBertConfig
+    from bertblocks.modeling.config import BertBlocksConfig
 
 from torch import nn
 
-from polybert.modeling.activations import get_actv_fn
+from bertblocks.modeling.activations import get_actv_fn
 
 
-class PolyBertGLU(nn.Module):
-    """Gated Linear Unit (GLU) implementation for PolyBert.
+class BertBlocksGLU(nn.Module):
+    """Gated Linear Unit (GLU) implementation for BertBlocks.
 
     This class implements a GLU-style MLP layer that uses gating to control information flow.
 
     """
 
-    def __init__(self, config: "PolyBertConfig"):
+    def __init__(self, config: "BertBlocksConfig"):
         """Initialize the GLU layer.
 
         Args:
-            config (PolyBertConfig): Configuration object containing:
+            config (BertBlocksConfig): Configuration object containing:
                 - hidden_size: Dimensionality of hidden layers (input/output dimension)
                 - intermediate_size: Dimensionality of feed-forward layers
                 - actv_fn: Activation function used in feed-forward networks
@@ -55,18 +55,18 @@ class PolyBertGLU(nn.Module):
         return x
 
 
-class PolyBertMLP(nn.Module):
-    """Standard Multi-Layer Perceptron for PolyBert.
+class BertBlocksMLP(nn.Module):
+    """Standard Multi-Layer Perceptron for BertBlocks.
 
     This class implements a standard two-layer MLP (feedforward network).
 
     """
 
-    def __init__(self, config: "PolyBertConfig"):
+    def __init__(self, config: "BertBlocksConfig"):
         """Initialize the MLP layer.
 
         Args:
-            config (PolyBertConfig): Configuration object containing:
+            config (BertBlocksConfig): Configuration object containing:
                 - hidden_size: Dimensionality of hidden layers (input/output dimension)
                 - intermediate_size: Dimensionality of feed-forward layers
                 - mlp_in_bias: Whether to include bias in input projection of MLP layers
@@ -102,14 +102,14 @@ class PolyBertMLP(nn.Module):
         return x
 
 
-def get_mlp(config: "PolyBertConfig") -> "nn.Module":
+def get_mlp(config: "BertBlocksConfig") -> "nn.Module":
     """Get the MLP layer specified in the configuration.
 
     This factory function returns the appropriate MLP architecture based on
     the configuration. Supports both standard MLP and GLU variants.
 
     Args:
-        config (PolyBertConfig): Configuration object determining model hyperparameters.
+        config (BertBlocksConfig): Configuration object determining model hyperparameters.
 
     Returns:
         An MLP module (nn.Module) that can transform hidden states.
@@ -125,9 +125,9 @@ def get_mlp(config: "PolyBertConfig") -> "nn.Module":
     mlp_type = getattr(config, "mlp_type", "mlp")  # Default to mlp for backward compatibility
 
     if mlp_type == "mlp":
-        return PolyBertMLP(config)
+        return BertBlocksMLP(config)
     elif mlp_type == "glu":
-        return PolyBertGLU(config)
+        return BertBlocksGLU(config)
     else:
         supported_types = ["mlp", "glu"]
         raise ValueError(f"Unknown MLP type '{mlp_type}'. Supported types: {', '.join(supported_types)}")

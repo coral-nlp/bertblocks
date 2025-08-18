@@ -1,4 +1,4 @@
-"""Masked Language Modeling (MLM) pretraining implementation for PolyBert.
+"""Masked Language Modeling (MLM) pretraining implementation for BertBlocks.
 
 This module provides a complete MLM pretraining setup using PyTorch Lightning,
 including data loading, model configuration, optimization, and training logic.
@@ -7,8 +7,8 @@ optimization strategies.
 
 The implementation includes:
 - MaskedLanguageModelingCollator for dynamic masking
-- PolyBertPretrainingDataModule for data loading
-- PolyBertPretrainingModule for training logic
+- BertBlocksPretrainingDataModule for data loading
+- BertBlocksPretrainingModule for training logic
 - Support for model compilation and advanced optimization
 """
 
@@ -23,13 +23,13 @@ from torch.utils.data import DataLoader
 from transformers import AutoTokenizer
 from transformers.trainer_pt_utils import get_parameter_names
 
-from polybert.modeling import PolyBertConfig, PolyBertForMaskedLM
-from polybert.pretraining.objectives import MaskedLanguageModelingCollator
-from polybert.pretraining.optimizer import get_optimizer
+from bertblocks.modeling import BertBlocksConfig, BertBlocksForMaskedLM
+from bertblocks.pretraining.objectives import MaskedLanguageModelingCollator
+from bertblocks.pretraining.optimizer import get_optimizer
 
 
-class PolyBertPretrainingDataModule(L.LightningDataModule):
-    """PyTorch Lightning DataModule for PolyBert MLM pretraining.
+class BertBlocksPretrainingDataModule(L.LightningDataModule):
+    """PyTorch Lightning DataModule for BertBlocks MLM pretraining.
 
     This DataModule handles all aspects of data loading for pretraining,
     including dataset preparation, tokenization, and batch creation.
@@ -112,15 +112,15 @@ class PolyBertPretrainingDataModule(L.LightningDataModule):
         )
 
 
-class PolyBertPretrainingModule(L.LightningModule):
-    """PyTorch Lightning module for PolyBert MLM pretraining.
+class BertBlocksPretrainingModule(L.LightningModule):
+    """PyTorch Lightning module for BertBlocks MLM pretraining.
 
-    This module encapsulates the complete training logic for PolyBert pretraining,
+    This module encapsulates the complete training logic for BertBlocks pretraining,
     including model initialization, optimization setup, and training step implementation.
     It supports advanced features like model compilation, sophisticated learning rate
     scheduling, and automatic checkpoint saving.
 
-    The module automatically configures the PolyBert model based on the provided
+    The module automatically configures the BertBlocks model based on the provided
     hyperparameters and handles all aspects of the training loop.
     """
 
@@ -137,7 +137,7 @@ class PolyBertPretrainingModule(L.LightningModule):
         optimizer_kwargs: dict | None = None,
         model_config_kwargs: "dict[str, Any] | None" = None,
     ):
-        """Initialize the PolyBert pretraining module.
+        """Initialize the BertBlocks pretraining module.
 
         Args:
             learning_rate: Peak learning rate for optimization. Defaults to 1e-7.
@@ -155,20 +155,20 @@ class PolyBertPretrainingModule(L.LightningModule):
             optimizer_class: Optimizer class name. Defaults to "adamw".
             optimizer_kwargs: Optional arguments to pass to torch.optim.optimizer.
             model_config_kwargs: dict[str, Any] or None
-                Optional dictionary of model configuration options passed to PolyBertConfig for instantiation.
+                Optional dictionary of model configuration options passed to BertBlocksConfig for instantiation.
 
         """
         super().__init__()
         self.save_hyperparameters(ignore=["model_config"])
         if model_config_kwargs is None:
             model_config_kwargs = {}
-        self.model_config = PolyBertConfig(**model_config_kwargs)
+        self.model_config = BertBlocksConfig(**model_config_kwargs)
         # Patch model config with tokenizer vocab size if given
         if self.hparams.pretrained_tokenizer_name_or_path is not None:
             tokenizer = AutoTokenizer.from_pretrained(self.hparams.pretrained_tokenizer_name_or_path)
             self.model_config.vocab_size = tokenizer.vocab_size
             del tokenizer
-        self.model = PolyBertForMaskedLM(self.model_config)
+        self.model = BertBlocksForMaskedLM(self.model_config)
         if self.hparams.compile_model:
             torch.set_float32_matmul_precision("medium")
             self.model = torch.compile(self.model, dynamic=True)

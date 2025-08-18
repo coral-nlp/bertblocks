@@ -3,7 +3,7 @@ import math
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
-from polybert.modeling.norms import get_norm
+from bertblocks.modeling.norms import get_norm
 
 if TYPE_CHECKING:
     pass
@@ -20,33 +20,33 @@ from transformers.modeling_outputs import (
 )
 from transformers.modeling_utils import PreTrainedModel
 
-from polybert.modeling.block import PolyBertEncoder
-from polybert.modeling.config import PolyBertConfig
-from polybert.modeling.embedding import PolyBertEmbeddings
-from polybert.modeling.head import PolyBertPooler, get_prediction_head
-from polybert.modeling.loss import get_loss_function
-from polybert.modeling.padding import pad_output, unpad_input
+from bertblocks.modeling.block import BertBlocksEncoder
+from bertblocks.modeling.config import BertBlocksConfig
+from bertblocks.modeling.embedding import BertBlocksEmbeddings
+from bertblocks.modeling.head import BertBlocksPooler, get_prediction_head
+from bertblocks.modeling.loss import get_loss_function
+from bertblocks.modeling.padding import pad_output, unpad_input
 
 
-class PolyBertPreTrainedModel(PreTrainedModel):
-    """Base class for all PolyBert models.
+class BertBlocksPreTrainedModel(PreTrainedModel):
+    """Base class for all BertBlocks models.
 
     This class provides the base configuration and weight initialization
-    for all PolyBert model variants. It inherits from HuggingFace's
+    for all BertBlocks model variants. It inherits from HuggingFace's
     PreTrainedModel to provide compatibility with the transformers library.
     """
 
-    config_class = PolyBertConfig
-    base_model_prefix = "polybert"
+    config_class = BertBlocksConfig
+    base_model_prefix = "bertblocks"
     supports_gradient_checkpointing = True
     _supports_flash_attn_2 = False
     _supports_sdpa = False
     _supports_flex_attn = True
-    _no_split_modules: ClassVar[list] = ["PolyBertEncoder", "PolyBertAttention"]
+    _no_split_modules: ClassVar[list] = ["BertBlocksEncoder", "BertBlocksAttention"]
     _keys_to_ignore_on_load_missing: ClassVar[list] = [r"position_ids"]
     _keys_to_ignore_on_load_unexpected: ClassVar[list] = [r"pooler"]
 
-    def __init__(self, config: "PolyBertConfig", *args: Any, **kwargs: Any) -> None:
+    def __init__(self, config: "BertBlocksConfig", *args: Any, **kwargs: Any) -> None:
         super().__init__(config, *args, **kwargs)
 
     def _init_weights(self, module: "nn.Module") -> None:
@@ -133,28 +133,28 @@ class PolyBertPreTrainedModel(PreTrainedModel):
             nn.init.zeros_(module.bias)
 
 
-class PolyBertModel(PolyBertPreTrainedModel):
-    """Core PolyBert model for encoding sequences.
+class BertBlocksModel(BertBlocksPreTrainedModel):
+    """Core BertBlocks model for encoding sequences.
 
-    This is the base PolyBert model that outputs hidden states without any
+    This is the base BertBlocks model that outputs hidden states without any
     task-specific head. It can be used as a feature extractor for downstream tasks.
 
     """
 
-    def __init__(self, config: "PolyBertConfig", add_pooling_layer: bool = False) -> None:
-        """Initialize the PolyBert model.
+    def __init__(self, config: "BertBlocksConfig", add_pooling_layer: bool = False) -> None:
+        """Initialize the BertBlocks model.
 
         Args:
-            config (PolyBertConfig): Configuration object containing:
+            config (BertBlocksConfig): Configuration object containing:
                 - num_attention_heads: Number of attention heads (used for initialization)
             add_pooling_layer (bool): Whether to add a pooling layer after the encoder layers.
 
         """
         super().__init__(config)
-        self.embd = PolyBertEmbeddings(config)
-        self.encd = PolyBertEncoder(config)
+        self.embd = BertBlocksEmbeddings(config)
+        self.encd = BertBlocksEncoder(config)
         self.norm = get_norm(config) if config.include_final_norm else nn.Identity()
-        self.pool = PolyBertPooler(config) if add_pooling_layer else None
+        self.pool = BertBlocksPooler(config) if add_pooling_layer else None
         self.post_init()
 
     @property
@@ -193,7 +193,7 @@ class PolyBertModel(PolyBertPreTrainedModel):
         output_attentions: "bool" = False,
         output_hidden_states: "bool" = False,
     ) -> "BaseModelOutput | BaseModelOutputWithPooling":
-        """Forward pass through the PolyBert model.
+        """Forward pass through the BertBlocks model.
 
         Args:
             input_ids: Tensor of token ids of shape (batch_size, sequence_length).
@@ -242,16 +242,16 @@ class PolyBertModel(PolyBertPreTrainedModel):
             )
 
 
-class PolyBertForTasksBase(PolyBertPreTrainedModel):
-    """Base class for all PolyBert task-specific models.
+class BertBlocksForTasksBase(BertBlocksPreTrainedModel):
+    """Base class for all BertBlocks task-specific models.
 
     This class provides common functionality for classification, regression,
     and other downstream tasks, eliminating code duplication across task models.
     """
 
-    def __init__(self, config: "PolyBertConfig", *args: Any, **kwargs: Any) -> None:
+    def __init__(self, config: "BertBlocksConfig", *args: Any, **kwargs: Any) -> None:
         super().__init__(config, *args, **kwargs)
-        self.model = PolyBertModel(config)
+        self.model = BertBlocksModel(config)
         self.head = get_prediction_head(config)
 
     def compute_loss(
@@ -287,10 +287,10 @@ class PolyBertForTasksBase(PolyBertPreTrainedModel):
             raise ValueError(f"Unknown problem type: {problem_type}")
 
 
-class PolyBertForMaskedLM(PolyBertPreTrainedModel):
-    """PolyBert model for masked language modeling tasks.
+class BertBlocksForMaskedLM(BertBlocksPreTrainedModel):
+    """BertBlocks model for masked language modeling tasks.
 
-    This model extends the base PolyBert model with a prediction head
+    This model extends the base BertBlocks model with a prediction head
     and decoder for masked language modeling. It can be used for
     pre-training or fine-tuning on masked language modeling tasks.
 
@@ -301,18 +301,18 @@ class PolyBertForMaskedLM(PolyBertPreTrainedModel):
 
     _tied_weight_keys: ClassVar = ["decoder.weight"]
 
-    def __init__(self, config: "PolyBertConfig"):
-        """Initialize the PolyBert masked language model.
+    def __init__(self, config: "BertBlocksConfig"):
+        """Initialize the BertBlocks masked language model.
 
         Args:
-            config (PolyBertConfig): Configuration object containing:
+            config (BertBlocksConfig): Configuration object containing:
                 - vocab_size: Size of the vocabulary for token embeddings
                 - hidden_size: Dimensionality of hidden layers
 
         """
         super().__init__(config)
         self.vocab_size = config.vocab_size
-        self.model = PolyBertModel(config)
+        self.model = BertBlocksModel(config)
         self.head = get_prediction_head(config)
         self.decoder = nn.Linear(config.hidden_size, config.vocab_size, bias=True)
         self.loss_fn = nn.CrossEntropyLoss()
@@ -382,19 +382,19 @@ class PolyBertForMaskedLM(PolyBertPreTrainedModel):
         )
 
 
-class PolyBertForSequenceClassification(PolyBertForTasksBase):
-    """PolyBert model for sequence classification tasks.
+class BertBlocksForSequenceClassification(BertBlocksForTasksBase):
+    """BertBlocks model for sequence classification tasks.
 
-    This model extends the base PolyBert model with a classification head
+    This model extends the base BertBlocks model with a classification head
     for sequence-level prediction tasks. It supports regression,
     single-label classification, and multi-label classification.
     """
 
-    def __init__(self, config: "PolyBertConfig"):
-        """Initialize the PolyBert sequence classification model.
+    def __init__(self, config: "BertBlocksConfig"):
+        """Initialize the BertBlocks sequence classification model.
 
         Args:
-            config (PolyBertConfig): Configuration object containing:
+            config (BertBlocksConfig): Configuration object containing:
                 - hidden_size: Dimensionality of hidden layers
                 - num_labels: Number of output labels for classification tasks
                 - problem_type: Problem type for automatic loss selection
@@ -458,19 +458,19 @@ class PolyBertForSequenceClassification(PolyBertForTasksBase):
         )
 
 
-class PolyBertForTokenClassification(PolyBertForTasksBase):
-    """PolyBert model for token classification tasks.
+class BertBlocksForTokenClassification(BertBlocksForTasksBase):
+    """BertBlocks model for token classification tasks.
 
-    This model extends the base PolyBert model with a classification head
+    This model extends the base BertBlocks model with a classification head
     for token-level prediction tasks such as named entity recognition,
     part-of-speech tagging, and other sequence labeling tasks.
     """
 
-    def __init__(self, config: "PolyBertConfig"):
-        """Initialize the PolyBert token classification model.
+    def __init__(self, config: "BertBlocksConfig"):
+        """Initialize the BertBlocks token classification model.
 
         Args:
-            config (PolyBertConfig): Configuration object containing:
+            config (BertBlocksConfig): Configuration object containing:
                 - hidden_size: Dimensionality of hidden layers
                 - num_labels: Number of output labels for classification tasks
 
@@ -530,20 +530,20 @@ class PolyBertForTokenClassification(PolyBertForTasksBase):
         )
 
 
-class PolyBertForQuestionAnswering(PolyBertForTasksBase):
-    """PolyBert model for extractive question answering tasks.
+class BertBlocksForQuestionAnswering(BertBlocksForTasksBase):
+    """BertBlocks model for extractive question answering tasks.
 
-    This model extends the base PolyBert model with a classification head
+    This model extends the base BertBlocks model with a classification head
     that predicts start and end positions of answers in the input sequence.
     It is designed for tasks like SQuAD where the answer is a span of text
     within the provided context.
     """
 
-    def __init__(self, config: "PolyBertConfig"):
-        """Initialize the PolyBert question answering model.
+    def __init__(self, config: "BertBlocksConfig"):
+        """Initialize the BertBlocks question answering model.
 
         Args:
-            config (PolyBertConfig): Configuration object containing:
+            config (BertBlocksConfig): Configuration object containing:
                 - hidden_size: Dimensionality of hidden layers
 
         """

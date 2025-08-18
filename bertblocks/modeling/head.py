@@ -3,25 +3,25 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     import torch
 
-    from polybert.modeling.config import PolyBertConfig
+    from bertblocks.modeling.config import BertBlocksConfig
 
 from torch import nn
 
-from polybert.modeling.activations import get_actv_fn
-from polybert.modeling.norms import get_norm
+from bertblocks.modeling.activations import get_actv_fn
+from bertblocks.modeling.norms import get_norm
 
 
-class PolyBertPooler(nn.Module):
-    """Pooling layer for PolyBert.
+class BertBlocksPooler(nn.Module):
+    """Pooling layer for BertBlocks.
 
     Applies a linear layer and activation function to the first token of the last hidden state.
     """
 
-    def __init__(self, config: "PolyBertConfig") -> None:
+    def __init__(self, config: "BertBlocksConfig") -> None:
         """Initialize the pooling layer.
 
         Args:
-            config (PolyBertConfig): Configuration object containing:
+            config (BertBlocksConfig): Configuration object containing:
                 - hidden_size: Dimensionality of hidden layers
                 - actv_fn: Activation function used in feed-forward networks
 
@@ -45,19 +45,19 @@ class PolyBertPooler(nn.Module):
         return x
 
 
-class PolyBertGLUPredictionHead(nn.Module):
-    """Prediction head for PolyBert model with gated activation.
+class BertBlocksGLUPredictionHead(nn.Module):
+    """Prediction head for BertBlocks model with gated activation.
 
     This class implements a prediction head that uses a gated linear unit (GLU)
     architecture. It projects the hidden states to an expanded dimension, applies
     gating with an activation function, and includes optional pre-/post-normalization.
     """
 
-    def __init__(self, config: "PolyBertConfig"):
+    def __init__(self, config: "BertBlocksConfig"):
         """Initialize the prediction head.
 
         Args:
-            config (PolyBertConfig): Configuration object containing:
+            config (BertBlocksConfig): Configuration object containing:
                 - hidden_size: Dimensionality of hidden layers
                 - actv_fn: Activation function used in feed-forward networks
                 - norm_kind: When to apply normalization ("pre", "post", "both", "none")
@@ -87,19 +87,19 @@ class PolyBertGLUPredictionHead(nn.Module):
         return x
 
 
-class PolyBertMLPPredictionHead(nn.Module):
-    """MLP Prediction head for PolyBert model.
+class BertBlocksMLPPredictionHead(nn.Module):
+    """MLP Prediction head for BertBlocks model.
 
     This class implements a traditional MLP prediction head. It projects the hidden states
     to an expanded dimension, and then projects it back down to the original dimension.
     Includes optional pre-/post-normalization.
     """
 
-    def __init__(self, config: "PolyBertConfig"):
+    def __init__(self, config: "BertBlocksConfig"):
         """Initialize the prediction head.
 
         Args:
-            config (PolyBertConfig): Configuration object containing:
+            config (BertBlocksConfig): Configuration object containing:
                 - hidden_size: Dimensionality of hidden layers
                 - intermediate_size: Dimensionality of feed-forward layers
                 - actv_fn: Activation function used in feed-forward networks
@@ -139,14 +139,14 @@ class PolyBertMLPPredictionHead(nn.Module):
         return x
 
 
-def get_prediction_head(config: "PolyBertConfig") -> nn.Module:
+def get_prediction_head(config: "BertBlocksConfig") -> nn.Module:
     """Get the prediction head layer specified in the configuration.
 
     This factory function returns the appropriate prediction head architecture
     based on the configuration. Supports both standard MLP and GLU variants.
 
     Args:
-        config (PolyBertConfig): Configuration object determining model hyperparameters.
+        config (BertBlocksConfig): Configuration object determining model hyperparameters.
 
     Returns:
         An prediction head module (nn.Module) that can transform hidden states.
@@ -162,9 +162,9 @@ def get_prediction_head(config: "PolyBertConfig") -> nn.Module:
     mlp_type = getattr(config, "mlp_type", "mlp")  # Default to mlp for backward compatibility
 
     if mlp_type == "mlp":
-        return PolyBertMLPPredictionHead(config)
+        return BertBlocksMLPPredictionHead(config)
     elif mlp_type == "glu":
-        return PolyBertGLUPredictionHead(config)
+        return BertBlocksGLUPredictionHead(config)
     else:
         supported_types = ["mlp", "glu"]
         raise ValueError(f"Unknown MLP type '{mlp_type}'. Supported types: {', '.join(supported_types)}")

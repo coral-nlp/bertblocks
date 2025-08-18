@@ -1,6 +1,6 @@
-"""PolyBert pretraining utilities and implementations.
+"""BertBlocks pretraining utilities and implementations.
 
-This module provides comprehensive utilities for pretraining PolyBert models
+This module provides comprehensive utilities for pretraining BertBlocks models
 using masked language modeling (MLM) and other self-supervised objectives.
 
 The pretraining framework includes:

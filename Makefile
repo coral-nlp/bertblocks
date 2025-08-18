@@ -34,7 +34,8 @@ test: ## Run tests
 	uv run pytest
 
 test-cov: ## Run tests with coverage
-	uv run pytest polybert --cov=polybert.modeling --cov-report=term-missing --cov-report=html
+	uv run pytest bertblocks --cov=bertblocks.modeling --cov-report=term-missing --cov-report=html
+
 
 clean: ## Clean up build artifacts
 	rm -rf build/
@@ -55,13 +56,13 @@ pre-commit-run: ## Run pre-commit hooks on all files
 
 docs-init: ## Initialize Sphinx documentation
 	mkdir -p docs/source docs/_build
-	uv run sphinx-quickstart -q -p "PolyBERT" -a "CORAL Project Contributors" -v "0.1.0" --ext-autodoc --ext-doctest --ext-intersphinx --makefile --no-batchfile docs/source
+	uv run sphinx-quickstart -q -p "BertBlocks" -a "CORAL Project Contributors" -v "0.1.0" --ext-autodoc --ext-doctest --ext-intersphinx --makefile --no-batchfile docs/source
 
 docs-build: ## Build Sphinx documentation
 	uv run sphinx-build -b html docs/source docs/_build/html
 
 docs-apidoc: ## Generate API documentation from docstrings
-	uv run sphinx-apidoc -o docs/source polybert --force --separate
+	uv run sphinx-apidoc -o docs/source bertblocks --force --separate
 
 docs-serve: ## Serve documentation locally (requires Python http.server)
 	cd docs/_build/html && python -m http.server 8000

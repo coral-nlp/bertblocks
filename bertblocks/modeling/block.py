@@ -3,17 +3,17 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     import torch
 
-    from polybert.modeling.config import PolyBertConfig
+    from bertblocks.modeling.config import BertBlocksConfig
 
 from torch import nn
 
-from polybert.modeling.attention import PolyBertAttention
-from polybert.modeling.mlp import get_mlp
-from polybert.modeling.norms import get_norm
+from bertblocks.modeling.attention import BertBlocksAttention
+from bertblocks.modeling.mlp import get_mlp
+from bertblocks.modeling.norms import get_norm
 
 
-class PolyBertBlock(nn.Module):
-    """A single transformer block implementation for PolyBert.
+class BertBlocksLayer(nn.Module):
+    """A single transformer block implementation for BertBlocks.
 
     This class implements a standard transformer block with attention and feed-forward
     layers, supporting both pre-normalization and post-normalization schemes.
@@ -24,7 +24,7 @@ class PolyBertBlock(nn.Module):
     3. Optional layer normalization (pre/post/both/none)
 
     Args:
-        config (PolyBertConfig): Configuration object determining model hyperparameters.
+        config (BertBlocksConfig): Configuration object determining model hyperparameters.
 
     References:
          - "Attention Is All You Need" (https://arxiv.org/pdf/1706.03762)
@@ -32,15 +32,15 @@ class PolyBertBlock(nn.Module):
 
     """
 
-    def __init__(self, config: "PolyBertConfig", layer_id: int):
-        """Initialize a PolyBert transformer block.
+    def __init__(self, config: "BertBlocksConfig", layer_id: int):
+        """Initialize a BertBlocks transformer block.
 
         Sets up the attention mechanism, feed-forward network, and normalization
         layers based on configuration. Normalization layers are set to Identity
         when not needed according to the norm_kind setting.
 
         Args:
-            config (PolyBertConfig): Configuration object containing:
+            config (BertBlocksConfig): Configuration object containing:
                 - norm_kind: When to apply normalization ("pre", "post", "both", "none")
                 - attn_dropout_prob: Dropout probability for attention weights
                 - hidden_dropout_prob: Dropout probability for hidden layer outputs
@@ -49,7 +49,7 @@ class PolyBertBlock(nn.Module):
         """
         super().__init__()
         self.layer_id = layer_id
-        self.attn = PolyBertAttention(config, layer_id=layer_id)
+        self.attn = BertBlocksAttention(config, layer_id=layer_id)
         self.ffwd = get_mlp(config)
         self.pre_norm_attn = get_norm(config) if config.norm_kind in ("pre", "both") else nn.Identity()
         self.pre_norm_ffwd = get_norm(config) if config.norm_kind in ("pre", "both") else nn.Identity()
@@ -100,25 +100,25 @@ class PolyBertBlock(nn.Module):
         return x, w
 
 
-class PolyBertEncoder(nn.Module):
-    """Multi-layer transformer encoder for PolyBert.
+class BertBlocksEncoder(nn.Module):
+    """Multi-layer transformer encoder for BertBlocks.
 
     Uses sequence packing.
     """
 
-    def __init__(self, config: "PolyBertConfig"):
-        """Initialize the PolyBert encoder.
+    def __init__(self, config: "BertBlocksConfig"):
+        """Initialize the BertBlocks encoder.
 
         Creates a stack of transformer blocks. Each block is independently initialized with the same configuration.
 
         Args:
-            config (PolyBertConfig): Configuration object containing:
+            config (BertBlocksConfig): Configuration object containing:
                 - num_blocks: Number of transformer layers in the model
                 - num_attention_heads: Number of attention heads (used for block mask creation)
 
         """
         super().__init__()
-        self.blocks = nn.ModuleList([PolyBertBlock(config, layer_id) for layer_id in range(config.num_blocks)])
+        self.blocks = nn.ModuleList([BertBlocksLayer(config, layer_id) for layer_id in range(config.num_blocks)])
         self.num_heads = config.num_attention_heads
 
     def forward(

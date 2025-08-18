@@ -3,10 +3,10 @@ from typing import Any, Literal
 from transformers.modeling_utils import PretrainedConfig
 
 
-class PolyBertConfig(PretrainedConfig):
-    """Configuration class for PolyBert models."""
+class BertBlocksConfig(PretrainedConfig):
+    """Configuration class for BertBlocks models."""
 
-    model_type: str = "polybert"
+    model_type: str = "bertblocks"
 
     def __init__(
         self,
@@ -50,7 +50,7 @@ class PolyBertConfig(PretrainedConfig):
         num_labels: int = 2,
         **kwargs: Any,
     ) -> None:
-        """Initialize PolyBertConfig.
+        """Initialize BertBlocksConfig.
 
         Args:
             vocab_size: The size of the vocabulary. This determines the number of unique tokens

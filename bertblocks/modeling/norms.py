@@ -8,7 +8,7 @@ from torch.nn.modules.normalization import (
     RMSNorm,
 )
 
-from polybert.modeling.config import PolyBertConfig
+from bertblocks.modeling.config import BertBlocksConfig
 
 
 class DynamicTanhNorm(nn.Module):
@@ -68,7 +68,7 @@ class DeepNorm(nn.Module):
         return self.layer_norm(x + self.alpha * gx)
 
 
-def get_norm(config: "PolyBertConfig") -> "nn.Module":
+def get_norm(config: "BertBlocksConfig") -> "nn.Module":
     """Get the normalization layer specified in the configuration.
 
     This factory function returns the appropriate normalization layer based on
@@ -76,7 +76,7 @@ def get_norm(config: "PolyBertConfig") -> "nn.Module":
     in transformer architectures.
 
     Args:
-        config (PolyBertConfig): Configuration object determining model hyperparameters.
+        config (BertBlocksConfig): Configuration object determining model hyperparameters.
 
     Returns:
         A normalization module (nn.Module) that can normalize tensors.

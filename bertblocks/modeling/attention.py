@@ -3,8 +3,6 @@ from einops import rearrange
 from torch import nn
 from transformers.modeling_utils import is_flash_attn_2_available
 
-from polybert.modeling.config import PolyBertConfig
-
 if is_flash_attn_2_available():
     from flash_attn import flash_attn_varlen_qkvpacked_func
 
@@ -12,7 +10,8 @@ if is_flash_attn_2_available():
     torch._dynamo.config.capture_scalar_outputs = True
 
 
-from polybert.modeling.position import RotaryEmbedding, get_alibi_slopes
+from bertblocks.modeling.config import BertBlocksConfig
+from bertblocks.modeling.position import RotaryEmbedding, get_alibi_slopes
 
 
 def flash_attention_forward(
@@ -52,8 +51,8 @@ ATTENTION_FUNCTION = {
 }
 
 
-class PolyBertAttention(nn.Module):
-    """PolyBERT attention with configurable positional encodings.
+class BertBlocksAttention(nn.Module):
+    """BertBlocks attention with configurable positional encodings.
 
     This class implements a flexible attention mechanism using flex_attention for efficient
     computation. Applies block masking for document-level attention patterns.
@@ -71,11 +70,11 @@ class PolyBertAttention(nn.Module):
 
     """
 
-    def __init__(self, config: "PolyBertConfig", layer_id: int):
-        """Initialize the PolyBERT attention mechanism.
+    def __init__(self, config: "BertBlocksConfig", layer_id: int):
+        """Initialize the BertBlocks attention mechanism.
 
         Args:
-            config (PolyBertConfig): Configuration object containing:
+            config (BertBlocksConfig): Configuration object containing:
                 - num_attention_heads: Number of attention heads in multi-head attention
                 - hidden_size: Dimensionality of hidden layers (must be divisible by num_attention_heads)
                 - max_sequence_length: Maximum sequence length for positional encodings
@@ -105,11 +104,11 @@ class PolyBertAttention(nn.Module):
         self._attention_fn = ATTENTION_FUNCTION[config.attn_implementation]
         self.deterministic = True
 
-    def _initialize_pos_buffers(self, config: PolyBertConfig, layer_id: int) -> None:
+    def _initialize_pos_buffers(self, config: BertBlocksConfig, layer_id: int) -> None:
         """Initialize positional encoding buffers if needed.
 
         Args:
-            config (PolyBertConfig): Model config.
+            config (BertBlocksConfig): Model config.
             layer_id (int): layer id indicating index in the encoder stack.
 
         """
@@ -130,12 +129,14 @@ class PolyBertAttention(nn.Module):
                         else:
                             theta_local = config.pos_emb_kwargs.get("base", 10_000)
 
-                        self.rotary_emb = RotaryEmbedding(
-                            dim=config.pos_emb_kwargs["dim"],
-                            base=theta_local
-                            if layer_id % config.global_attention_every_n_layers != 0
-                            else theta_global,
-                        )
+                        if config.global_attention_every_n_layers == 0:
+                            theta = theta_global
+                        else:
+                            theta = (
+                                theta_local if layer_id % config.global_attention_every_n_layers != 0 else theta_global
+                            )
+
+                        self.rotary_emb = RotaryEmbedding(dim=config.pos_emb_kwargs["dim"], base=theta)
                     case _:
                         raise NotImplementedError("Only flash attention is supported as backend for rotary encodings.")
             case _:
@@ -147,7 +148,7 @@ class PolyBertAttention(nn.Module):
         cu_seqlens: "torch.Tensor",
         max_seq_len: int,
     ) -> "tuple[torch.Tensor, torch.Tensor | None]":
-        """Forward pass of the PolyBERT attention mechanism.
+        """Forward pass of the BertBlocks attention mechanism.
 
         Computes multi-head self-attention with configurable positional encodings
         and block masking. Uses PyTorch's flex_attention.

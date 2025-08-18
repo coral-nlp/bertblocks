@@ -1,24 +1,24 @@
 from typing import TYPE_CHECKING
 
-from polybert.modeling.norms import get_norm
+from bertblocks.modeling.norms import get_norm
 
 if TYPE_CHECKING:
-    from polybert.modeling.config import PolyBertConfig
+    from bertblocks.modeling.config import BertBlocksConfig
 
 import torch
 from torch import nn
 
-from polybert.modeling.position import LearnedPositionalEncoding, SinusoidalPositionalEncoding
+from bertblocks.modeling.position import LearnedPositionalEncoding, SinusoidalPositionalEncoding
 
 
-class PolyBertTokenTypeEmbedding(nn.Module):
+class BertBlocksTokenTypeEmbedding(nn.Module):
     """Token type embeddings."""
 
-    def __init__(self, config: "PolyBertConfig"):
+    def __init__(self, config: "BertBlocksConfig"):
         """Instantiate token type embedding module.
 
         Args:
-            config (PolyBertConfig): Configuration object containing:
+            config (BertBlocksConfig): Configuration object containing:
                 - type_vocab_size: Size of the token type vocabulary
                 - hidden_size: Dimensionality of embeddings and hidden states
                 - max_sequence_length: Maximum sequence length for token type buffer
@@ -48,19 +48,19 @@ class PolyBertTokenTypeEmbedding(nn.Module):
         return x + self.embd(token_type_ids)
 
 
-class PolyBertEmbeddings(nn.Module):
-    """Token embedding layer for PolyBert model.
+class BertBlocksEmbeddings(nn.Module):
+    """Token embedding layer for BertBlocks model.
 
     This class implements the token embedding layer that converts input token IDs
     to dense vector representations. Optionally applies sinusoidal positional encodings
     and dropout for regularization.
     """
 
-    def __init__(self, config: "PolyBertConfig"):
+    def __init__(self, config: "BertBlocksConfig"):
         """Initialize the embedding layer.
 
         Args:
-            config (PolyBertConfig): Configuration object containing:
+            config (BertBlocksConfig): Configuration object containing:
                 - vocab_size: Size of the vocabulary for token embeddings
                 - hidden_size: Dimensionality of embeddings and hidden states
                 - pad_token_id: Token ID used for padding sequences
@@ -80,7 +80,7 @@ class PolyBertEmbeddings(nn.Module):
                 self.pose = LearnedPositionalEncoding(dim=config.hidden_size, max_seq_len=config.max_sequence_length)
             case _:
                 self.pose = None  # type: ignore
-        self.tokt = PolyBertTokenTypeEmbedding(config) if config.add_token_type_emb else None
+        self.tokt = BertBlocksTokenTypeEmbedding(config) if config.add_token_type_emb else None
         # Only post norm needed, as input is not a dense representation
         self.norm = get_norm(config) if config.norm_kind in ("post", "both") else nn.Identity()
         self.drop = nn.Dropout(config.emb_dropout_prob) if config.emb_dropout_prob > 0 else nn.Identity()

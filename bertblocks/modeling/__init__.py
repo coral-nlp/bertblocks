@@ -1,8 +1,8 @@
-"""PolyBert modeling components and architectures.
+"""BertBlocks modeling components and architectures.
 
 This module contains the core transformer model implementation including:
-- Model configuration (PolyBertConfig)
-- Base transformer model (PolyBertModel)
+- Model configuration (BertBlocksConfig)
+- Base transformer model (BertBlocksModel)
 - Task-specific model variants for different NLP applications
 
 The models support flexible architecture configurations including:
@@ -15,20 +15,20 @@ All models are designed to be compatible with HuggingFace transformers
 while providing additional flexibility for research and experimentation.
 """
 
-from .config import PolyBertConfig
+from .config import BertBlocksConfig
 from .model import (
-    PolyBertForMaskedLM,
-    PolyBertForQuestionAnswering,
-    PolyBertForSequenceClassification,
-    PolyBertForTokenClassification,
-    PolyBertModel,
+    BertBlocksForMaskedLM,
+    BertBlocksForQuestionAnswering,
+    BertBlocksForSequenceClassification,
+    BertBlocksForTokenClassification,
+    BertBlocksModel,
 )
 
 __all__ = [
-    "PolyBertConfig",
-    "PolyBertForMaskedLM",
-    "PolyBertForQuestionAnswering",
-    "PolyBertForSequenceClassification",
-    "PolyBertForTokenClassification",
-    "PolyBertModel",
+    "BertBlocksConfig",
+    "BertBlocksForMaskedLM",
+    "BertBlocksForQuestionAnswering",
+    "BertBlocksForSequenceClassification",
+    "BertBlocksForTokenClassification",
+    "BertBlocksModel",
 ]
