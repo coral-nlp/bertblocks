@@ -64,5 +64,4 @@ If you use this code in your research, please cite:
   author={CORAL Project Contributors},
   year={2025},
   url={https://github.com/your-repo/encoder-architecture-search}
-}
 ```

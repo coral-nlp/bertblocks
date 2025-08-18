@@ -36,6 +36,7 @@ test: ## Run tests
 test-cov: ## Run tests with coverage
 	uv run pytest bertblocks --cov=bertblocks.modeling --cov-report=term-missing --cov-report=html
 
+
 clean: ## Clean up build artifacts
 	rm -rf build/
 	rm -rf dist/
