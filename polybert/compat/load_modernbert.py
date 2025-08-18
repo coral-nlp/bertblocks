@@ -2,7 +2,9 @@ from polybert.modeling.config import PolyBertConfig
 from polybert.modeling.model import PolyBertModel
 
 
-def from_modernbert_model(pretrained_model_name_or_path: str, add_pooling_layer: bool = False) -> "PolyBertModel":
+def from_modernbert_model(
+    pretrained_model_name_or_path: str, load_weights: bool = True, add_pooling_layer: bool = False
+) -> "PolyBertModel":
     """Instantiate an equivalent PolyBERT model from ModernBERT weights and config."""
     from transformers import ModernBertConfig, ModernBertModel
 
@@ -46,45 +48,46 @@ def from_modernbert_model(pretrained_model_name_or_path: str, add_pooling_layer:
         classifier_dropout_prob=orig_config.classifier_dropout or 0.0,
     )
 
-    orig_model = ModernBertModel.from_pretrained(pretrained_model_name_or_path)
     poly_model = PolyBertModel(poly_config, add_pooling_layer=add_pooling_layer)
 
-    # Embedding layer
-    poly_model.embd.embd.weight.data.copy_(orig_model.embeddings.tok_embeddings.weight.data)
+    if load_weights:
+        orig_model = ModernBertModel.from_pretrained(pretrained_model_name_or_path)
+        # Embedding layer
+        poly_model.embd.embd.weight.data.copy_(orig_model.embeddings.tok_embeddings.weight.data)
 
-    for i in range(len(poly_model.encd.blocks)):
-        # QKV Projection
-        poly_model.encd.blocks[i].attn.proj.weight.data.copy_(orig_model.layers[i].attn.Wqkv.weight.data)
-        if poly_config.attn_proj_bias:
-            poly_model.encd.blocks[i].attn.proj.bias.data.copy_(orig_model.layers[i].attn.Wqkv.bias.data)
-        # Attention output projection
-        poly_model.encd.blocks[i].attn.ffwd.weight.data.copy_(orig_model.layers[i].attn.Wo.weight.data)
-        if poly_config.attn_out_bias:
-            poly_model.encd.blocks[i].attn.ffwd.bias.data.copy_(orig_model.layers[i].attn.Wo.bias.data)
-        # Feed-forward up and down projection
-        poly_model.encd.blocks[i].ffwd.Uprj.weight.data.copy_(orig_model.layers[i].mlp.Wi.weight.data)
-        if poly_config.mlp_in_bias:
-            poly_model.encd.blocks[i].ffwd.Uprj.bias.data.copy_(orig_model.layers[i].mlp.Wi.bias.data)
-        poly_model.encd.blocks[i].ffwd.Dprj.weight.data.copy_(orig_model.layers[i].mlp.Wo.weight.data)
-        if poly_config.mlp_out_bias:
-            poly_model.encd.blocks[i].ffwd.Dprj.bias.data.copy_(orig_model.layers[i].mlp.Wo.bias.data)
-        # Norms
-        if i == 0:
-            # If first layer, the norm is in the embedding (pre-norm)
-            poly_model.encd.blocks[i].pre_norm_attn.weight.data.copy_(orig_model.embeddings.norm.weight.data)
+        for i in range(len(poly_model.encd.blocks)):
+            # QKV Projection
+            poly_model.encd.blocks[i].attn.proj.weight.data.copy_(orig_model.layers[i].attn.Wqkv.weight.data)
+            if poly_config.attn_proj_bias:
+                poly_model.encd.blocks[i].attn.proj.bias.data.copy_(orig_model.layers[i].attn.Wqkv.bias.data)
+            # Attention output projection
+            poly_model.encd.blocks[i].attn.ffwd.weight.data.copy_(orig_model.layers[i].attn.Wo.weight.data)
+            if poly_config.attn_out_bias:
+                poly_model.encd.blocks[i].attn.ffwd.bias.data.copy_(orig_model.layers[i].attn.Wo.bias.data)
+            # Feed-forward up and down projection
+            poly_model.encd.blocks[i].ffwd.Uprj.weight.data.copy_(orig_model.layers[i].mlp.Wi.weight.data)
+            if poly_config.mlp_in_bias:
+                poly_model.encd.blocks[i].ffwd.Uprj.bias.data.copy_(orig_model.layers[i].mlp.Wi.bias.data)
+            poly_model.encd.blocks[i].ffwd.Dprj.weight.data.copy_(orig_model.layers[i].mlp.Wo.weight.data)
+            if poly_config.mlp_out_bias:
+                poly_model.encd.blocks[i].ffwd.Dprj.bias.data.copy_(orig_model.layers[i].mlp.Wo.bias.data)
+            # Norms
+            if i == 0:
+                # If first layer, the norm is in the embedding (pre-norm)
+                poly_model.encd.blocks[i].pre_norm_attn.weight.data.copy_(orig_model.embeddings.norm.weight.data)
+                if poly_config.norm_bias:
+                    poly_model.encd.blocks[i].pre_norm_attn.bias.data.copy_(orig_model.embeddings.norm.bias.data)
+            else:
+                poly_model.encd.blocks[i].pre_norm_attn.weight.data.copy_(orig_model.layers[i].attn_norm.weight.data)
+                if poly_config.norm_bias:
+                    poly_model.encd.blocks[i].pre_norm_attn.bias.data.copy_(orig_model.layers[i].attn_norm.bias.data)
+
+            poly_model.encd.blocks[i].pre_norm_ffwd.weight.data.copy_(orig_model.layers[i].mlp_norm.weight.data)
             if poly_config.norm_bias:
-                poly_model.encd.blocks[i].pre_norm_attn.bias.data.copy_(orig_model.embeddings.norm.bias.data)
-        else:
-            poly_model.encd.blocks[i].pre_norm_attn.weight.data.copy_(orig_model.layers[i].attn_norm.weight.data)
+                poly_model.encd.blocks[i].pre_norm_ffwd.bias.data.copy_(orig_model.layers[i].mlp_norm.bias.data)
+
+            poly_model.norm.weight.data.copy_(orig_model.final_norm.weight.data)
             if poly_config.norm_bias:
-                poly_model.encd.blocks[i].pre_norm_attn.bias.data.copy_(orig_model.layers[i].attn_norm.bias.data)
-
-        poly_model.encd.blocks[i].pre_norm_ffwd.weight.data.copy_(orig_model.layers[i].mlp_norm.weight.data)
-        if poly_config.norm_bias:
-            poly_model.encd.blocks[i].pre_norm_ffwd.bias.data.copy_(orig_model.layers[i].mlp_norm.bias.data)
-
-        poly_model.norm.weight.data.copy_(orig_model.final_norm.weight.data)
-        if poly_config.norm_bias:
-            poly_model.norm.bias.data.copy_(orig_model.final_norm.bias.data)
+                poly_model.norm.bias.data.copy_(orig_model.final_norm.bias.data)
 
     return poly_model
