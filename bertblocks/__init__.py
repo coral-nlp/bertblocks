@@ -1,6 +1,4 @@
-"""BertBlocks.
-
-BertBlocks is a modular transformer encoder implementation designed for architecture search and research purposes.
+"""BertBlocks is a modular transformer encoder implementation designed for architecture search and research purposes.
 
 This package includes:
 

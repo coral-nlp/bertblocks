@@ -1,3 +1,7 @@
+import os
+import sys
+sys.path.insert(0, os.path.abspath('../..'))
+
 # -- Project information -----------------------------------------------------
 project = "BertBlocks"
 copyright = "2025, CORAL Project Contributors"
@@ -8,15 +12,11 @@ release = "0.1.0"
 
 # -- General configuration ---------------------------------------------------
 extensions = [
-    "sphinx.ext.autodoc",
-    "sphinx.ext.autosummary",
-    "sphinx.ext.doctest",
+    #"sphinx.ext.autodoc",
+    "autoapi.extension",
+    "sphinx.ext.viewcode",
     "sphinx.ext.intersphinx",
     "sphinx.ext.napoleon",
-    "sphinx.ext.viewcode",
-    "sphinx_autodoc_typehints",
-    "autoapi.extension",
-    "myst_parser",
 ]
 
 templates_path = ["_templates"]
@@ -25,13 +25,8 @@ exclude_patterns = ["_build", "Thumbs.db", ".DS_Store", "test_*.py"]
 # -- AutoAPI configuration --------------------------------------------------
 autoapi_dirs = ["../bertblocks"]
 autoapi_type = "python"
-autoapi_root = "api"
-autoapi_add_toctree_entry = True
-autoapi_template_dir = "_templates/autoapi"
-autoapi_python_class_content = "class"
 autoapi_member_order = "groupwise"
 autoapi_keep_files = False
-
 autoapi_ignore = [
     "*/.venv/*",
     "*/site-packages/*",
@@ -41,16 +36,18 @@ autoapi_ignore = [
     "./__init__.py",
 ]
 
-# -- Autodoc configuration --------------------------------------------------
-autodoc_default_values = {
-    'members': None,
-    'undoc-members': None,
-    'special-members': None,
-    'show-inheritance': None,
-    'member-order': 'groupwise',
-    'exclude-members': '__dict__,__weakref__,__module__',
-}
-autodoc_typehints = "description"
+def skip_docstring_attributes(app, what, name, obj, skip, options):
+    """
+    Skip AutoAPI 'attribute' members if they are already documented
+    in the class docstring under 'Attributes:' and thus supplied by napoleon.
+    """
+    if what == "attribute":
+        return True
+    return skip  # default behavior
+
+
+def setup(app):
+    app.connect("autoapi-skip-member", skip_docstring_attributes)
 
 # -- Napoleon configuration --------------------------------------------------
 napoleon_google_docstring = True
