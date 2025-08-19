@@ -242,7 +242,7 @@ class BertBlocksPretrainingModule(L.LightningModule):
 
     def on_before_optimizer_step(self, optimizer):
         norms = grad_norm(self.model, norm_type=2)
-        self.log_dict({f'gradnorm/{k}': v for k, v in norms.items()})
+        self.log_dict({f"gradnorm/{k}": v for k, v in norms.items()})
 
     def on_save_checkpoint(self, *args: Any, **kwargs: Any) -> None:
         """Save model checkpoint in HuggingFace format.
