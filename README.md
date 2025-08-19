@@ -73,6 +73,6 @@ If you use this code in your research, please cite:
   title  = {BertBlocks - Building Blocks for Exploring Transformer Encoders},
   author = {CORAL Project Contributors},
   year   = {2025},
-  url    = {https://github.com/your-repo/encoder-architecture-search}
+  url    = {https://github.com/coral-nlp/bertblocks}
  }
 ```

@@ -6,6 +6,8 @@ from bertblocks.compat.load_bert import from_bert_model
 
 
 @pytest.mark.skip(reason="Under development")
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
+@pytest.mark.gpu
 class TestFromBertModel:
     """Test that Huggingface BERT and loaded BertBlocks implementations are equivalent in weights and output."""
 
