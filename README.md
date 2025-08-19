@@ -1,5 +1,5 @@
 <div align="center">
-  <img alt="BertBlocks" src="./docs/_static/bertblocks.svg" style="max-width: 75%;">
+  <img alt="BertBlocks" src="./docs/_static/bertblocks.svg" width="75%" style="max-width: 75%;">
   <br/>
 </div>
 
@@ -76,5 +76,5 @@ If you use this code in your research, please cite:
 
 ---
 <div align="center">
-  <img alt="BertBlocks" src="./docs/_static/blocks.svg" style="max-width: 35px;">
+  <img alt="BertBlocks" src="./docs/_static/blocks.svg" width="35px" style="max-width: 35px;">
 </div>
