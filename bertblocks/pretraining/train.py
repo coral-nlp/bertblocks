@@ -234,6 +234,11 @@ class BertBlocksPretrainingModule(L.LightningModule):
         self.log("loss/train", output.loss, prog_bar=True)
         return output.loss
 
+    def validation_step(self, batch: dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
+        output = self.model(batch, labels=batch)
+        self.log("loss/valid", output.loss, prog_bar=True)
+        return output.loss
+
     def on_save_checkpoint(self, *args: Any, **kwargs: Any) -> None:
         """Save model checkpoint in HuggingFace format.
 
