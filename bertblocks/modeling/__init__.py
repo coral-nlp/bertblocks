@@ -2,16 +2,10 @@
 
 This module contains the core transformer model implementation including:
 - Model configuration (BertBlocksConfig)
-- Base transformer model (BertBlocksModel)
+- Base transformer model (BertBlocksModel) and its components
 - Task-specific model variants for different NLP applications
 
-The models support flexible architecture configurations including:
-- Different attention mechanisms
-- Various normalization schemes
-- Configurable MLP architectures
-- Efficient sequence packing for variable-length inputs
-
-All models are designed to be compatible with HuggingFace transformers
+BertBlocks is designed to be compatible with HuggingFace transformers
 while providing additional flexibility for research and experimentation.
 """
 

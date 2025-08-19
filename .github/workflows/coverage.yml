@@ -1,0 +1,40 @@
+name: Test Coverage
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch: # Allow manual triggers
+
+jobs:
+  test-coverage:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull dev image
+        run: docker pull ghcr.io/${{ github.repository }}-dev:latest
+
+      - name: Run tests with coverage
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}:/workspace \
+            -w /workspace \
+            ghcr.io/${{ github.repository }}-dev:latest \
+            python -m pytest bertblocks --cov=bertblocks.modeling --cov-report=xml
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: |
+            coverage.xml
+          retention-days: 90

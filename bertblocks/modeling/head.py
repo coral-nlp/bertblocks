@@ -11,8 +11,8 @@ from bertblocks.modeling.activations import get_actv_fn
 from bertblocks.modeling.norms import get_norm
 
 
-class BertBlocksPooler(nn.Module):
-    """Pooling layer for BertBlocks.
+class Pooler(nn.Module):
+    """Pooling layer.
 
     Applies a linear layer and activation function to the first token of the last hidden state.
     """
@@ -21,9 +21,10 @@ class BertBlocksPooler(nn.Module):
         """Initialize the pooling layer.
 
         Args:
-            config (BertBlocksConfig): Configuration object containing:
-                - hidden_size: Dimensionality of hidden layers
-                - actv_fn: Activation function used in feed-forward networks
+            config (BertBlocksConfig): Configuration object determining model hyperparameters. May be passed to
+                other submodules. Keys used at top level:
+                    - hidden_size: Dimensionality of hidden layers
+                    - actv_fn: Activation function used in feed-forward networks
 
         """
         super().__init__()
@@ -34,7 +35,7 @@ class BertBlocksPooler(nn.Module):
         """Forward pass through the pooling layer.
 
         Args:
-            x (torch.Tensor, shape [batch_size, seq_len, hidden_size]): Input hidden states.
+            x (torch.Tensor, shape [batch_size, seq_len, hidden_size]): Padded input hidden states.
 
         Returns:
             torch.Tensor: Pooled representation of the first token. Shape [batch_size, hidden_size].
@@ -45,19 +46,15 @@ class BertBlocksPooler(nn.Module):
         return x
 
 
-class BertBlocksGLUPredictionHead(nn.Module):
-    """Prediction head for BertBlocks model with gated activation.
-
-    This class implements a prediction head that uses a gated linear unit (GLU)
-    architecture. It projects the hidden states to an expanded dimension, applies
-    gating with an activation function, and includes optional pre-/post-normalization.
-    """
+class GLUPredictionHead(nn.Module):
+    """Prediction head with gated activation."""
 
     def __init__(self, config: "BertBlocksConfig"):
         """Initialize the prediction head.
 
         Args:
-            config (BertBlocksConfig): Configuration object containing:
+            config (BertBlocksConfig): Configuration object determining model hyperparameters. May be passed to
+                other submodules. Keys used at top level:
                 - hidden_size: Dimensionality of hidden layers
                 - actv_fn: Activation function used in feed-forward networks
                 - norm_kind: When to apply normalization ("pre", "post", "both", "none")
@@ -70,14 +67,13 @@ class BertBlocksGLUPredictionHead(nn.Module):
         self.post_norm = get_norm(config) if config.norm_kind in ("post", "both") else nn.Identity()
 
     def forward(self, x: "torch.Tensor") -> "torch.Tensor":
-        """Forward pass through the prediction head.
+        """Forward pass of the prediction head.
 
         Args:
-            x (torch.Tensor, shape [batch_size, sequence_length, hidden_size]): Input tensor.
+            x (torch.Tensor, shape [batch_size, sequence_length, hidden_size]): Padded input hidden state.
 
         Returns:
-            torch.Tensor: Transformed tensor after gated projection and normalization.
-            Shape [batch_size, sequence_length, hidden_size].
+            torch.Tensor: Transformed hidden state, shape [batch_size, sequence_length, hidden_size].
 
         """
         x = self.pre_norm(x)
@@ -87,25 +83,21 @@ class BertBlocksGLUPredictionHead(nn.Module):
         return x
 
 
-class BertBlocksMLPPredictionHead(nn.Module):
-    """MLP Prediction head for BertBlocks model.
-
-    This class implements a traditional MLP prediction head. It projects the hidden states
-    to an expanded dimension, and then projects it back down to the original dimension.
-    Includes optional pre-/post-normalization.
-    """
+class MLPPredictionHead(nn.Module):
+    """MLP Prediction head."""
 
     def __init__(self, config: "BertBlocksConfig"):
         """Initialize the prediction head.
 
         Args:
-            config (BertBlocksConfig): Configuration object containing:
-                - hidden_size: Dimensionality of hidden layers
-                - intermediate_size: Dimensionality of feed-forward layers
-                - actv_fn: Activation function used in feed-forward networks
-                - mlp_in_bias: Whether to include bias in input projection of MLP layers
-                - mlp_out_bias: Whether to include bias in output projection of MLP layers
-                - norm_kind: When to apply normalization ("pre", "post", "both", "none")
+            config (BertBlocksConfig): Configuration object determining model hyperparameters. May be passed to
+                other submodules. Keys used at top level:
+                    - hidden_size: Dimensionality of hidden layers
+                    - intermediate_size: Dimensionality of feed-forward layers
+                    - actv_fn: Activation function used in feed-forward networks
+                    - mlp_in_bias: Whether to include bias in input projection of MLP layers
+                    - mlp_out_bias: Whether to include bias in output projection of MLP layers
+                    - norm_kind: When to apply normalization ("pre", "post", "both", "none")
 
         """
         super().__init__()
@@ -121,14 +113,13 @@ class BertBlocksMLPPredictionHead(nn.Module):
         self.post_norm = get_norm(config) if config.norm_kind in ("post", "both") else nn.Identity()
 
     def forward(self, x: "torch.Tensor") -> "torch.Tensor":
-        """Forward pass through the prediction head.
+        """Forward pass of the prediction head.
 
         Args:
-            x (torch.Tensor, shape [batch_size, sequence_length, hidden_size]): Input tensor.
+            x (torch.Tensor, shape [batch_size, sequence_length, hidden_size]): Padded input hidden state.
 
         Returns:
-            torch.Tensor: Transformed tensor after projection and normalization.
-            Shape [batch_size, sequence_length, hidden_size].
+            torch.Tensor: Transformed hidden state, shape [batch_size, sequence_length, hidden_size].
 
         """
         x = self.pre_norm(x)
@@ -162,9 +153,9 @@ def get_prediction_head(config: "BertBlocksConfig") -> nn.Module:
     mlp_type = getattr(config, "mlp_type", "mlp")  # Default to mlp for backward compatibility
 
     if mlp_type == "mlp":
-        return BertBlocksMLPPredictionHead(config)
+        return MLPPredictionHead(config)
     elif mlp_type == "glu":
-        return BertBlocksGLUPredictionHead(config)
+        return GLUPredictionHead(config)
     else:
         supported_types = ["mlp", "glu"]
         raise ValueError(f"Unknown MLP type '{mlp_type}'. Supported types: {', '.join(supported_types)}")
