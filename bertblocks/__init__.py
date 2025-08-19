@@ -5,17 +5,18 @@ and research purposes. It provides a flexible framework for experimenting with
 different transformer configurations, attention mechanisms, and training strategies.
 
 This package includes:
-- Core model implementations (BertBlocksModel, BertBlocksConfig)
-- Task-specific model heads for various NLP tasks
-- Pretraining utilities for masked language modeling
-- Wide range of architecture components for research
+
+    - Core model implementations (BertBlocksModel, BertBlocksConfig)
+    - Task-specific model heads for various NLP tasks
+    - Pretraining utilities for masked language modeling
+    - Wide range of architecture components for research
 
 The models are compatible with HuggingFace transformers ecosystem.
 """
 
 from .compat import from_huggingface
-from .modeling import (
-    BertBlocksConfig,
+from .modeling.config import BertBlocksConfig
+from .modeling.model import (
     BertBlocksForMaskedLM,
     BertBlocksForQuestionAnswering,
     BertBlocksForSequenceClassification,

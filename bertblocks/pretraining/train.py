@@ -24,7 +24,8 @@ from torch.utils.data import DataLoader
 from transformers import AutoTokenizer
 from transformers.trainer_pt_utils import get_parameter_names
 
-from bertblocks.modeling import BertBlocksConfig, BertBlocksForMaskedLM
+from bertblocks.modeling.config import BertBlocksConfig
+from bertblocks.modeling.model import BertBlocksForMaskedLM
 from bertblocks.pretraining.objectives import MaskedLanguageModelingCollator
 from bertblocks.pretraining.optimizer import get_optimizer
 
@@ -227,20 +228,18 @@ class BertBlocksPretrainingModule(L.LightningModule):
         """
         if self.hparams.compile_model:
             torch.compiler.cudagraph_mark_step_begin()
-        output = self.model(
-            input_ids=batch["input_ids"],
-            attention_mask=batch["attention_mask"],
-            labels=batch["labels"],
-        )
+        output = self.model(**batch)
         self.log("loss/train", output.loss, prog_bar=True)
         return output.loss
 
     def validation_step(self, batch: dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
-        output = self.model(batch, labels=batch)
+        """Perform a single validation step."""
+        output = self.model(**batch)
         self.log("loss/valid", output.loss, prog_bar=True)
         return output.loss
 
-    def on_before_optimizer_step(self, optimizer):
+    def on_before_optimizer_step(self, optimizer: torch.optim.Optimizer) -> None:
+        """Log grad norms at each optimizer step."""
         norms = grad_norm(self.model, norm_type=2)
         self.log_dict({f"gradnorm/{k}": v for k, v in norms.items()})
 
