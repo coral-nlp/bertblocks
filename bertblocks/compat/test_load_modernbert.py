@@ -5,6 +5,8 @@ from transformers import AutoTokenizer, ModernBertConfig, ModernBertModel
 from bertblocks.compat import from_modernbert_model
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
+@pytest.mark.gpu
 class TestFromModernBertModel:
     """Test equivalency of Huggingface ModernBERT and loaded BertBlocks implementations."""
 
