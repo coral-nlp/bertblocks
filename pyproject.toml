@@ -89,6 +89,7 @@ exclude = [
     ".venv",
     "__pycache__",
     "build",
+    "docs",
     "dist",
     "*.egg-info",
 ]
@@ -117,7 +118,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**/*" = ["E501", "F401", "F811", "F841"]  # Allow unused variables in tests
+"test_*" = ["E501", "F401", "F811", "F841"]  # Allow unused variables in tests
 "__init__.py" = ["F401", "F403"]  # Allow unused imports and star imports in init files
 
 [tool.ruff.format]
@@ -148,7 +149,7 @@ exclude_lines = [
 ]
 
 [tool.sphinx-build]
-source-dir = "docs/source"
+source-dir = "docs"
 build-dir = "docs/_build"
 doctree-dir = "docs/_build/doctrees"
 builder = "html"

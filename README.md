@@ -1,22 +1,19 @@
 <div align="center">
-
-<img alt="BertBlocks" src="./assets/bertblocks.png" width="800px" style="max-width: 100%;">
-
-<br/>
-<br/>
+  <img alt="BertBlocks" src="./docs/_static/bertblocks.svg" style="max-width: 75%;">
+  <br/>
 </div>
 
 ## Overview
 
-**BertBlocks** provides building blocks for exploring transformer encoders. It aims to provide a unified, clean, well-documented, and comprehensive collection of building blocks for BERT-like models.
+**BertBlocks** provides building blocks for exploring transformer encoders. It aims to provide a unified, clean, well-documented, and comprehensive collection of components for BERT-like models.
 It is highly configurable and allows for easy experimentation with various architectural components including:
 
-- **Normalization**: RMS Norm, Layer Norm, Group Norm, DeepNorm, DynamicTanhNorm, ...
+- **Normalization**: Pre/post normalization, RMS Norm, Layer Norm, Group Norm, DeepNorm, DynamicTanhNorm, ...
 - **Attention Mechanisms**: Multi-head attention with configurable heads and dropout
 - **Positional Encodings**: ALiBi, Sinusoidal, RoPE, Relative, Learned, ...
 - **Feed-Forward Networks**: Standard MLP, Gated Linear Units (GLU)...
 - **Activation Functions**: SiLU, GELU, ReLU, ...
-- **Optimization**: Pre/post normalization, dropout configurations, ...
+- **Optimization**: Pre-configured training setup with [Pytorch Lightning](https://lightning.ai/docs/pytorch/stable/), variety of optimizers, training objectives, ...
 
 ## Quick Start
 
@@ -76,3 +73,8 @@ If you use this code in your research, please cite:
   url    = {https://github.com/coral-nlp/bertblocks}
  }
 ```
+
+---
+<div align="center">
+  <img alt="BertBlocks" src="./docs/_static/blocks.svg" style="max-width: 35px;">
+</div>
