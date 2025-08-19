@@ -114,7 +114,8 @@ ignore = [
     "B904",  # Within `except` clause, raise exceptions with `raise ... from err`
     "RUF013", # PEP 484 prohibits implicit Optional (to be fixed later)
     "D100", "D104", "D107", # Missing docstrings (to be fixed later)
-    "D213", "D203" # Superseeded by other rules
+    "D213", "D203", # Superseeded by other rules
+    "D415", "D41" # Dont force first line ending in period
 ]
 
 [tool.ruff.lint.per-file-ignores]

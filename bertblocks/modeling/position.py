@@ -49,7 +49,7 @@ class SinusoidalPositionalEncoding(nn.Module):
             x (torch.Tensor, shape [batch_size, seq_len, embedding_dim]): The tensor to add positional encoding to.
 
         Returns:
-            torch.Tensor: The tensor after adding positional encoding. Shape [batch_size, seq_len, embedding_dim].
+            torch.Tensor: The tensor after adding positional encoding, shape [batch_size, seq_len, embedding_dim].
 
         """
         return x + self.sin[: x.size(1), :]
@@ -88,8 +88,7 @@ class LearnedPositionalEncoding(nn.Module):
             cu_seqlens (torch.Tensor, shape [batch_size + 1,]): Cumulative sequence lengths to infer positions from.
 
         Returns:
-            torch.Tensor: The tensor after adding learned positional encodings.
-                Shape [total_seq_len, embedding_dim].
+            torch.Tensor: The tensor after adding learned positional encodings, shape [total_seq_len, embedding_dim].
 
         """
         cu_seqlens = (

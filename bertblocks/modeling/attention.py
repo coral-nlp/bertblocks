@@ -53,24 +53,24 @@ ATTENTION_FUNCTION = {
 
 
 class Attention(nn.Module):
-    """Attention with configurable positional encodings."""
+    """Attention with configurable positional encodings.
+
+    Args:
+        config (BertBlocksConfig): Configuration object determining model hyperparameters. May be passed to
+            other submodules. Keys used at top level:
+
+                - `num_attention_heads`: Number of attention heads in multi-head attention
+                - `hidden_size`: Dimensionality of hidden layers (must be divisible by num_attention_heads)
+                - `max_sequence_length`: Maximum sequence length for positional encodings
+                - `attn_proj_bias`: Whether to include bias in QKV projection
+                - `attn_out_bias`: Whether to include bias in output projection
+                - `attn_dropout_prob`: Dropout probability for attention weights
+                - `pos_emb_kind`: Type of positional embedding ("alibi", "rope", "relative", etc.)
+
+            layer_id (int): layer id indicating index in the encoder stack.
+    """
 
     def __init__(self, config: "BertBlocksConfig", layer_id: int):
-        """Initialize the BertBlocks attention mechanism.
-
-        Args:
-            config (BertBlocksConfig): Configuration object determining model hyperparameters. May be passed to
-                other submodules. Keys used at top level:
-                    - num_attention_heads: Number of attention heads in multi-head attention
-                    - hidden_size: Dimensionality of hidden layers (must be divisible by num_attention_heads)
-                    - max_sequence_length: Maximum sequence length for positional encodings
-                    - attn_proj_bias: Whether to include bias in QKV projection
-                    - attn_out_bias: Whether to include bias in output projection
-                    - attn_dropout_prob: Dropout probability for attention weights
-                    - pos_emb_kind: Type of positional embedding ("alibi", "rope", "relative", etc.)
-            layer_id (int): layer id indicating index in the encoder stack.
-
-        """
         super().__init__()
         # General hyperparameters
         self.num_heads = config.num_attention_heads
@@ -94,7 +94,15 @@ class Attention(nn.Module):
         """Initialize positional encoding buffers if needed.
 
         Args:
-            config (BertBlocksConfig): Configuration object determining model hyperparameters.
+            config (BertBlocksConfig): Configuration object determining model hyperparameters. May be passed to
+                other submodules. Keys used at top level:
+
+                    - `attn_implementation`: Attention backend to use
+                    - `pos_emb_kind`: Type of positional embedding ("alibi", "rope", "relative", etc.)
+                    - `pos_emb_kwargs`: Additional positional encoding arguments
+                    - `num_attention_heads`: Number of attention heads in multi-head attention
+                    - `global_attention_every_n_layers`: Global attention layer stride
+
             layer_id (int): layer id indicating index in the encoder stack.
 
         """
@@ -145,9 +153,10 @@ class Attention(nn.Module):
             max_seq_len (int): Maximum sequence length in batch.
 
         Returns:
-            tuple[torch.Tensor, torch.Tensor | None]: A tuple containing:
-                - output: Attention output tensor of shape [batch_size, seq_len, hidden_size].
-                - attention_weights: Log-sum-exp attention weights of shape [batch_size, num_heads, seq_len, seq_len].
+            tuple[torch.Tensor, torch.Tensor | None]
+
+                - `output`: Attention output tensor of shape [batch_size, seq_len, hidden_size].
+                - `attention_weights`: Log-sum-exp attention weights of shape [batch_size, num_heads, seq_len, seq_len].
 
         """
         # Fused projection

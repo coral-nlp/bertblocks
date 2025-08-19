@@ -85,6 +85,7 @@ def get_norm(config: "BertBlocksConfig") -> "nn.Module":
         ValueError: If the specified normalization type is not supported.
 
     Supported normalization types:
+
         - `group`: Group normalization
         - `layer`: Layer normalization across the hidden dimension
         - `rms`: Root Mean Square layer normalization

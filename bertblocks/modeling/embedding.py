@@ -15,18 +15,17 @@ class TokenTypeEmbedding(nn.Module):
     """Token type embedding layer.
 
     Implements the token type embedding layer that converts token type IDs to dense vector representations.
+
+    Args:
+        config (BertBlocksConfig): Configuration object determining model hyperparameters. May be passed to
+            other submodules. Keys used at top level:
+
+                - `type_vocab_size`: Size of the token type vocabulary
+                - `hidden_size`: Dimensionality of embeddings and hidden states
+
     """
 
     def __init__(self, config: "BertBlocksConfig"):
-        """Instantiate token type embeddings.
-
-        Args:
-            config (BertBlocksConfig): Configuration object determining model hyperparameters. May be passed to
-                other submodules. Keys used at top level:
-                    - type_vocab_size: Size of the token type vocabulary
-                    - hidden_size: Dimensionality of embeddings and hidden states
-
-        """
         super().__init__()
         self.embd = nn.Embedding(config.type_vocab_size, config.hidden_size)
 
@@ -41,8 +40,7 @@ class TokenTypeEmbedding(nn.Module):
                 each token in the sequence.
 
         Returns:
-            torch.Tensor: Hidden state with token type embedding added.
-                Shape [total_sequence_length, hidden_size].
+            torch.Tensor: Hidden state with token type embedding added, shape [total_sequence_length, hidden_size].
 
         """
         token_type_ids = (
@@ -56,23 +54,23 @@ class TokenEmbedding(nn.Module):
 
     Implements the token embedding layer that converts input token IDs to dense vector representations.
     Optionally applies positional encodings and/or token type encodings.
+
+    Args:
+        config (BertBlocksConfig): Configuration object determining model hyperparameters. May be passed to
+            other submodules. Keys used at top level:
+
+            - `vocab_size`: Size of the vocabulary for token embeddings
+            - `hidden_size`: Dimensionality of embeddings and hidden states
+            - `pad_token_id`: Token ID used for padding sequences
+            - `pos_emb_kind`: Type of positional embedding ("sinusoidal", "learned", etc.)
+            - `max_sequence_length`: Maximum sequence length for positional encodings
+            - `add_token_type_emb`: Whether to add token type embeddings
+            - `norm_kind`: When to apply normalization ("post", "both", etc.)
+            - `emb_dropout_prob`: Dropout probability for embedding layer output
+
     """
 
     def __init__(self, config: "BertBlocksConfig"):
-        """Initialize the embedding layer.
-
-        Args:
-            config (BertBlocksConfig): Configuration object determining model hyperparameters. Used keys:
-                - vocab_size: Size of the vocabulary for token embeddings
-                - hidden_size: Dimensionality of embeddings and hidden states
-                - pad_token_id: Token ID used for padding sequences
-                - pos_emb_kind: Type of positional embedding ("sinusoidal", "learned", etc.)
-                - max_sequence_length: Maximum sequence length for positional encodings
-                - add_token_type_emb: Whether to add token type embeddings
-                - norm_kind: When to apply normalization ("post", "both", etc.)
-                - emb_dropout_prob: Dropout probability for embedding layer output
-
-        """
         super().__init__()
         self.embd = nn.Embedding(config.vocab_size, config.hidden_size, padding_idx=config.pad_token_id)
         match config.pos_emb_kind:
@@ -93,7 +91,7 @@ class TokenEmbedding(nn.Module):
         cu_seqlens: "torch.LongTensor | None" = None,
         token_type_ids: "torch.LongTensor | None" = None,
     ) -> "torch.Tensor":
-        """Forward pass through the embedding layer.
+        """Forward pass of the embedding layer.
 
         Args:
             input_ids (torch.Tensor, shape [total_seq_len,]): Unpadded token IDs.
@@ -101,8 +99,7 @@ class TokenEmbedding(nn.Module):
             token_type_ids (torch.LongTensor, shape [batch_size, sequence_length], optional): Tensor of token types.
 
         Returns:
-            torch.Tensor: Embedded token representations.
-            Shape [total_seq_len, hidden_size].
+            torch.Tensor: Embedded token representations, shape [total_seq_len, hidden_size].
 
         """
         # Input embeddings

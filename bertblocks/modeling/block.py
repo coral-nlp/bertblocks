@@ -19,9 +19,21 @@ class Block(nn.Module):
     layers, supporting both pre-normalization and post-normalization schemes.
 
     The block consists of:
-    1. Multi-head self-attention with residual connection
-    2. Feed-forward network with residual connection
-    3. Layer normalization (pre/post/both/none)
+
+        - Multi-head self-attention with residual connection
+        - Feed-forward network with residual connection
+        - Layer normalization (pre/post/both/none)
+
+    Args:
+        config (BertBlocksConfig): Configuration object determining model hyperparameters. May be passed to
+            other submodules. Keys used at top level:
+
+                - `norm_kind`: Normalization layer type
+                - `attn_dropout_prob`: Dropout probability for attention layer
+                - `hidden_dropout_prob`: Dropout probability for feed-forward layers
+
+        layer_id (int): layer id indicating index in the encoder stack.
+
 
     References:
          - "Attention Is All You Need" (https://arxiv.org/pdf/1706.03762)
@@ -30,21 +42,6 @@ class Block(nn.Module):
     """
 
     def __init__(self, config: "BertBlocksConfig", layer_id: int):
-        """Initialize the transformer block.
-
-        Sets up the attention mechanism, feed-forward network, and normalization
-        layers based on configuration. Normalization layers are set to Identity
-        when not needed according to the norm_kind setting.
-
-        Args:
-            config (BertBlocksConfig): Configuration object determining model hyperparameters. May be passed to
-                other submodules. Keys used at top level:
-                    - norm_kind: Normalization layer type
-                    - attn_dropout_prob: Dropout probability for attention layer
-                    - hidden_dropout_prob: Dropout probability for feed-forward layers
-            layer_id (int): layer id indicating index in the encoder stack.
-
-        """
         super().__init__()
         self.layer_id = layer_id
         self.attn = Attention(config, layer_id=layer_id)
@@ -70,9 +67,10 @@ class Block(nn.Module):
             max_seq_len (int): Maximum sequence length in batch.
 
         Returns:
-            tuple[torch.Tensor, torch.Tensor | None]: A tuple containing:
-                - output (torch.Tensor): Transformed hidden state with same shape as input
-                - attention_weights (torch.Tensor | None): Attention weights. Shape [batch_size, seq_len, seq_len]
+            tuple[torch.Tensor, torch.Tensor | None]:
+
+                - `output` (torch.Tensor): Transformed hidden state with same shape as input
+                - `attention_weights` (torch.Tensor | None): Attention weights. Shape [batch_size, seq_len, seq_len]
 
         """
         # Attention component
@@ -98,21 +96,17 @@ class Encoder(nn.Module):
     """Multi-layer transformer encoder.
 
     Uses sequence packing for higher efficiency.
+
+    Args:
+        config (BertBlocksConfig): Configuration object determining model hyperparameters. May be passed to
+            other submodules. Keys used at top level:
+
+                - `num_blocks`: Number of transformer blocks
+                - `num_attention_heads`: Number of transformer attention heads
+
     """
 
     def __init__(self, config: "BertBlocksConfig"):
-        """Initialize the BertBlocks encoder.
-
-        Creates a stack of transformer blocks. Each block is independently initialized taking into account its position
-        in the encoder stack.
-
-        Args:
-            config (BertBlocksConfig): Configuration object determining model hyperparameters. May be passed to
-                other submodules. Keys used at top level:
-                    - num_blocks: Number of transformer blocks
-                    - num_attention_heads: Number of transformer attention heads
-
-        """
         super().__init__()
         self.blocks = nn.ModuleList([Block(config, layer_id) for layer_id in range(config.num_blocks)])
         self.num_heads = config.num_attention_heads
@@ -139,13 +133,14 @@ class Encoder(nn.Module):
                 all layers. Defaults to False.
 
         Returns:
-            tuple containing:
-                - last_hidden_state (torch.Tensor): Output of the final transformer layer.
+            tuple[torch.Tensor, tuple[torch.Tensor, ...] | None, tuple[torch.Tensor, ...] | None]:
+
+                - `last_hidden_state` (torch.Tensor): Output of the final transformer layer.
                   Shape [batch_size, seq_len, hidden_size].
-                - all_hidden_states (tuple[torch.Tensor, ...] | None): Hidden states from all layers
+                - `all_hidden_states` (tuple[torch.Tensor, ...] | None): Hidden states from all layers
                   if output_hidden_states=True, None otherwise. Each tensor has shape
                   [batch_size, seq_len, hidden_size].
-                - all_attentions (tuple[torch.Tensor, ...] | None): Attention weights from all layers
+                - `all_attentions` (tuple[torch.Tensor, ...] | None): Attention weights from all layers
                   if output_attentions=True, None otherwise. Shape depends on attention implementation.
 
         """

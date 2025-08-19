@@ -15,24 +15,23 @@ class Pooler(nn.Module):
     """Pooling layer.
 
     Applies a linear layer and activation function to the first token of the last hidden state.
+
+    Args:
+        config (BertBlocksConfig): Configuration object determining model hyperparameters. May be passed to
+            other submodules. Keys used at top level:
+
+                - `hidden_size`: Dimensionality of hidden layers
+                - `actv_fn`: Activation function used in feed-forward networks
+
     """
 
     def __init__(self, config: "BertBlocksConfig") -> None:
-        """Initialize the pooling layer.
-
-        Args:
-            config (BertBlocksConfig): Configuration object determining model hyperparameters. May be passed to
-                other submodules. Keys used at top level:
-                    - hidden_size: Dimensionality of hidden layers
-                    - actv_fn: Activation function used in feed-forward networks
-
-        """
         super().__init__()
         self.ffwd = nn.Linear(config.hidden_size, config.hidden_size)
         self.actv = get_actv_fn(config)
 
     def forward(self, x: "torch.Tensor") -> "torch.Tensor":
-        """Forward pass through the pooling layer.
+        """Forward pass of the pooling layer.
 
         Args:
             x (torch.Tensor, shape [batch_size, seq_len, hidden_size]): Padded input hidden states.
@@ -47,19 +46,19 @@ class Pooler(nn.Module):
 
 
 class GLUPredictionHead(nn.Module):
-    """Prediction head with gated activation."""
+    """Prediction head with gated activation.
+
+    Args:
+        config (BertBlocksConfig): Configuration object determining model hyperparameters. May be passed to
+            other submodules. Keys used at top level:
+
+            - `hidden_size`: Dimensionality of hidden layers
+            - `actv_fn`: Activation function used in feed-forward networks
+            - `norm_kind`: When to apply normalization ("pre", "post", "both", "none")
+
+    """
 
     def __init__(self, config: "BertBlocksConfig"):
-        """Initialize the prediction head.
-
-        Args:
-            config (BertBlocksConfig): Configuration object determining model hyperparameters. May be passed to
-                other submodules. Keys used at top level:
-                - hidden_size: Dimensionality of hidden layers
-                - actv_fn: Activation function used in feed-forward networks
-                - norm_kind: When to apply normalization ("pre", "post", "both", "none")
-
-        """
         super().__init__()
         self.ffwd = nn.Linear(config.hidden_size, 2 * config.hidden_size, bias=False)
         self.actv = get_actv_fn(config)
@@ -84,22 +83,22 @@ class GLUPredictionHead(nn.Module):
 
 
 class MLPPredictionHead(nn.Module):
-    """MLP Prediction head."""
+    """MLP Prediction head.
+
+    Args:
+        config (BertBlocksConfig): Configuration object determining model hyperparameters. May be passed to
+            other submodules. Keys used at top level:
+
+                - `hidden_size`: Dimensionality of hidden layers
+                - `intermediate_size`: Dimensionality of feed-forward layers
+                - `actv_fn`: Activation function used in feed-forward networks
+                - `mlp_in_bias`: Whether to include bias in input projection of MLP layers
+                - `mlp_out_bias`: Whether to include bias in output projection of MLP layers
+                - `norm_kind`: When to apply normalization ("pre", "post", "both", "none")
+
+    """
 
     def __init__(self, config: "BertBlocksConfig"):
-        """Initialize the prediction head.
-
-        Args:
-            config (BertBlocksConfig): Configuration object determining model hyperparameters. May be passed to
-                other submodules. Keys used at top level:
-                    - hidden_size: Dimensionality of hidden layers
-                    - intermediate_size: Dimensionality of feed-forward layers
-                    - actv_fn: Activation function used in feed-forward networks
-                    - mlp_in_bias: Whether to include bias in input projection of MLP layers
-                    - mlp_out_bias: Whether to include bias in output projection of MLP layers
-                    - norm_kind: When to apply normalization ("pre", "post", "both", "none")
-
-        """
         super().__init__()
         # Upwards projection to intermediate size
         self.Uprj = nn.Linear(config.hidden_size, config.intermediate_size, bias=config.mlp_in_bias)
@@ -140,12 +139,13 @@ def get_prediction_head(config: "BertBlocksConfig") -> nn.Module:
         config (BertBlocksConfig): Configuration object determining model hyperparameters.
 
     Returns:
-        An prediction head module (nn.Module) that can transform hidden states.
+        An prediction head module that can transform hidden states.
 
     Raises:
         ValueError: If the specified prediction head type is not supported.
 
     Supported prediction head types:
+
         - `mlp`: Standard two-layer feedforward network
         - `glu`: Gated Linear Unit
 

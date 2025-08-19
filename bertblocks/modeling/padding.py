@@ -12,10 +12,12 @@ def unpad_input(
         attention_mask (torch.Tensor, shape [batch, seqlen]): boolean token mask.
 
     Returns:
-        unpadded_inputs (torch.Tensor, shape [total_seq_len, ...]):
-        indices (torch.Tensor, shape [total_seq_len, ...]):
-        cu_seqlens (torch.Tensor, [batch + 1,]): the cumulative sequence lengths
-        max_seqlen_in_batch (int):
+        tuple[torch.Tensor, torch.Tensor, torch.Tensor, int]
+
+            - `unpadded_inputs` (torch.Tensor, shape [total_seq_len, ...]): the fused unpadded token IDs
+            - `indices` (torch.Tensor, shape [total_seq_len, ...]): the sequence indices
+            - `cu_seqlens` (torch.Tensor, [batch + 1,]): the cumulative sequence lengths
+            - `max_seqlen_in_batch` (int): the maximum unpadded sequence length encountered in the batch
 
     """
     seqlens_in_batch = attention_mask.sum(dim=-1, dtype=torch.int32)
@@ -48,7 +50,8 @@ def pad_output(
         seqlen (int): sequence length
 
     Returns:
-        padded_inputs (torch.Tensor, shape [batch, seqlen, ...])
+        torch.Tensor
+            The padded inputs, shape [batch, seqlen, ...]
 
     """
     if inputs.dim() == 1:
