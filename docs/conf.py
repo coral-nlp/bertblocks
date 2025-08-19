@@ -51,6 +51,8 @@ autoapi_ignore = [
     "*/site-packages/*",
     "*/__pycache__/*",
     "*/.*",  # Hidden directories
+    # Skip duplicate imports that cause ambiguous references
+    "*/modeling/__init__.py"
 ]
 
 # -- Autodoc configuration --------------------------------------------------
