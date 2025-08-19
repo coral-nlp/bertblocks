@@ -56,3 +56,6 @@ def get_actv_fn(config: "BertBlocksConfig") -> "nn.Module":
             return PReLU()
         case _:
             raise ValueError(f"Unknown activation function {config.actv_fn}")
+
+
+__all__ = ["get_actv_fn"]

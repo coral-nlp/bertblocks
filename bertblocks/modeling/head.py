@@ -16,6 +16,10 @@ class Pooler(nn.Module):
 
     Applies a linear layer and activation function to the first token of the last hidden state.
 
+    Attributes:
+        ffwd: Feed-forward layer from hidden size to hidden size.
+        actv: Activation function.
+
     Args:
         config (BertBlocksConfig): Configuration object determining model hyperparameters. May be passed to
             other submodules. Keys used at top level:
@@ -48,6 +52,12 @@ class Pooler(nn.Module):
 class GLUPredictionHead(nn.Module):
     """Prediction head with gated activation.
 
+    Attributes:
+        pre_norm (nn.Module): Pre-norm function. Falls back to `nn.Identity` if not configured.
+        ffwd (nn.Linear): Feed-forward projection layer, from hidden size to 2 * hidden size.
+        actv (nn.Module): Activation function.
+        post_norm (nn.Module): Post-norm function. Falls back to `nn.Identity` if not configured.
+
     Args:
         config (BertBlocksConfig): Configuration object determining model hyperparameters. May be passed to
             other submodules. Keys used at top level:
@@ -60,9 +70,9 @@ class GLUPredictionHead(nn.Module):
 
     def __init__(self, config: "BertBlocksConfig"):
         super().__init__()
+        self.pre_norm = get_norm(config) if config.norm_kind in ("pre", "both") else nn.Identity()
         self.ffwd = nn.Linear(config.hidden_size, 2 * config.hidden_size, bias=False)
         self.actv = get_actv_fn(config)
-        self.pre_norm = get_norm(config) if config.norm_kind in ("pre", "both") else nn.Identity()
         self.post_norm = get_norm(config) if config.norm_kind in ("post", "both") else nn.Identity()
 
     def forward(self, x: "torch.Tensor") -> "torch.Tensor":
@@ -85,6 +95,13 @@ class GLUPredictionHead(nn.Module):
 class MLPPredictionHead(nn.Module):
     """MLP Prediction head.
 
+    Attributes:
+        pre_norm (nn.Module): Pre-norm function. Falls back to `nn.Identity` if not configured.
+        uprj (nn.Linear): MLP up projection layer, from hidden size to intermediate size.
+        actv (nn.Module): Activation function.
+        dprj (nn.Linear): MLP down projection layer, from intermediate size to hidden size.
+        post_norm (nn.Module): Post-norm function. Falls back to `nn.Identity` if not configured.
+
     Args:
         config (BertBlocksConfig): Configuration object determining model hyperparameters. May be passed to
             other submodules. Keys used at top level:
@@ -100,15 +117,10 @@ class MLPPredictionHead(nn.Module):
 
     def __init__(self, config: "BertBlocksConfig"):
         super().__init__()
-        # Upwards projection to intermediate size
-        self.Uprj = nn.Linear(config.hidden_size, config.intermediate_size, bias=config.mlp_in_bias)
-        # Activation function
-        self.actv = get_actv_fn(config)
-        # Downwards projection to hidden size
-        self.Dprj = nn.Linear(config.intermediate_size, config.hidden_size, bias=config.mlp_out_bias)
-        # Prenorm (if configured, nn.Identity otherwise)
         self.pre_norm = get_norm(config) if config.norm_kind in ("pre", "both") else nn.Identity()
-        # Postnorm (if configured, nn.Identity otherwise)
+        self.uprj = nn.Linear(config.hidden_size, config.intermediate_size, bias=config.mlp_in_bias)
+        self.actv = get_actv_fn(config)
+        self.dprj = nn.Linear(config.intermediate_size, config.hidden_size, bias=config.mlp_out_bias)
         self.post_norm = get_norm(config) if config.norm_kind in ("post", "both") else nn.Identity()
 
     def forward(self, x: "torch.Tensor") -> "torch.Tensor":
@@ -122,9 +134,9 @@ class MLPPredictionHead(nn.Module):
 
         """
         x = self.pre_norm(x)
-        x = self.Uprj(x)
+        x = self.uprj(x)
         x = self.actv(x)
-        x = self.Dprj(x)
+        x = self.dprj(x)
         x = self.post_norm(x)
         return x
 
@@ -159,3 +171,6 @@ def get_prediction_head(config: "BertBlocksConfig") -> nn.Module:
     else:
         supported_types = ["mlp", "glu"]
         raise ValueError(f"Unknown MLP type '{mlp_type}'. Supported types: {', '.join(supported_types)}")
+
+
+__all__ = ["get_prediction_head", "MLPPredictionHead", "GLUPredictionHead", "Pooler"]

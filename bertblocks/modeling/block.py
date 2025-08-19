@@ -24,6 +24,21 @@ class Block(nn.Module):
         - Feed-forward network with residual connection
         - Layer normalization (pre/post/both/none)
 
+    Attributes:
+        layer_id (int): index position of the layer in the models' encoder stack.
+        attn (Attention): Attention module.
+        ffwd (nn.Module): Feed-forward module.
+        pre_norm_attn (nn.Module): Pre-normalization layer for attention module. Falls back to `nn.Identity` if not
+            configured.
+        pre_norm_ffwd (nn.Module): Pre-normalization layer for feed-forward module. Falls back to `nn.Identity` if not
+            configured.
+        post_norm_attn (nn.Module): Pre-normalization function for attention module. Falls back to `nn.Identity` if not
+            configured.
+        post_norm_ffwd (nn.Module): Post-normalization function for feed-forward module. Falls back to `nn.Identity` if
+            not configured.
+        attn_drop (nn.Dropout): Post-attention dropout layer. Falls back to `nn.Identity` if not configured.
+        ffwd_drop (nn.Dropout): Post-Feed-forward dropout layer. Falls back to `nn.Identity` if not configured.
+
     Args:
         config (BertBlocksConfig): Configuration object determining model hyperparameters. May be passed to
             other submodules. Keys used at top level:
@@ -51,7 +66,7 @@ class Block(nn.Module):
         self.post_norm_attn = get_norm(config) if config.norm_kind in ("post", "both") else nn.Identity()
         self.post_norm_ffwd = get_norm(config) if config.norm_kind in ("post", "both") else nn.Identity()
         self.attn_drop = nn.Dropout(config.attn_dropout_prob) if config.attn_dropout_prob > 0 else nn.Identity()
-        self.hidden_drop = nn.Dropout(config.hidden_dropout_prob) if config.hidden_dropout_prob > 0 else nn.Identity()
+        self.ffwd_drop = nn.Dropout(config.hidden_dropout_prob) if config.hidden_dropout_prob > 0 else nn.Identity()
 
     def forward(
         self,
@@ -87,7 +102,7 @@ class Block(nn.Module):
         residual = x
         x = self.pre_norm_ffwd(x)
         x = self.ffwd(x)
-        x = self.hidden_drop(x)
+        x = self.ffwd_drop(x)
         x = self.post_norm_ffwd(x + residual)
         return x, w
 
@@ -96,6 +111,9 @@ class Encoder(nn.Module):
     """Multi-layer transformer encoder.
 
     Uses sequence packing for higher efficiency.
+
+    Attributes:
+        blocks (nn.ModuleList): Stack of Block modules.
 
     Args:
         config (BertBlocksConfig): Configuration object determining model hyperparameters. May be passed to
@@ -109,7 +127,6 @@ class Encoder(nn.Module):
     def __init__(self, config: "BertBlocksConfig"):
         super().__init__()
         self.blocks = nn.ModuleList([Block(config, layer_id) for layer_id in range(config.num_blocks)])
-        self.num_heads = config.num_attention_heads
 
     def forward(
         self,
@@ -160,3 +177,6 @@ class Encoder(nn.Module):
             tuple(all_hidden_states) if output_hidden_states else None,
             tuple(all_attentions) if output_attentions else None,
         )
+
+
+__all__ = ["Encoder", "Block"]

@@ -626,3 +626,12 @@ class BertBlocksForQuestionAnswering(BertBlocksForTasksBase):
             hidden_states=output.hidden_states,
             attentions=output.attentions,
         )
+
+
+__all__ = [
+    "BertBlocksModel",
+    "BertBlocksForMaskedLM",
+    "BertBlocksForTokenClassification",
+    "BertBlocksForQuestionAnswering",
+    "BertBlocksForSequenceClassification",
+]

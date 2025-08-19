@@ -16,6 +16,9 @@ class TokenTypeEmbedding(nn.Module):
 
     Implements the token type embedding layer that converts token type IDs to dense vector representations.
 
+    Attributes:
+        embd (nn.Embedding): Token type embedding layer.
+
     Args:
         config (BertBlocksConfig): Configuration object determining model hyperparameters. May be passed to
             other submodules. Keys used at top level:
@@ -54,6 +57,13 @@ class TokenEmbedding(nn.Module):
 
     Implements the token embedding layer that converts input token IDs to dense vector representations.
     Optionally applies positional encodings and/or token type encodings.
+
+    Attributes:
+        embd (nn.Embedding): Token type embedding layer.
+        pose (nn.Module | None): Positional encoding layer.
+        tokt (nn.Module | None): Token type embedding layer.
+        norm (nn.Module): Normalization layer. Falls back to `nn.Identity` if not configured.
+        drop (nn.Dropout): Dropout layer. Falls back to `nn.Identity` if not configured.
 
     Args:
         config (BertBlocksConfig): Configuration object determining model hyperparameters. May be passed to
@@ -115,3 +125,6 @@ class TokenEmbedding(nn.Module):
         # Dropout (optional)
         x = self.drop(x)
         return x
+
+
+__all__ = ["TokenEmbedding", "TokenTypeEmbedding"]

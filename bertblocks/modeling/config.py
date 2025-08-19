@@ -253,3 +253,6 @@ class BertBlocksConfig(PretrainedConfig):
         self.pos_emb_kwargs.update(
             {"dim": self.hidden_size // self.num_attention_heads, "max_seq_len": self.max_sequence_length}
         )
+
+
+__all__ = ["BertBlocksConfig"]

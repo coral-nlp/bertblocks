@@ -71,10 +71,10 @@ class TestFromModernBertModel:
 
             with subtests.test(f"layer_encoder_block_{layer_idx}_ffwd"):
                 torch.testing.assert_close(
-                    bertblocks_model.encd.blocks[layer_idx].ffwd.Uprj.weight, hf_model.layers[layer_idx].mlp.Wi.weight
+                    bertblocks_model.encd.blocks[layer_idx].ffwd.uprj.weight, hf_model.layers[layer_idx].mlp.Wi.weight
                 )
                 torch.testing.assert_close(
-                    bertblocks_model.encd.blocks[layer_idx].ffwd.Dprj.weight, hf_model.layers[layer_idx].mlp.Wo.weight
+                    bertblocks_model.encd.blocks[layer_idx].ffwd.dprj.weight, hf_model.layers[layer_idx].mlp.Wo.weight
                 )
 
             with subtests.test(f"layer_encoder_block_{layer_idx}_norms"):

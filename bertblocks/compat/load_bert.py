@@ -84,16 +84,16 @@ def from_bert_model(
             )
 
             # Feed-forward layers
-            bertblocks_model.encd.blocks[i].ffwd.Uprj.weight.data.copy_(
+            bertblocks_model.encd.blocks[i].ffwd.uprj.weight.data.copy_(
                 orig_model.encoder.layer[i].intermediate.dense.weight.data
             )
-            bertblocks_model.encd.blocks[i].ffwd.Uprj.bias.data.copy_(
+            bertblocks_model.encd.blocks[i].ffwd.uprj.bias.data.copy_(
                 orig_model.encoder.layer[i].intermediate.dense.bias.data
             )
-            bertblocks_model.encd.blocks[i].ffwd.Dprj.weight.data.copy_(
+            bertblocks_model.encd.blocks[i].ffwd.dprj.weight.data.copy_(
                 orig_model.encoder.layer[i].output.dense.weight.data
             )
-            bertblocks_model.encd.blocks[i].ffwd.Dprj.bias.data.copy_(
+            bertblocks_model.encd.blocks[i].ffwd.dprj.bias.data.copy_(
                 orig_model.encoder.layer[i].output.dense.bias.data
             )
 

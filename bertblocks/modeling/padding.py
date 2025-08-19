@@ -65,3 +65,6 @@ def pad_output(
         padded_inputs = output.view(batch, seqlen, *rest)
 
     return padded_inputs
+
+
+__all__ = ["pad_output", "unpad_input"]

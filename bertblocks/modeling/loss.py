@@ -28,3 +28,6 @@ def get_loss_function(
     else:
         supported_types = ["regression", "single_label_classification", "multi_label_classification"]
         raise ValueError(f"Unknown problem type '{problem_type}'. Supported types: {', '.join(supported_types)}")
+
+
+__all__ = ["get_loss_function"]

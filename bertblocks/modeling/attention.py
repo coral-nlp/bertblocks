@@ -14,7 +14,7 @@ from bertblocks.modeling.config import BertBlocksConfig
 from bertblocks.modeling.position import RotaryEmbedding, get_alibi_slopes
 
 
-def flash_attention_forward(
+def _flash_attention_forward(
     qkv: "torch.Tensor",
     cu_seqlens: "torch.Tensor",
     max_seq_len: int,
@@ -47,13 +47,24 @@ def flash_attention_forward(
 
 
 # Supported attention backends; only flash attention for now.
-ATTENTION_FUNCTION = {
-    "fa2": flash_attention_forward,
+_ATTENTION_FUNCTION = {
+    "fa2": _flash_attention_forward,
 }
 
 
 class Attention(nn.Module):
     """Attention with configurable positional encodings.
+
+    Attributes:
+        num_heads (int): Number of attention heads.
+        head_dim (int): Dimension size of attention heads.
+        max_seq_len (int): Maximum sequence length.
+        dropout_p (float): Dropout probability for attention.
+        local_attention (tuple[int, int]): Local attention size, if applied.
+        deterministic (bool): Whether to use deterministic attention.
+        proj (nn.Linear): Fused QKV projection layer.
+        ffwd (nn.Linear): Feed-forward layer to combine heads after attention.
+
 
     Args:
         config (BertBlocksConfig): Configuration object determining model hyperparameters. May be passed to
@@ -76,9 +87,6 @@ class Attention(nn.Module):
         self.num_heads = config.num_attention_heads
         self.head_dim = config.hidden_size // config.num_attention_heads
         self.max_seq_len = config.max_sequence_length
-        # Fused linear layers for better performance
-        self.proj = nn.Linear(config.hidden_size, 3 * config.hidden_size, bias=config.attn_proj_bias)
-        self.ffwd = nn.Linear(config.hidden_size, config.hidden_size, bias=config.attn_out_bias)
         self.dropout_p = config.attn_dropout_prob
         if config.global_attention_every_n_layers != 0:
             self.local_attention = (
@@ -86,9 +94,13 @@ class Attention(nn.Module):
             )
         else:
             self.local_attention = (-1, -1)
-        self._initialize_pos_buffers(config, layer_id=layer_id)
-        self._attention_fn = ATTENTION_FUNCTION[config.attn_implementation]
         self.deterministic = True
+        # Layers
+        self.proj = nn.Linear(config.hidden_size, 3 * config.hidden_size, bias=config.attn_proj_bias)
+        self.ffwd = nn.Linear(config.hidden_size, config.hidden_size, bias=config.attn_out_bias)
+        # Private inits
+        self._initialize_pos_buffers(config, layer_id=layer_id)
+        self._attention_fn = _ATTENTION_FUNCTION[config.attn_implementation]
 
     def _initialize_pos_buffers(self, config: BertBlocksConfig, layer_id: int) -> None:
         """Initialize positional encoding buffers if needed.
@@ -180,3 +192,6 @@ class Attention(nn.Module):
         # Output projection
         x = self.ffwd(x)
         return x, w
+
+
+__all__ = ["Attention"]

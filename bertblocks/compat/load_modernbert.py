@@ -65,12 +65,12 @@ def from_modernbert_model(
             if bertblocks_config.attn_out_bias:
                 bertblocks_model.encd.blocks[i].attn.ffwd.bias.data.copy_(orig_model.layers[i].attn.Wo.bias.data)
             # Feed-forward up and down projection
-            bertblocks_model.encd.blocks[i].ffwd.Uprj.weight.data.copy_(orig_model.layers[i].mlp.Wi.weight.data)
+            bertblocks_model.encd.blocks[i].ffwd.uprj.weight.data.copy_(orig_model.layers[i].mlp.Wi.weight.data)
             if bertblocks_config.mlp_in_bias:
-                bertblocks_model.encd.blocks[i].ffwd.Uprj.bias.data.copy_(orig_model.layers[i].mlp.Wi.bias.data)
-            bertblocks_model.encd.blocks[i].ffwd.Dprj.weight.data.copy_(orig_model.layers[i].mlp.Wo.weight.data)
+                bertblocks_model.encd.blocks[i].ffwd.uprj.bias.data.copy_(orig_model.layers[i].mlp.Wi.bias.data)
+            bertblocks_model.encd.blocks[i].ffwd.dprj.weight.data.copy_(orig_model.layers[i].mlp.Wo.weight.data)
             if bertblocks_config.mlp_out_bias:
-                bertblocks_model.encd.blocks[i].ffwd.Dprj.bias.data.copy_(orig_model.layers[i].mlp.Wo.bias.data)
+                bertblocks_model.encd.blocks[i].ffwd.dprj.bias.data.copy_(orig_model.layers[i].mlp.Wo.bias.data)
             # Norms
             if i == 0:
                 # If first layer, the norm is in the embedding (pre-norm)

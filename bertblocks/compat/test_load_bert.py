@@ -83,19 +83,19 @@ class TestFromBertModel:
 
             with subtests.test(f"layer_encoder_block_{layer_idx}_ffwd"):
                 torch.testing.assert_close(
-                    bb_model.encd.blocks[layer_idx].ffwd.Uprj.weight,
+                    bb_model.encd.blocks[layer_idx].ffwd.uprj.weight,
                     hf_model.encoder.layer[layer_idx].intermediate.dense.weight,
                 )
                 torch.testing.assert_close(
-                    bb_model.encd.blocks[layer_idx].ffwd.Uprj.bias,
+                    bb_model.encd.blocks[layer_idx].ffwd.uprj.bias,
                     hf_model.encoder.layer[layer_idx].intermediate.dense.bias,
                 )
                 torch.testing.assert_close(
-                    bb_model.encd.blocks[layer_idx].ffwd.Dprj.weight,
+                    bb_model.encd.blocks[layer_idx].ffwd.dprj.weight,
                     hf_model.encoder.layer[layer_idx].output.dense.weight,
                 )
                 torch.testing.assert_close(
-                    bb_model.encd.blocks[layer_idx].ffwd.Dprj.bias,
+                    bb_model.encd.blocks[layer_idx].ffwd.dprj.bias,
                     hf_model.encoder.layer[layer_idx].output.dense.bias,
                 )
 

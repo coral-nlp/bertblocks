@@ -14,6 +14,15 @@ from bertblocks.modeling.config import BertBlocksConfig
 class DynamicTanhNorm(nn.Module):
     """Dynamic Tanh normalization.
 
+    Attributes:
+        alpha (nn.Parameter): learnable scalar input scale parameter.
+        beta (nn.Parameter): learnable, per-channel shift parameter.
+        gamma (nn.Parameter): learnable, per-channel scale parameter.
+
+    Args:
+        alpha (float): Initial alpha value.
+        dim (int): Dimensionality of the input.
+
     References:
         - Transformers without Normalization (https://arxiv.org/pdf/2503.10622)
 
@@ -116,3 +125,6 @@ def get_norm(config: "BertBlocksConfig") -> "nn.Module":
         case _:
             supported_norm_types = ["group", "layer", "rms", "deep", "dynamictanh"]
             raise ValueError(f"Unknown norm type {config.norm_fn}", f"Supported norm types: {supported_norm_types}")
+
+
+__all__ = ["get_norm"]
