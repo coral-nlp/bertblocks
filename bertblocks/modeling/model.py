@@ -293,9 +293,6 @@ class BertBlocksForMaskedLM(BertBlocksPreTrainedModel):
     and decoder for masked language modeling. It can be used for
     pre-training or fine-tuning on masked language modeling tasks.
 
-    Attributes:
-        _tied_weight_keys: List of weight keys that should be tied between modules.
-
     """
 
     _tied_weight_keys: ClassVar = ["decoder.weight"]
