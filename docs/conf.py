@@ -46,6 +46,12 @@ autoapi_python_class_content = "both"
 autoapi_member_order = "groupwise"
 autoapi_keep_files = True
 
+autoapi_ignore = [
+    "*/.venv/*",
+    "*/site-packages/*",
+    "*/__pycache__/*",
+]
+
 # -- Autodoc configuration --------------------------------------------------
 autodoc_default_options = {
     "members": True,
