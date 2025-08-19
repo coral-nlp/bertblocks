@@ -16,10 +16,6 @@ from bertblocks.modeling.config import BertBlocksConfig
 def get_actv_fn(config: "BertBlocksConfig") -> "nn.Module":
     """Get the activation function specified in the configuration.
 
-    This factory function returns the appropriate activation function module
-    based on the configuration. Supports various activation functions commonly
-    used in transformer architectures.
-
     Args:
         config (BertBlocksConfig): Configuration object determining model hyperparameters.
 

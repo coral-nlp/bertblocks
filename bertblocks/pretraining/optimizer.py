@@ -12,10 +12,9 @@ def get_optimizer(
     """Instantiate a specific optimizer with params and hyperparameters and return it.
 
     Args:
-        optimizer_name: Name of the optimizer class to instantiate.
-        params: Model parameters to be optimized.
-        optimizer_kwargs: Optional hyperparameters to pass to optimizer.
-
+        optimizer_name (str): Name of the optimizer class to instantiate.
+        params (list[dict[str, Any]]): Model parameters to be optimized.
+        optimizer_kwargs (dict[str, Any]): Optional hyperparameters to pass to optimizer.
 
     Returns:
         The instantiated optimizer.

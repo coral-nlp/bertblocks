@@ -7,7 +7,7 @@ The pretraining framework includes:
 - PyTorch Lightning-based training modules
 - Efficient data loading with streaming support
 - Dynamic masking for MLM training
-- Advanced optimization strategies
+- Configurable optimization strategies
 - Model compilation support for improved performance
 
 The pretraining setup is designed to be scalable and easily configurable

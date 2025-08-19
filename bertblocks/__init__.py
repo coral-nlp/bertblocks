@@ -13,6 +13,7 @@ This package includes:
 The models are compatible with HuggingFace transformers ecosystem.
 """
 
+from .compat import from_huggingface
 from .modeling import (
     BertBlocksConfig,
     BertBlocksForMaskedLM,
@@ -53,4 +54,5 @@ __all__ = [
     "BertBlocksForSequenceClassification",
     "BertBlocksForTokenClassification",
     "BertBlocksForQuestionAnswering",
+    "from_huggingface",
 ]

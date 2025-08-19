@@ -20,10 +20,10 @@ from transformers.modeling_outputs import (
 )
 from transformers.modeling_utils import PreTrainedModel
 
-from bertblocks.modeling.block import BertBlocksEncoder
+from bertblocks.modeling.block import Encoder
 from bertblocks.modeling.config import BertBlocksConfig
-from bertblocks.modeling.embedding import BertBlocksEmbeddings
-from bertblocks.modeling.head import BertBlocksPooler, get_prediction_head
+from bertblocks.modeling.embedding import TokenEmbedding
+from bertblocks.modeling.head import Pooler, get_prediction_head
 from bertblocks.modeling.loss import get_loss_function
 from bertblocks.modeling.padding import pad_output, unpad_input
 
@@ -42,7 +42,7 @@ class BertBlocksPreTrainedModel(PreTrainedModel):
     _supports_flash_attn_2 = False
     _supports_sdpa = False
     _supports_flex_attn = True
-    _no_split_modules: ClassVar[list] = ["BertBlocksEncoder", "BertBlocksAttention"]
+    _no_split_modules: ClassVar[list] = ["Encoder", "Attention"]
     _keys_to_ignore_on_load_missing: ClassVar[list] = [r"position_ids"]
     _keys_to_ignore_on_load_unexpected: ClassVar[list] = [r"pooler"]
 
@@ -145,16 +145,16 @@ class BertBlocksModel(BertBlocksPreTrainedModel):
         """Initialize the BertBlocks model.
 
         Args:
-            config (BertBlocksConfig): Configuration object containing:
-                - num_attention_heads: Number of attention heads (used for initialization)
+            config (BertBlocksConfig): Configuration object determining model hyperparameters. Passed to
+                other submodules.
             add_pooling_layer (bool): Whether to add a pooling layer after the encoder layers.
 
         """
         super().__init__(config)
-        self.embd = BertBlocksEmbeddings(config)
-        self.encd = BertBlocksEncoder(config)
+        self.embd = TokenEmbedding(config)
+        self.encd = Encoder(config)
         self.norm = get_norm(config) if config.include_final_norm else nn.Identity()
-        self.pool = BertBlocksPooler(config) if add_pooling_layer else None
+        self.pool = Pooler(config) if add_pooling_layer else None
         self.post_init()
 
     @property
@@ -193,17 +193,16 @@ class BertBlocksModel(BertBlocksPreTrainedModel):
         output_attentions: "bool" = False,
         output_hidden_states: "bool" = False,
     ) -> "BaseModelOutput | BaseModelOutputWithPooling":
-        """Forward pass through the BertBlocks model.
+        """Forward pass of the BertBlocks model.
 
         Args:
-            input_ids: Tensor of token ids of shape (batch_size, sequence_length).
-            attention_mask: Optional tensor indicating which tokens should be attended to.
-                Shape (batch_size, sequence_length). Defaults to None.
-            token_type_ids: Optional tensor indicating type of tokens.
-            output_attentions: Whether to return attention weights from all layers.
+            input_ids (torch.Tensor, shape [batch_size, seq_len]): Tensor of token ids.
+            attention_mask (torch.Tensor, shape [batch_size, seq_len], optional): Tensor indicating which tokens should
+                be attended to. Defaults to None.
+            token_type_ids (torch.Tensor, shape [batch_size, seq_len], optional): Tensor indicating type of tokens.
                 Defaults to None.
-            output_hidden_states: Whether to return hidden states from all layers.
-                Defaults to False.
+            output_attentions: Whether to return attention weights from all layers. Defaults to None.
+            output_hidden_states: Whether to return hidden states from all layers. Defaults to False.
 
         Returns:
             BaseModelOutput or BaseModelOutputWithPooling containing:
@@ -335,6 +334,7 @@ class BertBlocksForMaskedLM(BertBlocksPreTrainedModel):
         self,
         input_ids: "torch.Tensor",
         attention_mask: "torch.Tensor | None" = None,
+        token_type_ids: "torch.Tensor | None" = None,
         labels: "torch.Tensor | None" = None,
         output_attentions: "bool | None" = False,
         output_hidden_states: "bool | None" = False,
@@ -342,15 +342,15 @@ class BertBlocksForMaskedLM(BertBlocksPreTrainedModel):
         """Forward pass for masked language modeling.
 
         Args:
-            input_ids: Tensor of token ids of shape (batch_size, sequence_length).
-            attention_mask: Optional tensor indicating which tokens should be attended to.
-                Shape (batch_size, sequence_length). Defaults to None.
-            labels: Optional tensor of target token ids for computing loss.
-                Shape (batch_size, sequence_length). Defaults to None.
-            output_attentions: Whether to return attention weights from all layers.
-                Defaults to False.
-            output_hidden_states: Whether to return hidden states from all layers.
-                Defaults to False.
+            input_ids (torch.Tensor, shape [batch_size, seq_len]): Tensor of token ids.
+            attention_mask (torch.Tensor, shape [batch_size, seq_len], optional): Tensor indicating which tokens should
+                be attended to. Defaults to None.
+            token_type_ids (torch.Tensor, shape [batch_size, seq_len], optional): Tensor indicating type of tokens.
+                Defaults to None.
+            labels (torch.Tensor, shape [batch_size, seq_len], optional): Tensor of target token ids for computing loss.
+                Defaults to None.
+            output_attentions (bool): Whether to return attention weights from all layers. Defaults to None.
+            output_hidden_states (bool): Whether to return hidden states from all layers. Defaults to False.
 
         Returns:
             MaskedLMOutput containing:
@@ -363,6 +363,7 @@ class BertBlocksForMaskedLM(BertBlocksPreTrainedModel):
         output = self.model(
             input_ids,
             attention_mask=attention_mask,
+            token_type_ids=token_type_ids,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
         )
@@ -411,6 +412,7 @@ class BertBlocksForSequenceClassification(BertBlocksForTasksBase):
         self,
         input_ids: "torch.Tensor",
         attention_mask: "torch.Tensor | None" = None,
+        token_type_ids: "torch.Tensor | None" = None,
         labels: "torch.Tensor | None" = None,
         output_attentions: "bool | None" = False,
         output_hidden_states: "bool | None" = False,
@@ -418,17 +420,15 @@ class BertBlocksForSequenceClassification(BertBlocksForTasksBase):
         """Forward pass for sequence classification.
 
         Args:
-            input_ids: Tensor of token ids of shape (batch_size, sequence_length).
-            attention_mask: Optional tensor indicating which tokens should be attended to.
-                Shape (batch_size, sequence_length). Defaults to None.
-            labels: Optional tensor of target labels for computing loss.
-                For regression: shape (batch_size,) or (batch_size, num_labels).
-                For classification: shape (batch_size,) for single-label or
-                (batch_size, num_labels) for multi-label. Defaults to None.
-            output_attentions: Whether to return attention weights from all layers.
-                Defaults to False.
-            output_hidden_states: Whether to return hidden states from all layers.
-                Defaults to False.
+            input_ids (torch.Tensor, shape [batch_size, seq_len]): Tensor of token ids.
+            attention_mask (torch.Tensor, shape [batch_size, seq_len], optional): Tensor indicating which tokens should
+                be attended to. Defaults to None.
+            token_type_ids (torch.Tensor, shape [batch_size, seq_len], optional): Tensor indicating type of tokens.
+                Defaults to None.
+            labels (torch.Tensor, shape [batch_size,] or [batch_size, num_labels], optional) : Tensor of target labels
+                for computing loss.Defaults to None.
+            output_attentions (bool): Whether to return attention weights from all layers. Defaults to None.
+            output_hidden_states (bool): Whether to return hidden states from all layers. Defaults to False.
 
         Returns:
             SequenceClassifierOutput containing:
@@ -441,6 +441,7 @@ class BertBlocksForSequenceClassification(BertBlocksForTasksBase):
         output = self.model(
             input_ids,
             attention_mask=attention_mask,
+            token_type_ids=token_type_ids,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
         )
@@ -487,6 +488,7 @@ class BertBlocksForTokenClassification(BertBlocksForTasksBase):
         self,
         input_ids: "torch.Tensor",
         attention_mask: "torch.Tensor | None" = None,
+        token_type_ids: "torch.Tensor | None" = None,
         labels: "torch.Tensor | None" = None,
         output_attentions: "bool | None" = False,
         output_hidden_states: "bool | None" = False,
@@ -494,15 +496,15 @@ class BertBlocksForTokenClassification(BertBlocksForTasksBase):
         """Forward pass for token classification.
 
         Args:
-            input_ids: Tensor of token ids of shape (batch_size, sequence_length).
-            attention_mask: Optional tensor indicating which tokens should be attended to.
-                Shape (batch_size, sequence_length). Defaults to None.
-            labels: Optional tensor of target token labels for computing loss.
-                Shape (batch_size, sequence_length). Defaults to None.
-            output_attentions: Whether to return attention weights from all layers.
-                Defaults to False.
-            output_hidden_states: Whether to return hidden states from all layers.
-                Defaults to False.
+            input_ids (torch.Tensor, shape [batch_size, seq_len]): Tensor of token ids.
+            attention_mask (torch.Tensor, shape [batch_size, seq_len], optional): Tensor indicating which tokens should
+                be attended to. Defaults to None.
+            token_type_ids (torch.Tensor, shape [batch_size, seq_len], optional): Tensor indicating type of tokens.
+                Defaults to None.
+            labels (torch.Tensor, shape [batch_size, seq_len], optional) : Tensor of target labels for computing loss.
+                Defaults to None.
+            output_attentions (bool): Whether to return attention weights from all layers. Defaults to None.
+            output_hidden_states (bool): Whether to return hidden states from all layers. Defaults to False.
 
         Returns:
             TokenClassifierOutput containing:
@@ -515,6 +517,7 @@ class BertBlocksForTokenClassification(BertBlocksForTasksBase):
         output = self.model(
             input_ids,
             attention_mask=attention_mask,
+            token_type_ids=token_type_ids,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
         )
@@ -555,6 +558,7 @@ class BertBlocksForQuestionAnswering(BertBlocksForTasksBase):
         self,
         input_ids: "torch.Tensor",
         attention_mask: "torch.Tensor | None" = None,
+        token_type_ids: "torch.Tensor | None" = None,
         start_positions: "torch.Tensor | None" = None,
         end_positions: "torch.Tensor | None" = None,
         output_attentions: "bool | None" = False,
@@ -563,19 +567,17 @@ class BertBlocksForQuestionAnswering(BertBlocksForTasksBase):
         """Forward pass for question answering.
 
         Args:
-            input_ids: Tensor of token ids of shape (batch_size, sequence_length).
-            attention_mask: Optional tensor indicating which tokens should be attended to.
-                Shape (batch_size, sequence_length). Defaults to None.
-            start_positions: Optional tensor of start positions for computing loss.
-                Shape (batch_size,). Values should be in [0, sequence_length-1].
+            input_ids (torch.Tensor, shape [batch_size, seq_len]): Tensor of token ids.
+            attention_mask (torch.Tensor, shape [batch_size, seq_len], optional): Tensor indicating which tokens should
+                be attended to. Defaults to None.
+            token_type_ids (torch.Tensor, shape [batch_size, seq_len], optional): Tensor indicating type of tokens.
                 Defaults to None.
-            end_positions: Optional tensor of end positions for computing loss.
-                Shape (batch_size,). Values should be in [0, sequence_length-1].
-                Defaults to None.
-            output_attentions: Whether to return attention weights from all layers.
-                Defaults to False.
-            output_hidden_states: Whether to return hidden states from all layers.
-                Defaults to False.
+            start_positions (torch.Tensor, shape [batch_size,], optional): Tensor of start positions for computing loss.
+                Values should be in [0, sequence_length-1]. Defaults to None.
+            end_positions (torch.Tensor, shape [batch_size,], optional): Tensor of end positions for computing loss.
+                Values should be in [0, sequence_length-1]. Defaults to None.
+            output_attentions (bool): Whether to return attention weights from all layers. Defaults to None.
+            output_hidden_states (bool): Whether to return hidden states from all layers. Defaults to False.
 
         Returns:
             QuestionAnsweringModelOutput containing:

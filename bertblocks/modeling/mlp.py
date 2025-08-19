@@ -10,7 +10,7 @@ from torch import nn
 from bertblocks.modeling.activations import get_actv_fn
 
 
-class BertBlocksGLU(nn.Module):
+class GLU(nn.Module):
     """Gated Linear Unit (GLU) implementation for BertBlocks.
 
     This class implements a GLU-style MLP layer that uses gating to control information flow.
@@ -21,10 +21,11 @@ class BertBlocksGLU(nn.Module):
         """Initialize the GLU layer.
 
         Args:
-            config (BertBlocksConfig): Configuration object containing:
-                - hidden_size: Dimensionality of hidden layers (input/output dimension)
-                - intermediate_size: Dimensionality of feed-forward layers
-                - actv_fn: Activation function used in feed-forward networks
+            config (BertBlocksConfig): Configuration object determining model hyperparameters. May be passed to
+                other submodules. Keys used at top level:
+                    - hidden_size: Dimensionality of hidden layers (input/output dimension)
+                    - intermediate_size: Dimensionality of feed-forward layers
+                    - actv_fn: Activation function used in feed-forward networks
 
         """
         super().__init__()
@@ -55,7 +56,7 @@ class BertBlocksGLU(nn.Module):
         return x
 
 
-class BertBlocksMLP(nn.Module):
+class MLP(nn.Module):
     """Standard Multi-Layer Perceptron for BertBlocks.
 
     This class implements a standard two-layer MLP (feedforward network).
@@ -66,12 +67,13 @@ class BertBlocksMLP(nn.Module):
         """Initialize the MLP layer.
 
         Args:
-            config (BertBlocksConfig): Configuration object containing:
-                - hidden_size: Dimensionality of hidden layers (input/output dimension)
-                - intermediate_size: Dimensionality of feed-forward layers
-                - mlp_in_bias: Whether to include bias in input projection of MLP layers
-                - mlp_out_bias: Whether to include bias in output projection of MLP layers
-                - actv_fn: Activation function used in feed-forward networks
+            config (BertBlocksConfig): Configuration object determining model hyperparameters. May be passed to
+                other submodules. Keys used at top level:
+                    - hidden_size: Dimensionality of hidden layers (input/output dimension)
+                    - intermediate_size: Dimensionality of feed-forward layers
+                    - mlp_in_bias: Whether to include bias in input projection of MLP layers
+                    - mlp_out_bias: Whether to include bias in output projection of MLP layers
+                    - actv_fn: Activation function used in feed-forward networks
 
         """
         super().__init__()
@@ -125,9 +127,9 @@ def get_mlp(config: "BertBlocksConfig") -> "nn.Module":
     mlp_type = getattr(config, "mlp_type", "mlp")  # Default to mlp for backward compatibility
 
     if mlp_type == "mlp":
-        return BertBlocksMLP(config)
+        return MLP(config)
     elif mlp_type == "glu":
-        return BertBlocksGLU(config)
+        return GLU(config)
     else:
         supported_types = ["mlp", "glu"]
         raise ValueError(f"Unknown MLP type '{mlp_type}'. Supported types: {', '.join(supported_types)}")

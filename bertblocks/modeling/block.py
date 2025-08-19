@@ -7,24 +7,21 @@ if TYPE_CHECKING:
 
 from torch import nn
 
-from bertblocks.modeling.attention import BertBlocksAttention
+from bertblocks.modeling.attention import Attention
 from bertblocks.modeling.mlp import get_mlp
 from bertblocks.modeling.norms import get_norm
 
 
-class BertBlocksLayer(nn.Module):
-    """A single transformer block implementation for BertBlocks.
+class Block(nn.Module):
+    """A single transformer block.
 
-    This class implements a standard transformer block with attention and feed-forward
+    Implements a standard transformer block with attention and feed-forward
     layers, supporting both pre-normalization and post-normalization schemes.
 
     The block consists of:
     1. Multi-head self-attention with residual connection
     2. Feed-forward network with residual connection
-    3. Optional layer normalization (pre/post/both/none)
-
-    Args:
-        config (BertBlocksConfig): Configuration object determining model hyperparameters.
+    3. Layer normalization (pre/post/both/none)
 
     References:
          - "Attention Is All You Need" (https://arxiv.org/pdf/1706.03762)
@@ -33,23 +30,24 @@ class BertBlocksLayer(nn.Module):
     """
 
     def __init__(self, config: "BertBlocksConfig", layer_id: int):
-        """Initialize a BertBlocks transformer block.
+        """Initialize the transformer block.
 
         Sets up the attention mechanism, feed-forward network, and normalization
         layers based on configuration. Normalization layers are set to Identity
         when not needed according to the norm_kind setting.
 
         Args:
-            config (BertBlocksConfig): Configuration object containing:
-                - norm_kind: When to apply normalization ("pre", "post", "both", "none")
-                - attn_dropout_prob: Dropout probability for attention weights
-                - hidden_dropout_prob: Dropout probability for hidden layer outputs
+            config (BertBlocksConfig): Configuration object determining model hyperparameters. May be passed to
+                other submodules. Keys used at top level:
+                    - norm_kind: Normalization layer type
+                    - attn_dropout_prob: Dropout probability for attention layer
+                    - hidden_dropout_prob: Dropout probability for feed-forward layers
             layer_id (int): layer id indicating index in the encoder stack.
 
         """
         super().__init__()
         self.layer_id = layer_id
-        self.attn = BertBlocksAttention(config, layer_id=layer_id)
+        self.attn = Attention(config, layer_id=layer_id)
         self.ffwd = get_mlp(config)
         self.pre_norm_attn = get_norm(config) if config.norm_kind in ("pre", "both") else nn.Identity()
         self.pre_norm_ffwd = get_norm(config) if config.norm_kind in ("pre", "both") else nn.Identity()
@@ -64,16 +62,12 @@ class BertBlocksLayer(nn.Module):
         cu_seqlens: "torch.Tensor",
         max_seq_len: int,
     ) -> "tuple[torch.Tensor, torch.Tensor]":
-        """Forward pass through the transformer block.
-
-        Processes input through attention and feed-forward layers with residual
-        connections. Supports both pre-normalization and post-normalization schemes.
+        """Forward pass of the transformer block.
 
         Args:
-            x (torch.Tensor, shape [batch_size, seq_len, hidden_size]): The hidden state of
-                the previous transformer block.
-            cu_seqlens (torch.Tensor, shape [batch_size + 1]): Cumulative sequence lengths of batch.
-            max_seq_len (int): Maximum sequence length of batch.
+            x (torch.Tensor, shape [total_seq_len, hidden_size]): Unpadded hidden state.
+            cu_seqlens (torch.Tensor, shape [batch_size + 1]): Cumulative sequence lengths in batch.
+            max_seq_len (int): Maximum sequence length in batch.
 
         Returns:
             tuple[torch.Tensor, torch.Tensor | None]: A tuple containing:
@@ -100,25 +94,27 @@ class BertBlocksLayer(nn.Module):
         return x, w
 
 
-class BertBlocksEncoder(nn.Module):
-    """Multi-layer transformer encoder for BertBlocks.
+class Encoder(nn.Module):
+    """Multi-layer transformer encoder.
 
-    Uses sequence packing.
+    Uses sequence packing for higher efficiency.
     """
 
     def __init__(self, config: "BertBlocksConfig"):
         """Initialize the BertBlocks encoder.
 
-        Creates a stack of transformer blocks. Each block is independently initialized with the same configuration.
+        Creates a stack of transformer blocks. Each block is independently initialized taking into account its position
+        in the encoder stack.
 
         Args:
-            config (BertBlocksConfig): Configuration object containing:
-                - num_blocks: Number of transformer layers in the model
-                - num_attention_heads: Number of attention heads (used for block mask creation)
+            config (BertBlocksConfig): Configuration object determining model hyperparameters. May be passed to
+                other submodules. Keys used at top level:
+                    - num_blocks: Number of transformer blocks
+                    - num_attention_heads: Number of transformer attention heads
 
         """
         super().__init__()
-        self.blocks = nn.ModuleList([BertBlocksLayer(config, layer_id) for layer_id in range(config.num_blocks)])
+        self.blocks = nn.ModuleList([Block(config, layer_id) for layer_id in range(config.num_blocks)])
         self.num_heads = config.num_attention_heads
 
     def forward(
@@ -129,15 +125,14 @@ class BertBlocksEncoder(nn.Module):
         output_attentions: "bool | None" = False,
         output_hidden_states: "bool | None" = False,
     ) -> "tuple[torch.Tensor, tuple[torch.Tensor, ...] | None, tuple[torch.Tensor, ...] | None]":
-        """Forward pass through the multi-layer transformer encoder.
+        """Forward pass of the encoder.
 
-        Processes input through all transformer blocks. Creates document-level block masks to
-        prevent attention across document boundaries.
+        Processes input hidden state sequentially through all transformer blocks.
 
         Args:
-            x (torch.Tensor, shape [total_terms, hidden_size]): Unpadded input embeddings tensor.
-            cu_seqlens (torch.Tensor): Cumulative sequence lengths of batch.
-            max_seq_len (int): Maximum sequence length of batch.
+            x (torch.Tensor, shape [total_seq_len, hidden_size]): Unpadded hidden state.
+            cu_seqlens (torch.Tensor, shape [batch_size + 1]): Cumulative sequence lengths in batch.
+            max_seq_len (int): Maximum sequence length in batch.
             output_attentions (bool | None, optional): Whether to return attention weights from
                 all layers. Defaults to False.
             output_hidden_states (bool | None, optional): Whether to return hidden states from

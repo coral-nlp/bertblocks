@@ -15,17 +15,20 @@ else:
 class SinusoidalPositionalEncoding(nn.Module):
     """Implementation of Sinusoidal Positional Encodings.
 
-    Args:
-        dim (int): Embedding dimension, usually set to embed_dim // num_heads.
-        max_seq_len (int): Maximum sequence length for the model.
-        base (float): The base used to compute frequencies.
-
     References:
         - "Attention Is All You Need" (https://arxiv.org/pdf/1706.03762)
 
     """
 
     def __init__(self, dim: int, max_seq_len: int = 1024, base: float = 10000.0):
+        """Initialize sinusoidal positional encodings.
+
+        Args:
+            dim (int): Embedding dimension, usually set to embed_dim // num_heads.
+            max_seq_len (int): Maximum sequence length for the model.
+            base (float): The base used to compute frequencies.
+
+        """
         super().__init__()
         sin = self._build_cache(dim, max_seq_len, base)
         self.register_buffer("sin", sin)
@@ -53,15 +56,16 @@ class SinusoidalPositionalEncoding(nn.Module):
 
 
 class LearnedPositionalEncoding(nn.Module):
-    """Implementation of Learned Positional Encodings.
-
-    Args:
-        dim (int): Hidden size of the model.
-        max_seq_len (int): Maximum sequence length for the model.
-
-    """
+    """Learned Positional Encodings."""
 
     def __init__(self, dim: int, max_seq_len: int):
+        """Initialize learned positional encodings.
+
+        Args:
+            dim (int): Hidden size of the model.
+            max_seq_len (int): Maximum sequence length for the model.
+
+        """
         super().__init__()
         self.embd = nn.Embedding(max_seq_len, dim)
 

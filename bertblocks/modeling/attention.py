@@ -6,7 +6,7 @@ from transformers.modeling_utils import is_flash_attn_2_available
 if is_flash_attn_2_available():
     from flash_attn import flash_attn_varlen_qkvpacked_func
 
-    # Otherwise triggers graph break
+    # Otherwise triggers graph break?
     torch._dynamo.config.capture_scalar_outputs = True
 
 
@@ -46,42 +46,28 @@ def flash_attention_forward(
     return x, w
 
 
+# Supported attention backends; only flash attention for now.
 ATTENTION_FUNCTION = {
     "fa2": flash_attention_forward,
 }
 
 
-class BertBlocksAttention(nn.Module):
-    """BertBlocks attention with configurable positional encodings.
-
-    This class implements a flexible attention mechanism using flex_attention for efficient
-    computation. Applies block masking for document-level attention patterns.
-
-    The attention mechanism follows the standard transformer architecture but
-    with configurable positional biases that can be applied either to the
-    query-key projections or as score modifications.
-
-    Attributes:
-        num_heads: Number of attention heads.
-        head_dim: Dimension of each attention head.
-        proj: Fused linear projection for Q, K, V (3 * hidden_size output).
-        ffwd: Output projection layer.
-        dropout_p: Dropout probability for attention weights.
-
-    """
+class Attention(nn.Module):
+    """Attention with configurable positional encodings."""
 
     def __init__(self, config: "BertBlocksConfig", layer_id: int):
         """Initialize the BertBlocks attention mechanism.
 
         Args:
-            config (BertBlocksConfig): Configuration object containing:
-                - num_attention_heads: Number of attention heads in multi-head attention
-                - hidden_size: Dimensionality of hidden layers (must be divisible by num_attention_heads)
-                - max_sequence_length: Maximum sequence length for positional encodings
-                - attn_proj_bias: Whether to include bias in QKV projection
-                - attn_out_bias: Whether to include bias in output projection
-                - attn_dropout_prob: Dropout probability for attention weights
-                - pos_emb_kind: Type of positional embedding ("alibi", "rope", "relative", etc.)
+            config (BertBlocksConfig): Configuration object determining model hyperparameters. May be passed to
+                other submodules. Keys used at top level:
+                    - num_attention_heads: Number of attention heads in multi-head attention
+                    - hidden_size: Dimensionality of hidden layers (must be divisible by num_attention_heads)
+                    - max_sequence_length: Maximum sequence length for positional encodings
+                    - attn_proj_bias: Whether to include bias in QKV projection
+                    - attn_out_bias: Whether to include bias in output projection
+                    - attn_dropout_prob: Dropout probability for attention weights
+                    - pos_emb_kind: Type of positional embedding ("alibi", "rope", "relative", etc.)
             layer_id (int): layer id indicating index in the encoder stack.
 
         """
@@ -108,7 +94,7 @@ class BertBlocksAttention(nn.Module):
         """Initialize positional encoding buffers if needed.
 
         Args:
-            config (BertBlocksConfig): Model config.
+            config (BertBlocksConfig): Configuration object determining model hyperparameters.
             layer_id (int): layer id indicating index in the encoder stack.
 
         """
@@ -148,15 +134,15 @@ class BertBlocksAttention(nn.Module):
         cu_seqlens: "torch.Tensor",
         max_seq_len: int,
     ) -> "tuple[torch.Tensor, torch.Tensor | None]":
-        """Forward pass of the BertBlocks attention mechanism.
+        """Forward pass of the attention mechanism.
 
         Computes multi-head self-attention with configurable positional encodings
-        and block masking. Uses PyTorch's flex_attention.
+        and block masking. Calls the specified backends' forward function internally.
 
         Args:
-            x (torch.Tensor, shape [batch_size, seq_len, hidden_size]): The input hidden state.
-            cu_seqlens (torch.Tensor, shape [batch_size + 1]): Cumulative sequence lengths of batch.
-            max_seq_len (int): Maximum sequence length for positional encodings.
+            x (torch.Tensor, shape [total_seq_len, hidden_size]): Unpadded hidden state.
+            cu_seqlens (torch.Tensor, shape [batch_size + 1]): Cumulative sequence lengths in batch.
+            max_seq_len (int): Maximum sequence length in batch.
 
         Returns:
             tuple[torch.Tensor, torch.Tensor | None]: A tuple containing:
@@ -168,7 +154,7 @@ class BertBlocksAttention(nn.Module):
         qkv = self.proj(x)
         # Reshape for multihead attention
         qkv = rearrange(qkv, "... (t h d) -> ... t h d", t=3, h=self.num_heads, d=self.head_dim)
-        # Apply attention mixer
+        # Apply attention backend forward
         x, w = self._attention_fn(
             qkv,
             cu_seqlens,

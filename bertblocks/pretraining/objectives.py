@@ -51,7 +51,7 @@ class MaskedLanguageModelingCollator:
         """Process a batch of examples for MLM training.
 
         Args:
-            batch: List of examples, where each example is a dictionary
+            batch (list[dict[str, Any]]): List of examples, where each example is a dictionary
                 containing the text data in the specified text_column.
 
         Returns:
