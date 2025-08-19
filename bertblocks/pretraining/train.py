@@ -19,6 +19,7 @@ from typing import Any
 import lightning as L
 import torch
 from datasets import load_dataset
+from lightning.pytorch.utilities import grad_norm
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer
 from transformers.trainer_pt_utils import get_parameter_names
@@ -238,6 +239,10 @@ class BertBlocksPretrainingModule(L.LightningModule):
         output = self.model(batch, labels=batch)
         self.log("loss/valid", output.loss, prog_bar=True)
         return output.loss
+
+    def on_before_optimizer_step(self, optimizer):
+        norms = grad_norm(self.model, norm_type=2)
+        self.log_dict({f"gradnorm/{k}": v for k, v in norms.items()})
 
     def on_save_checkpoint(self, *args: Any, **kwargs: Any) -> None:
         """Save model checkpoint in HuggingFace format.
