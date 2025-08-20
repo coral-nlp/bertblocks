@@ -202,10 +202,10 @@ class BertBlocksModel(BertBlocksPreTrainedModel):
 
         Args:
             input_ids (torch.Tensor, shape [batch_size, seq_len]): Tensor of token ids.
-            attention_mask (torch.Tensor, shape [batch_size, seq_len], optional): Tensor indicating which tokens should
-                be attended to. Defaults to None.
-            token_type_ids (torch.Tensor, shape [batch_size, seq_len], optional): Tensor indicating type of tokens.
-                Defaults to None.
+            attention_mask (torch.Tensor | None, shape [batch_size, seq_len], optional): Tensor indicating which
+                tokens should be attended to. Defaults to None.
+            token_type_ids (torch.Tensor | None, shape [batch_size, seq_len], optional): Tensor indicating type
+                of tokens. Defaults to None.
             output_attentions: Whether to return attention weights from all layers. Defaults to None.
             output_hidden_states: Whether to return hidden states from all layers. Defaults to False.
 
@@ -221,7 +221,7 @@ class BertBlocksModel(BertBlocksPreTrainedModel):
         # Unpad input sequence
         B, S = input_ids.shape
         with torch.no_grad():
-            input_ids, indices, cu_seqlens, max_seq_len = unpad_input(input_ids, attention_mask)
+            input_ids, indices, cu_seqlens, max_seq_len = unpad_input(input_ids, attention_mask, self.pad_token_id)
 
         x = self.embd(input_ids, token_type_ids=token_type_ids, cu_seqlens=cu_seqlens)
 
