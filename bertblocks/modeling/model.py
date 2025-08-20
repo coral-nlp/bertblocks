@@ -139,6 +139,13 @@ class BertBlocksModel(BertBlocksPreTrainedModel):
     This is the base BertBlocks model that outputs hidden states without any
     task-specific head. It can be used as a feature extractor for downstream tasks.
 
+    Attributes:
+        embd (TokenEmbedding): Embedding layer.
+        encd (Encoder): Encoder stack.
+        norm (nn.Module): Normalization layer. Falls back to nn.Identity if not configured.
+        pool (Pooler | None): Pooler layer, optional.
+        pad_token_id (int): Token ID to insert for padding.
+
     Args:
         config (BertBlocksConfig): Configuration object determining model hyperparameters. Passed to
             other submodules.
@@ -152,6 +159,7 @@ class BertBlocksModel(BertBlocksPreTrainedModel):
         self.encd = Encoder(config)
         self.norm = get_norm(config) if config.include_final_norm else nn.Identity()
         self.pool = Pooler(config) if add_pooling_layer else None
+        self.pad_token_id = config.pad_token_id or 0
         self.post_init()
 
     @property
@@ -221,7 +229,7 @@ class BertBlocksModel(BertBlocksPreTrainedModel):
         x = self.norm(x)
         x = pad_output(x, indices, B, S)
         if output_hidden_states:
-            hidden_states = [pad_output(h, indices, B, S) for h in hidden_states]
+            hidden_states = [pad_output(h, indices, B, S, self.pad_token_id) for h in hidden_states]
 
         if self.pool is not None:
             pooler_output = self.pool(x)

@@ -36,10 +36,7 @@ def unpad_input(
 
 
 def pad_output(
-    inputs: "torch.Tensor",
-    indices: "torch.Tensor",
-    batch: int,
-    seqlen: int,
+    inputs: "torch.Tensor", indices: "torch.Tensor", batch: int, seqlen: int, pad_token_id: int = 0
 ) -> "torch.Tensor":
     """Add padding to sequences.
 
@@ -48,6 +45,7 @@ def pad_output(
         indices (torch.Tensor, shape [total_nnz,]): Indices tensor.
         batch (int): batch size
         seqlen (int): sequence length
+        pad_token_id (int): token ID to insert for padding.
 
     Returns:
         torch.Tensor
@@ -55,12 +53,12 @@ def pad_output(
 
     """
     if inputs.dim() == 1:
-        output = torch.zeros(batch * seqlen, dtype=inputs.dtype, device=inputs.device)
+        output = torch.full((batch * seqlen,), pad_token_id, dtype=inputs.dtype, device=inputs.device)
         output[indices] = inputs
         padded_inputs = output.view(batch, seqlen)
     else:
         _, *rest = inputs.shape
-        output = torch.zeros(batch * seqlen, *rest, dtype=inputs.dtype, device=inputs.device)
+        output = torch.full((batch * seqlen, *rest), pad_token_id, dtype=inputs.dtype, device=inputs.device)
         output[indices] = inputs
         padded_inputs = output.view(batch, seqlen, *rest)
 
