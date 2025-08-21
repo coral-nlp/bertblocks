@@ -243,12 +243,6 @@ class BertBlocksPretrainingModule(L.LightningModule):
     def on_before_optimizer_step(self, optimizer: torch.optim.Optimizer) -> None:
         """Log grad norms at each optimizer step."""
         norms = grad_norm(self.model, norm_type=2)
-        self.log_dict(
-            {
-                f"slopes/mean/layer_{i}": torch.mean(self.model.model.encd.blocks[i].attn.slope_mod.weight)
-                for i in range(len(self.model.model.encd.blocks))
-            }
-        )
         self.log_dict({f"gradnorm/{k}": v for k, v in norms.items()})
 
     def on_save_checkpoint(self, *args: Any, **kwargs: Any) -> None:
