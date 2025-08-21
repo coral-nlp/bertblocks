@@ -299,11 +299,11 @@ class EagerBackend(AttentionBackend):
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
         """Eager attention forward pass with padded sequences."""
         if rotary_emb is not None:
-            raise NotImplementedError("RoPE is not supported with native backend")
+            raise NotImplementedError("Eager backedn does not support RoPE positional encoding")
 
         q, k, v = rearrange(qkv, "b s (t h d) -> t b h s d", t=3, h=num_heads, d=head_dim)
         scores = einsum(q, k, "b h i d, b h j d -> b h i j") * (head_dim**-0.5)
-        mask = attention_mask.unsqueeze(1) & attention_mask.unsqueeze(2)
+        mask = (attention_mask.unsqueeze(1) & attention_mask.unsqueeze(2)).bool()
 
         if local_attention != (-1, -1) and local_attention[0] > 0:
             window_size = local_attention[0]
@@ -330,7 +330,7 @@ class EagerBackend(AttentionBackend):
 
     def _forward_unpadded(self, *args, **kwargs) -> tuple[torch.Tensor, torch.Tensor | None]:  # type: ignore
         """Eager backend does not support unpadded sequences."""
-        raise NotImplementedError("Native backend only supports padded sequences")
+        raise NotImplementedError("Eager backend only supports padded sequences")
 
 
 # Registry of available backends

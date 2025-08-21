@@ -37,7 +37,7 @@ class BertBlocksConfig(PretrainedConfig):
         pos_emb_kind: The type of positional embedding to use. Available options:
             "alibi" (ALiBi positional encoding), "sinusoidal" (Sinusoidal positional encoding),
             "rope" (Rotary positional encoding), "relative" (Relative positional encoding),
-            "learned" (Learned positional encoding).
+            "learned" (Learned positional encoding), "learned_alibi" (ALiBi positional encoding with linear layer).
         pos_emb_kwargs: Additional keyword arguments to pass to the positional embedding class. Values dependent
             on chosen pos_emb_kind. All positional embeddings receive `dim` and `max_seq_len` automatically, these
             do not need to be specified.
@@ -92,7 +92,7 @@ class BertBlocksConfig(PretrainedConfig):
             pooled representation before the final classification layer. Helps prevent
             overfitting in downstream tasks. Must be between 0.0 and 1.0.
         attn_implementation: Which backend implementation of attention to use; can be "fa2" for FlashAttention2,
-            or "sdpa" for native torch.
+            "sdpa" torch, or "eager" for manual implementation.
         problem_type: The problem type for automatic loss selection (HuggingFace standard).
             Automatically selects appropriate loss functions: "regression" (MSE loss for
             continuous targets), "single_label_classification" (CrossEntropy loss for
@@ -118,7 +118,7 @@ class BertBlocksConfig(PretrainedConfig):
         intermediate_size: int = 3072,
         num_blocks: int = 12,
         num_attention_heads: int = 12,
-        pos_emb_kind: Literal["alibi", "sinusoidal", "rope", "relative", "learned"] = "alibi",
+        pos_emb_kind: Literal["alibi", "sinusoidal", "rope", "relative", "learned", "learned_alibi"] = "alibi",
         pos_emb_kwargs: dict[str, Any] | None = None,
         add_token_type_emb: bool = False,
         type_vocab_size: int = 1,
@@ -146,7 +146,7 @@ class BertBlocksConfig(PretrainedConfig):
         hidden_dropout_prob: float = 0.1,
         attn_dropout_prob: float = 0.1,
         classifier_dropout_prob: float = 0.1,
-        attn_implementation: Literal["fa2", "native", "sdpa"] = "native",
+        attn_implementation: Literal["fa2", "eager", "sdpa"] = "sdpa",
         problem_type: Literal["regression", "single_label_classification", "multi_label_classification"] = "regression",
         num_labels: int = 2,
         **kwargs: Any,
@@ -203,6 +203,11 @@ class BertBlocksConfig(PretrainedConfig):
 
         if max_sequence_length <= 0:
             raise ValueError(f"max_sequence_length must be greater than 0, got {max_sequence_length}")
+
+        if pos_emb_kind == "learned_alibi" and attn_implementation != "eager":
+            raise ValueError(
+                f"If 'learned_alibi' is used, attn_implementation must be 'eager', got {attn_implementation}"
+            )
 
         super().__init__(**kwargs)
         # Input parameters

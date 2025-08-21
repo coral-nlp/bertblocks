@@ -74,9 +74,13 @@ class Attention(nn.Module):
         """
         self.rotary_emb = None
         self.slopes = None
+        self.slope_mod = lambda x: x
         match config.pos_emb_kind:
             case "alibi":
-                self.slopes = nn.Parameter(get_alibi_slopes(config.num_attention_heads))
+                self.slopes = nn.Parameter(get_alibi_slopes(config.num_attention_heads), requires_grad=False)
+            case "learned_alibi":
+                self.slope_mod = nn.Linear(config.num_attention_heads, config.num_attention_heads, bias=True)
+                self.slopes = nn.Parameter(get_alibi_slopes(config.num_attention_heads), requires_grad=True)
             case "rope":
                 match config.attn_implementation:
                     case "fa2":
@@ -117,7 +121,7 @@ class Attention(nn.Module):
             self.num_heads,
             self.head_dim,
             rotary_emb=self.rotary_emb,
-            alibi_slopes=self.slopes,
+            alibi_slopes=self.slope_mod(self.slopes),
             local_attention=self.local_attention,
             dropout_p=self.dropout_p if self.training else 0.0,
             deterministic=self.deterministic,
@@ -139,7 +143,7 @@ class Attention(nn.Module):
             self.num_heads,
             self.head_dim,
             rotary_emb=self.rotary_emb,
-            alibi_slopes=self.slopes,
+            alibi_slopes=self.slope_mod(self.slopes),
             local_attention=self.local_attention,
             dropout_p=self.dropout_p if self.training else 0.0,
             deterministic=self.deterministic,
