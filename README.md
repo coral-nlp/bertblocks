@@ -5,7 +5,7 @@
 
 ## Overview
 
-**BertBlocks** provides building blocks for exploring transformer encoders. It aims to provide a unified, clean, well-documented, and comprehensive collection of components for BERT-like models.
+**BertBlocks** provides building blocks for exploring transformer encoders. It aims to be a unified, clean, well-documented, and comprehensive collection of components for BERT-like models.
 It is highly configurable and allows for easy experimentation with various architectural components including:
 
 - **Normalization**: Pre/post normalization, RMS Norm, Layer Norm, Group Norm, DeepNorm, DynamicTanhNorm, ...
@@ -14,6 +14,7 @@ It is highly configurable and allows for easy experimentation with various archi
 - **Feed-Forward Networks**: Standard MLP, Gated Linear Units (GLU)...
 - **Activation Functions**: SiLU, GELU, ReLU, ...
 - **Optimization**: Pre-configured training setup with [Pytorch Lightning](https://lightning.ai/docs/pytorch/stable/), variety of optimizers, training objectives, ...
+- **Attention Backends**: supports flash-, sdpa-, and eager-attention implementations for maximum flexibility, for both padded and unpadded sequences
 
 ## Quick Start
 

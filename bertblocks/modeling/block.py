@@ -71,23 +71,23 @@ class Block(nn.Module):
     def forward(
         self,
         x: "torch.Tensor",
-        indices: "torch.Tensor",
-        cu_seqlens: "torch.Tensor",
-        max_seq_len: int,
-    ) -> "tuple[torch.Tensor, torch.Tensor]":
+        attention_mask: "torch.Tensor | None" = None,
+        cu_seqlens: "torch.Tensor | None" = None,
+        max_seq_len: int | None = None,
+    ) -> "tuple[torch.Tensor, torch.Tensor | None]":
         """Forward pass of the transformer block.
 
         Args:
-            x (torch.Tensor, shape [total_seq_len, hidden_size]): Unpadded hidden state.
-            indices (torch.Tensor, shape [total_seq_len, ...]): Sequence indices.
-            cu_seqlens (torch.Tensor, shape [batch_size + 1]): Cumulative sequence lengths in batch.
-            max_seq_len (int): Maximum sequence length in batch.
+            x (torch.Tensor): Hidden state (unpadded or padded).
+            attention_mask (torch.Tensor | None): Attention mask (for padded sequences).
+            cu_seqlens (torch.Tensor | None): Cumulative sequence lengths (for unpadded sequences).
+            max_seq_len (int | None): Maximum sequence length (for unpadded sequences).
 
         Returns:
             tuple[torch.Tensor, torch.Tensor | None]:
 
                 - `output` (torch.Tensor): Transformed hidden state with same shape as input
-                - `attention_weights` (torch.Tensor | None): Attention weights. Shape [batch_size, seq_len, seq_len]
+                - `attention_weights` (torch.Tensor | None): Attention weights
 
         """
         # Attention component
@@ -97,7 +97,7 @@ class Block(nn.Module):
         else:
             residual = x
             x = self.pre_norm_attn(x)
-        x, w = self.attn(x, indices, cu_seqlens, max_seq_len)
+        x, w = self.attn(x, attention_mask, cu_seqlens, max_seq_len)
         x = self.attn_drop(x)
         x = self.post_norm_attn(x + residual)
         # Feed-forward component
@@ -133,9 +133,9 @@ class Encoder(nn.Module):
     def forward(
         self,
         x: "torch.Tensor",
-        indices: "torch.Tensor",
-        cu_seqlens: "torch.Tensor",
-        max_seq_len: int,
+        attention_mask: "torch.Tensor | None",
+        cu_seqlens: "torch.Tensor | None",
+        max_seq_len: int | None,
         output_attentions: "bool | None" = False,
         output_hidden_states: "bool | None" = False,
     ) -> "tuple[torch.Tensor, tuple[torch.Tensor, ...] | None, tuple[torch.Tensor, ...] | None]":
@@ -144,10 +144,10 @@ class Encoder(nn.Module):
         Processes input hidden state sequentially through all transformer blocks.
 
         Args:
-            x (torch.Tensor, shape [total_seq_len, hidden_size]): Unpadded hidden state.
-            indices (torch.Tensor, shape [total_seq_len, ...]): Sequence indices.
-            cu_seqlens (torch.Tensor, shape [batch_size + 1]): Cumulative sequence lengths in batch.
-            max_seq_len (int): Maximum sequence length in batch.
+            x (torch.Tensor): Hidden state (unpadded or padded).
+            attention_mask (torch.Tensor | None): Attention mask (for padded sequences).
+            cu_seqlens (torch.Tensor | None): Cumulative sequence lengths (for unpadded sequences).
+            max_seq_len (int | None): Maximum sequence length (for unpadded sequences).
             output_attentions (bool | None, optional): Whether to return attention weights from
                 all layers. Defaults to False.
             output_hidden_states (bool | None, optional): Whether to return hidden states from
@@ -157,12 +157,10 @@ class Encoder(nn.Module):
             tuple[torch.Tensor, tuple[torch.Tensor, ...] | None, tuple[torch.Tensor, ...] | None]:
 
                 - `last_hidden_state` (torch.Tensor): Output of the final transformer layer.
-                  Shape [batch_size, seq_len, hidden_size].
                 - `all_hidden_states` (tuple[torch.Tensor, ...] | None): Hidden states from all layers
-                  if output_hidden_states=True, None otherwise. Each tensor has shape
-                  [batch_size, seq_len, hidden_size].
+                  if output_hidden_states=True, None otherwise.
                 - `all_attentions` (tuple[torch.Tensor, ...] | None): Attention weights from all layers
-                  if output_attentions=True, None otherwise. Shape depends on attention implementation.
+                  if output_attentions=True, None otherwise.
 
         """
         # Keep track of states throughout block stack
@@ -170,7 +168,7 @@ class Encoder(nn.Module):
         all_hidden_states = [x]
         # Apply layers
         for block in self.blocks:
-            x, w = block(x, indices, cu_seqlens, max_seq_len)
+            x, w = block(x, attention_mask, cu_seqlens, max_seq_len)
             if output_hidden_states:
                 all_hidden_states.append(x)
             if output_attentions:

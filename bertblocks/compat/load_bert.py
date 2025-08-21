@@ -40,6 +40,7 @@ def from_bert_model(
         attn_dropout_prob=orig_config.attention_probs_dropout_prob or 0.0,
         hidden_dropout_prob=orig_config.hidden_dropout_prob or 0.0,
         classifier_dropout_prob=orig_config.classifier_dropout or 0.0,
+        attn_implementation="sdpa",
     )
     bertblocks_model = BertBlocksModel(bertblocks_config, add_pooling_layer=add_pooling_layer)
 

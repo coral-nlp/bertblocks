@@ -38,16 +38,19 @@ class TokenTypeEmbedding(nn.Module):
         Uses supplied token type ids if given, otherwise defaults to constant token type ids.
 
         Args:
-            x (torch.Tensor, shape [total_sequence_length, hidden_size]): Hidden state to add token type ids to.
-            token_type_ids (torch.Tensor, shape [total_sequence_length], optional): Indicates the token type of
-                each token in the sequence.
+            x (torch.Tensor, shape [total_seq_len, hidden_size] or [batch_size, seq_len, hidden_size]): Hidden state
+                to add token type ids to.
+            token_type_ids (torch.Tensor, shape [total_seq_len, hidden_size] or [batch_size, seq_len, hidden_size],
+                optional): Indicates the token type of each token in the sequence.
 
         Returns:
-            torch.Tensor: Hidden state with token type embedding added, shape [total_sequence_length, hidden_size].
+            torch.Tensor: Hidden state with token type embedding added, shape [total_seq_len, hidden_size] or
+                [batch_size, seq_len, hidden_size].
 
         """
+        shape = x.shape[:2] if len(x.shape) == 3 else x.shape[:1]
         token_type_ids = (
-            token_type_ids if token_type_ids is not None else torch.zeros(x.shape[0], dtype=torch.long, device=x.device)
+            token_type_ids if token_type_ids is not None else torch.zeros(shape, dtype=torch.long, device=x.device)
         )
         return x + self.embd(token_type_ids)
 

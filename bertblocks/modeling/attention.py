@@ -1,55 +1,9 @@
 import torch
-from einops import rearrange
 from torch import nn
-from transformers.modeling_utils import is_flash_attn_2_available
 
-if is_flash_attn_2_available():
-    from flash_attn import flash_attn_varlen_qkvpacked_func
-
-    # Otherwise triggers graph break?
-    torch._dynamo.config.capture_scalar_outputs = True
-
-
+from bertblocks.modeling.backends import ATTENTION_BACKENDS
 from bertblocks.modeling.config import BertBlocksConfig
 from bertblocks.modeling.position import RotaryEmbedding, get_alibi_slopes
-
-
-def _flash_attention_forward(
-    qkv: "torch.Tensor",
-    cu_seqlens: "torch.Tensor",
-    max_seq_len: int,
-    num_heads: int,
-    rotary_emb: "RotaryEmbedding | None" = None,
-    alibi_slopes: "torch.Tensor | None" = None,
-    local_attention: tuple[int, int] = (-1, -1),
-    dropout_p: float = 0.0,
-    deterministic: bool = False,
-) -> "tuple[torch.Tensor, torch.Tensor]":
-    """Forward pass for flash attention backend."""
-    if rotary_emb is not None:
-        qkv = rotary_emb(qkv, cu_seqlens, max_seq_len)
-    orig_dtype = qkv.dtype
-    qkv = qkv.to(torch.bfloat16)
-    x, _, w = flash_attn_varlen_qkvpacked_func(
-        qkv,
-        cu_seqlens.to(torch.int32),
-        max_seq_len,
-        dropout_p=dropout_p,
-        causal=False,
-        softcap=0.0,  # 0.0 means deactivated
-        window_size=local_attention,
-        alibi_slopes=alibi_slopes,
-        deterministic=deterministic,
-        return_attn_probs=True,
-    )
-    x = x.to(orig_dtype)
-    return x, w
-
-
-# Supported attention backends; only flash attention for now.
-_ATTENTION_FUNCTION = {
-    "fa2": _flash_attention_forward,
-}
 
 
 class Attention(nn.Module):
@@ -100,7 +54,7 @@ class Attention(nn.Module):
         self.ffwd = nn.Linear(config.hidden_size, config.hidden_size, bias=config.attn_out_bias)
         # Private inits
         self._initialize_pos_buffers(config, layer_id=layer_id)
-        self._attention_fn = _ATTENTION_FUNCTION[config.attn_implementation]
+        self.backend = ATTENTION_BACKENDS[config.attn_implementation]
 
     def _initialize_pos_buffers(self, config: BertBlocksConfig, layer_id: int) -> None:
         """Initialize positional encoding buffers if needed.
@@ -148,50 +102,82 @@ class Attention(nn.Module):
             case _:
                 pass
 
-    def forward(
+    def forward_unpadded(
         self,
-        x: "torch.Tensor",
-        cu_seqlens: "torch.Tensor",
+        x: torch.Tensor,
+        cu_seqlens: torch.Tensor,
         max_seq_len: int,
-    ) -> "tuple[torch.Tensor, torch.Tensor | None]":
-        """Forward pass of the attention mechanism.
-
-        Computes multi-head self-attention with configurable positional encodings
-        and block masking. Calls the specified backends' forward function internally.
-
-        Args:
-            x (torch.Tensor, shape [total_seq_len, hidden_size]): Unpadded hidden state.
-            cu_seqlens (torch.Tensor, shape [batch_size + 1]): Cumulative sequence lengths in batch.
-            max_seq_len (int): Maximum sequence length in batch.
-
-        Returns:
-            tuple[torch.Tensor, torch.Tensor | None]
-
-                - `output`: Attention output tensor of shape [batch_size, seq_len, hidden_size].
-                - `attention_weights`: Log-sum-exp attention weights of shape [batch_size, num_heads, seq_len, seq_len].
-
-        """
-        # Fused projection
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        """Forward pass with unpadded sequences."""
         qkv = self.proj(x)
-        # Reshape for multihead attention
-        qkv = rearrange(qkv, "... (t h d) -> ... t h d", t=3, h=self.num_heads, d=self.head_dim)
-        # Apply attention backend forward
-        x, w = self._attention_fn(
+        x, w = self.backend.forward_unpadded(
             qkv,
             cu_seqlens,
             max_seq_len,
-            num_heads=self.num_heads,
+            self.num_heads,
+            self.head_dim,
             rotary_emb=self.rotary_emb,
             alibi_slopes=self.slopes,
             local_attention=self.local_attention,
             dropout_p=self.dropout_p if self.training else 0.0,
             deterministic=self.deterministic,
         )
-        # Reshape back to fuse heads
-        x = rearrange(x, "... h d -> ... (h d)")
-        # Output projection
         x = self.ffwd(x)
         return x, w
+
+    def forward_padded(
+        self,
+        x: torch.Tensor,
+        attention_mask: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        """Forward pass with padded sequences."""
+        # Fused projection
+        qkv = self.proj(x)
+        x, w = self.backend.forward_padded(
+            qkv,
+            attention_mask,
+            self.num_heads,
+            self.head_dim,
+            rotary_emb=self.rotary_emb,
+            alibi_slopes=self.slopes,
+            local_attention=self.local_attention,
+            dropout_p=self.dropout_p if self.training else 0.0,
+            deterministic=self.deterministic,
+        )
+        x = self.ffwd(x)
+        return x, w
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        attention_mask: torch.Tensor | None = None,
+        cu_seqlens: torch.Tensor | None = None,
+        max_seq_len: int | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        """Forward pass of the attention mechanism.
+
+        Automatically routes to padded or unpadded implementation based on backend capabilities.
+
+        Args:
+            x (torch.Tensor): Input hidden state
+            indices (torch.Tensor, optional): Sequence indices for unpadded sequences
+            cu_seqlens (torch.Tensor, optional): Cumulative sequence lengths for unpadded sequences
+            max_seq_len (int, optional): Maximum sequence length for unpadded sequences
+            attention_mask (torch.Tensor, optional): Attention mask for padded sequences
+
+        Returns:
+            tuple[torch.Tensor, torch.Tensor | None]: Output and optional attention weights
+        """
+        if self.backend.supports_unpadded and cu_seqlens is not None and max_seq_len is not None:
+            return self.forward_unpadded(x, cu_seqlens, max_seq_len)
+        elif self.backend.supports_padded and attention_mask is not None:
+            return self.forward_padded(x, attention_mask)
+        else:
+            raise ValueError(
+                f"Backend {self.backend.__class__.__name__} requires "
+                f"{'unpadded' if self.backend.supports_unpadded else 'padded'} sequences, "
+                f"but the required parameters were not provided."
+            )
 
 
 __all__ = ["Attention"]

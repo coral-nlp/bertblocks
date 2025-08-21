@@ -20,6 +20,7 @@ from transformers.modeling_outputs import (
 )
 from transformers.modeling_utils import PreTrainedModel
 
+from bertblocks.modeling.backends import ATTENTION_BACKENDS
 from bertblocks.modeling.block import Encoder
 from bertblocks.modeling.config import BertBlocksConfig
 from bertblocks.modeling.embedding import TokenEmbedding
@@ -218,20 +219,38 @@ class BertBlocksModel(BertBlocksPreTrainedModel):
                 - `attentions`: Attention weights from all layers (optional)
 
         """
-        # Unpad input sequence
         B, S = input_ids.shape
-        with torch.no_grad():
-            input_ids, indices, cu_seqlens, max_seq_len = unpad_input(input_ids, attention_mask, self.pad_token_id)
 
-        x = self.embd(input_ids, token_type_ids=token_type_ids, cu_seqlens=cu_seqlens)
+        # Check if we need unpadded sequences (for FA2) or can work with padded sequences (SDPA/Native)
+        backend = ATTENTION_BACKENDS[self.config.attn_implementation]
 
-        x, hidden_states, attentions = self.encd(
-            x, indices, cu_seqlens, max_seq_len, output_attentions, output_hidden_states
-        )
-        x = self.norm(x)
-        x = pad_output(x, indices, B, S)
-        if output_hidden_states:
-            hidden_states = [pad_output(h, indices, B, S, self.pad_token_id) for h in hidden_states]
+        if backend.supports_unpadded:
+            # FA2 backend: Use unpadded sequences
+            with torch.no_grad():
+                input_ids_unpadded, indices, cu_seqlens, max_seq_len = unpad_input(
+                    input_ids, attention_mask, self.pad_token_id
+                )
+
+            x = self.embd(input_ids_unpadded, token_type_ids=token_type_ids, cu_seqlens=cu_seqlens)
+
+            x, hidden_states, attentions = self.encd(
+                x, attention_mask, cu_seqlens, max_seq_len, output_attentions, output_hidden_states
+            )
+            x = self.norm(x)
+
+            # Pad output back to original format
+            x = pad_output(x, indices, B, S)
+            if output_hidden_states:
+                hidden_states = [pad_output(h, indices, B, S, self.pad_token_id) for h in hidden_states]
+
+        else:
+            # SDPA/Native backends: Work directly with padded sequences
+            x = self.embd(input_ids, token_type_ids=token_type_ids)
+
+            x, hidden_states, attentions = self.encd(
+                x, attention_mask, None, None, output_attentions, output_hidden_states
+            )
+            x = self.norm(x)
 
         if self.pool is not None:
             pooler_output = self.pool(x)

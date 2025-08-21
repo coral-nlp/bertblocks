@@ -46,6 +46,7 @@ def from_modernbert_model(
         attn_dropout_prob=orig_config.attention_dropout or 0.0,
         hidden_dropout_prob=orig_config.mlp_dropout or 0.0,
         classifier_dropout_prob=orig_config.classifier_dropout or 0.0,
+        attn_implementation="fa2",
     )
 
     bertblocks_model = BertBlocksModel(bertblocks_config, add_pooling_layer=add_pooling_layer)

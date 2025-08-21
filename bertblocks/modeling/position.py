@@ -42,17 +42,32 @@ class SinusoidalPositionalEncoding(nn.Module):
         enc[0, :, 1::2] = torch.cos(pos * denom)
         return enc
 
-    def forward(self, x: "torch.Tensor") -> "torch.Tensor":
+    def forward(self, x: "torch.Tensor", cu_seqlens: "torch.Tensor | None" = None) -> "torch.Tensor":
         """Add sinusoidal positional encoding to a given tensor.
 
         Args:
-            x (torch.Tensor, shape [batch_size, seq_len, embedding_dim]): The tensor to add positional encoding to.
+            x (torch.Tensor): The tensor to add positional encoding to.
+                - For unpadded: shape [total_seq_len, embedding_dim]
+                - For padded: shape [batch_size, seq_len, embedding_dim]
+            cu_seqlens (torch.Tensor, shape [batch_size + 1,], optional):
+                Cumulative sequence lengths for unpadded sequences. If None, assumes padded format.
 
         Returns:
-            torch.Tensor: The tensor after adding positional encoding, shape [batch_size, seq_len, embedding_dim].
+            torch.Tensor: The tensor after adding positional encoding, same shape as input.
 
         """
-        return x + self.sin[: x.size(1), :]
+        if cu_seqlens is not None:
+            # Unpadded sequence format - create position IDs for each sequence
+            total_seq_len = cu_seqlens[-1].item()
+            seq_ids = torch.zeros(total_seq_len, device=cu_seqlens.device, dtype=torch.long)
+            seq_ids[cu_seqlens[1:-1]] = 1
+            seq_ids = seq_ids.cumsum(dim=0)
+            pos_ids = torch.arange(total_seq_len, device=cu_seqlens.device, dtype=torch.long) - cu_seqlens[seq_ids]
+            return x + self.sin[0, pos_ids, :]
+        else:
+            # Padded sequence format
+            seq_len = x.size(1) if x.dim() == 3 else x.size(0)
+            return x + self.sin[0, :seq_len, :]
 
 
 class LearnedPositionalEncoding(nn.Module):
@@ -70,7 +85,7 @@ class LearnedPositionalEncoding(nn.Module):
         self.embd = nn.Embedding(max_seq_len, dim)
 
     @staticmethod
-    def _get_position_ids(cu_seqlens: "torch.Tensor") -> "torch.Tensor":
+    def _get_position_ids_from_cu_seqlens(cu_seqlens: "torch.Tensor") -> "torch.Tensor":
         total_seq_len = cu_seqlens[-1].item()
         # Tensor with sequence ids for each position
         seq_ids = torch.zeros(total_seq_len, device=cu_seqlens.device, dtype=torch.long)
@@ -84,19 +99,25 @@ class LearnedPositionalEncoding(nn.Module):
         """Add learned positional encodings to a given tensor.
 
         Args:
-            x (torch.Tensor, shape [total_seq_len, embedding_dim]): The tensor to add positional encodings to.
-            cu_seqlens (torch.Tensor, shape [batch_size + 1,]): Cumulative sequence lengths to infer positions from.
+            x (torch.Tensor): The tensor to add positional encodings to.
+                - For unpadded: shape [total_seq_len, embedding_dim]
+                - For padded: shape [batch_size, seq_len, embedding_dim]
+            cu_seqlens (torch.Tensor, shape [batch_size + 1,], optional):
+                Cumulative sequence lengths for unpadded sequences. If None, assumes padded format.
 
         Returns:
-            torch.Tensor: The tensor after adding learned positional encodings, shape [total_seq_len, embedding_dim].
+            torch.Tensor: The tensor after adding learned positional encodings, same shape as input.
 
         """
-        cu_seqlens = (
-            cu_seqlens
-            if cu_seqlens is not None
-            else torch.Tensor([0, x.shape[0]]).to(device=x.device, dtype=torch.int32)
-        )
-        return x + self.embd(self._get_position_ids(cu_seqlens))
+        if cu_seqlens is not None:
+            # Unpadded sequence format
+            pos_ids = self._get_position_ids_from_cu_seqlens(cu_seqlens)
+        else:
+            # Padded sequence format - create standard position IDs
+            batch_size, seq_len = x.shape[:2]
+            pos_ids = torch.arange(seq_len, device=x.device, dtype=torch.long).unsqueeze(0).expand(batch_size, -1)
+
+        return x + self.embd(pos_ids)
 
 
 def get_alibi_slopes(
