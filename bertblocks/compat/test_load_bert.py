@@ -5,9 +5,7 @@ from transformers import AutoTokenizer, BertModel
 from bertblocks.compat.load_bert import from_bert_model
 
 
-@pytest.mark.skip(reason="Under development")
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
-@pytest.mark.gpu
+# @pytest.mark.skip(reason="Under development")
 class TestFromBertModel:
     """Test that Huggingface BERT and loaded BertBlocks implementations are equivalent in weights and output."""
 
@@ -174,26 +172,26 @@ class TestFromBertModel:
 
     def test_attn(self, subtests, seq, hf_model, bb_model):  # type: ignore
         """Test the attention mechanism individually."""
+        from transformers.modeling_attn_mask_utils import _prepare_4d_attention_mask_for_sdpa
+
         from bertblocks.modeling.padding import pad_output, unpad_input
 
         B, S = seq["input_ids"].shape
         input_ids, indices, cu_seqlens, max_seq_len = unpad_input(seq["input_ids"], seq["attention_mask"])
         bb_emb = bb_model.embd(input_ids, cu_seqlens=cu_seqlens)
         hf_emb = hf_model.embeddings(seq["input_ids"], seq["attention_mask"])
+        hf_msk = _prepare_4d_attention_mask_for_sdpa(seq["attention_mask"], dtype=hf_emb.dtype, tgt_len=S)
 
         with torch.no_grad():
             for layer_idx in range(len(hf_model.encoder.layer)):
                 with subtests.test(f"layer_{layer_idx}"):
-                    hf_out = hf_model.encoder.layer[layer_idx].attention(
-                        hf_emb, attention_mask=seq["attention_mask"].bool()
-                    )
+                    hf_out = hf_model.encoder.layer[layer_idx].attention(hf_emb, attention_mask=hf_msk)
                     hf_out = hf_out[0] * seq["attention_mask"].unsqueeze(-1)
 
-                    bb_out = bb_model.encd.blocks[layer_idx].attn(
-                        bb_emb, cu_seqlens=cu_seqlens, max_seq_len=max_seq_len
-                    )[0]
+                    bb_out = bb_model.encd.blocks[layer_idx].attn(bb_emb, indices, cu_seqlens, max_seq_len)[0]
                     bb_out = bb_model.encd.blocks[layer_idx].post_norm_attn(bb_out)
                     bb_out = pad_output(bb_out, indices, B, S)
+
                     torch.testing.assert_close(hf_out, bb_out)
 
     @pytest.mark.dependency(depends=["TestFromBertModel::test_ffwd", "TestFromBertModel::test_attn"])

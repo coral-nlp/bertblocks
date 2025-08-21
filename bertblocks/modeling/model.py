@@ -225,7 +225,9 @@ class BertBlocksModel(BertBlocksPreTrainedModel):
 
         x = self.embd(input_ids, token_type_ids=token_type_ids, cu_seqlens=cu_seqlens)
 
-        x, hidden_states, attentions = self.encd(x, cu_seqlens, max_seq_len, output_attentions, output_hidden_states)
+        x, hidden_states, attentions = self.encd(
+            x, indices, cu_seqlens, max_seq_len, output_attentions, output_hidden_states
+        )
         x = self.norm(x)
         x = pad_output(x, indices, B, S)
         if output_hidden_states:

@@ -96,7 +96,6 @@ class LearnedPositionalEncoding(nn.Module):
             if cu_seqlens is not None
             else torch.Tensor([0, x.shape[0]]).to(device=x.device, dtype=torch.int32)
         )
-        print(x.shape, cu_seqlens)
         return x + self.embd(self._get_position_ids(cu_seqlens))
 
 

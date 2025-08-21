@@ -3,6 +3,7 @@ name = "bertblocks"
 version = "0.1.0"
 description = "A comprehensive framework for exploring transformer encoders"
 requires-python = ">=3.11"
+license = "MIT"
 
 [dependency-groups]
 base = [

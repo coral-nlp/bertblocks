@@ -5,8 +5,7 @@ from transformers import AutoTokenizer, ModernBertConfig, ModernBertModel
 from bertblocks.compat import from_modernbert_model
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
-@pytest.mark.gpu
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available but flash-attn depends on it")
 class TestFromModernBertModel:
     """Test equivalency of Huggingface ModernBERT and loaded BertBlocks implementations."""
 
@@ -229,6 +228,7 @@ class TestFromModernBertModel:
                 with subtests.test(f"layer_{layer_idx}"):
                     torch.testing.assert_close(hf_out, bertblocks_out)
 
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available but flash-attn depends on it")
     @pytest.mark.dependency(
         depends=["TestFromModernBertModel::test_embedding", "TestFromModernBertModel::test_blocks_sequential"]
     )

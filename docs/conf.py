@@ -17,10 +17,12 @@ extensions = [
     "sphinx.ext.viewcode",
     "sphinx.ext.intersphinx",
     "sphinx.ext.napoleon",
+    "myst_parser"
 ]
 
 templates_path = ["_templates"]
 exclude_patterns = ["_build", "Thumbs.db", ".DS_Store", "test_*.py"]
+python_maximum_signature_line_length = 120
 
 # -- AutoAPI configuration --------------------------------------------------
 autoapi_dirs = ["../bertblocks"]
@@ -431,5 +433,6 @@ html_theme_options = {
 intersphinx_mapping = {
     "python": ("https://docs.python.org/3", None),
     "torch": ("https://pytorch.org/docs/stable/", None),
+    "datasets": ("https://huggingface.co/docs/datasets/main/en/", None),
     "transformers": ("https://huggingface.co/docs/transformers/main/en/", None),
 }

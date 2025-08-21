@@ -71,6 +71,7 @@ class Block(nn.Module):
     def forward(
         self,
         x: "torch.Tensor",
+        indices: "torch.Tensor",
         cu_seqlens: "torch.Tensor",
         max_seq_len: int,
     ) -> "tuple[torch.Tensor, torch.Tensor]":
@@ -78,6 +79,7 @@ class Block(nn.Module):
 
         Args:
             x (torch.Tensor, shape [total_seq_len, hidden_size]): Unpadded hidden state.
+            indices (torch.Tensor, shape [total_seq_len, ...]): Sequence indices.
             cu_seqlens (torch.Tensor, shape [batch_size + 1]): Cumulative sequence lengths in batch.
             max_seq_len (int): Maximum sequence length in batch.
 
@@ -95,7 +97,7 @@ class Block(nn.Module):
         else:
             residual = x
             x = self.pre_norm_attn(x)
-        x, w = self.attn(x, cu_seqlens, max_seq_len)
+        x, w = self.attn(x, indices, cu_seqlens, max_seq_len)
         x = self.attn_drop(x)
         x = self.post_norm_attn(x + residual)
         # Feed-forward component
@@ -131,6 +133,7 @@ class Encoder(nn.Module):
     def forward(
         self,
         x: "torch.Tensor",
+        indices: "torch.Tensor",
         cu_seqlens: "torch.Tensor",
         max_seq_len: int,
         output_attentions: "bool | None" = False,
@@ -142,6 +145,7 @@ class Encoder(nn.Module):
 
         Args:
             x (torch.Tensor, shape [total_seq_len, hidden_size]): Unpadded hidden state.
+            indices (torch.Tensor, shape [total_seq_len, ...]): Sequence indices.
             cu_seqlens (torch.Tensor, shape [batch_size + 1]): Cumulative sequence lengths in batch.
             max_seq_len (int): Maximum sequence length in batch.
             output_attentions (bool | None, optional): Whether to return attention weights from
@@ -166,7 +170,7 @@ class Encoder(nn.Module):
         all_hidden_states = [x]
         # Apply layers
         for block in self.blocks:
-            x, w = block(x, cu_seqlens, max_seq_len)
+            x, w = block(x, indices, cu_seqlens, max_seq_len)
             if output_hidden_states:
                 all_hidden_states.append(x)
             if output_attentions:

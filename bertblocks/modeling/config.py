@@ -146,7 +146,7 @@ class BertBlocksConfig(PretrainedConfig):
         hidden_dropout_prob: float = 0.1,
         attn_dropout_prob: float = 0.1,
         classifier_dropout_prob: float = 0.1,
-        attn_implementation: Literal["fa2", "sdpa"] = "fa2",
+        attn_implementation: Literal["fa2", "native"] = "native",
         problem_type: Literal["regression", "single_label_classification", "multi_label_classification"] = "regression",
         num_labels: int = 2,
         **kwargs: Any,

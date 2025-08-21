@@ -69,7 +69,7 @@ class TokenEmbedding(nn.Module):
         config (BertBlocksConfig): Configuration object determining model hyperparameters. May be passed to
             other submodules. Keys used at top level:
 
-            - `vocab_size`: Size of the vocabulary for token embeddings
+            - `vocab_size` (int): Size of the vocabulary for token embeddings
             - `hidden_size`: Dimensionality of embeddings and hidden states
             - `pad_token_id`: Token ID used for padding sequences
             - `pos_emb_kind`: Type of positional embedding ("sinusoidal", "learned", etc.)
