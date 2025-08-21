@@ -1,39 +1,44 @@
 import pytest
 import torch
+from pytest_dependency import depends
 from transformers import AutoTokenizer, BertModel
 
 from bertblocks.compat.load_bert import from_bert_model
 
+TEST_MODELS = ["bert-base-uncased", "bert-base-cased", "bert-large-uncased"]
 
-@pytest.mark.skip(reason="Under development")
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
-@pytest.mark.gpu
+
+@pytest.mark.parametrize("baseline_model", TEST_MODELS, scope="class")
 class TestFromBertModel:
     """Test that Huggingface BERT and loaded BertBlocks implementations are equivalent in weights and output."""
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    baseline_model = "bert-base-uncased"
 
     @pytest.fixture(scope="class")
-    def hf_model(self):  # type: ignore
+    def baseline_model_name(self, baseline_model):  # type: ignore
+        """Return the current baseline model name for dynamic test dependencies."""
+        yield baseline_model
+
+    @pytest.fixture(scope="class")
+    def hf_model(self, baseline_model):  # type: ignore
         """Instantiate Huggingface BERT model as fixture."""
-        bert_model = BertModel.from_pretrained(self.baseline_model, add_pooling_layer=False).to(self.device)
+        bert_model = BertModel.from_pretrained(baseline_model, add_pooling_layer=False).to(self.device)
         bert_model.eval()
         yield bert_model
         del bert_model
 
     @pytest.fixture(scope="class")
-    def bb_model(self):  # type: ignore
+    def bb_model(self, baseline_model):  # type: ignore
         """Instantiate BertBlocks model as fixture."""
-        bb_model = from_bert_model(self.baseline_model, add_pooling_layer=False).to(self.device)
+        bb_model = from_bert_model(baseline_model, add_pooling_layer=False).to(self.device)
         bb_model.eval()
         yield bb_model
         del bb_model
 
     @pytest.fixture(scope="class")
-    def seq(self):  # type: ignore
+    def seq(self, baseline_model):  # type: ignore
         """Create sample sequence data."""
-        tokenizer = AutoTokenizer.from_pretrained(self.baseline_model)
+        tokenizer = AutoTokenizer.from_pretrained(baseline_model)
         yield tokenizer(
             [
                 "The cat sat on the mat.",
@@ -83,19 +88,19 @@ class TestFromBertModel:
 
             with subtests.test(f"layer_encoder_block_{layer_idx}_ffwd"):
                 torch.testing.assert_close(
-                    bb_model.encd.blocks[layer_idx].ffwd.Uprj.weight,
+                    bb_model.encd.blocks[layer_idx].ffwd.uprj.weight,
                     hf_model.encoder.layer[layer_idx].intermediate.dense.weight,
                 )
                 torch.testing.assert_close(
-                    bb_model.encd.blocks[layer_idx].ffwd.Uprj.bias,
+                    bb_model.encd.blocks[layer_idx].ffwd.uprj.bias,
                     hf_model.encoder.layer[layer_idx].intermediate.dense.bias,
                 )
                 torch.testing.assert_close(
-                    bb_model.encd.blocks[layer_idx].ffwd.Dprj.weight,
+                    bb_model.encd.blocks[layer_idx].ffwd.dprj.weight,
                     hf_model.encoder.layer[layer_idx].output.dense.weight,
                 )
                 torch.testing.assert_close(
-                    bb_model.encd.blocks[layer_idx].ffwd.Dprj.bias,
+                    bb_model.encd.blocks[layer_idx].ffwd.dprj.bias,
                     hf_model.encoder.layer[layer_idx].output.dense.bias,
                 )
 
@@ -117,9 +122,11 @@ class TestFromBertModel:
                     hf_model.encoder.layer[layer_idx].output.LayerNorm.bias,
                 )
 
-    @pytest.mark.dependency(depends=["TestFromBertModel::test_weights"])
-    def test_embedding(self, subtests, seq, hf_model, bb_model):  # type: ignore
+    @pytest.mark.dependency
+    def test_embedding(self, request, baseline_model_name, subtests, seq, hf_model, bb_model):  # type: ignore
         """Test the embedding layer."""
+        depends(request, [f"TestFromBertModel::test_weights[{baseline_model_name}]"])
+
         position_ids = torch.arange(0, seq["input_ids"].shape[1]).unsqueeze(0).to(self.device)
         with torch.no_grad():
             with subtests.test("word_embeddings"):
@@ -145,22 +152,14 @@ class TestFromBertModel:
                 )
 
             with subtests.test("end_to_end"):
-                from bertblocks.modeling.padding import pad_output, unpad_input
+                torch.testing.assert_close(hf_model.embeddings(seq["input_ids"]), bb_model.embd(seq["input_ids"]))
 
-                B, S = seq["input_ids"].shape
-                input_ids, indices, cu_seqlens, max_seq_len = unpad_input(seq["input_ids"], seq["attention_mask"])
-                bb_out = bb_model.embd(input_ids, cu_seqlens=cu_seqlens)
-                bb_out = pad_output(bb_out, indices, B, S)
-                # We have to set attention masked values to 0, since the unpadding inserts zeros
-                hf_out = hf_model.embeddings(seq["input_ids"])
-                hf_out = hf_out * seq["attention_mask"].unsqueeze(-1)
-
-                torch.testing.assert_close(hf_out, bb_out)
-
-    @pytest.mark.dependency(depends=["TestFromBertModel::test_weights"])
-    def test_ffwd(self, subtests, hf_model, bb_model):  # type: ignore
+    @pytest.mark.dependency
+    def test_ffwd(self, request, baseline_model_name, subtests, hf_model, bb_model):  # type: ignore
         """Test the feed-forward layers individually."""
-        inp = torch.rand((1, 8192, 768)).to(self.device)
+        depends(request, [f"TestFromBertModel::test_weights[{baseline_model_name}]"])
+
+        inp = torch.rand((1, hf_model.config.max_position_embeddings, hf_model.config.hidden_size)).to(self.device)
 
         with torch.no_grad():
             for layer_idx in range(len(hf_model.encoder.layer)):
@@ -170,63 +169,77 @@ class TestFromBertModel:
 
                     bb_out = bb_model.encd.blocks[layer_idx].ffwd(inp)
                     bb_out = bb_model.encd.blocks[layer_idx].post_norm_ffwd(bb_out + inp)
+
                     torch.testing.assert_close(hf_out, bb_out)
 
-    def test_attn(self, subtests, seq, hf_model, bb_model):  # type: ignore
+    @pytest.mark.dependency
+    def test_attn(self, request, baseline_model_name, subtests, seq, hf_model, bb_model):  # type: ignore
         """Test the attention mechanism individually."""
-        from bertblocks.modeling.padding import pad_output, unpad_input
+        # depends(request, [f"TestFromBertModel::test_embedding[{baseline_model_name}]"])
 
-        B, S = seq["input_ids"].shape
-        input_ids, indices, cu_seqlens, max_seq_len = unpad_input(seq["input_ids"], seq["attention_mask"])
-        bb_emb = bb_model.embd(input_ids, cu_seqlens=cu_seqlens)
-        hf_emb = hf_model.embeddings(seq["input_ids"], seq["attention_mask"])
+        from transformers.modeling_attn_mask_utils import _prepare_4d_attention_mask_for_sdpa
+
+        bb_emb = bb_model.embd(seq["input_ids"])
+        hf_emb = hf_model.embeddings(seq["input_ids"])
+        torch.testing.assert_close(bb_emb, hf_emb)
+        hf_msk = _prepare_4d_attention_mask_for_sdpa(
+            seq["attention_mask"], dtype=hf_emb.dtype, tgt_len=seq["input_ids"].shape[1]
+        )
 
         with torch.no_grad():
             for layer_idx in range(len(hf_model.encoder.layer)):
                 with subtests.test(f"layer_{layer_idx}"):
-                    hf_out = hf_model.encoder.layer[layer_idx].attention(
-                        hf_emb, attention_mask=seq["attention_mask"].bool()
-                    )
-                    hf_out = hf_out[0] * seq["attention_mask"].unsqueeze(-1)
-
-                    bb_out = bb_model.encd.blocks[layer_idx].attn(
-                        bb_emb, cu_seqlens=cu_seqlens, max_seq_len=max_seq_len
-                    )[0]
-                    bb_out = bb_model.encd.blocks[layer_idx].post_norm_attn(bb_out)
-                    bb_out = pad_output(bb_out, indices, B, S)
+                    hf_out = hf_model.encoder.layer[layer_idx].attention(hf_emb, attention_mask=hf_msk)[0]
+                    # HF does residual and norm inside the attention, so we need to manually add it here, too
+                    bb_out = bb_model.encd.blocks[layer_idx].attn(bb_emb, attention_mask=seq["attention_mask"])[0]
+                    bb_out = bb_model.encd.blocks[layer_idx].post_norm_attn(bb_out + bb_emb)
                     torch.testing.assert_close(hf_out, bb_out)
 
-    @pytest.mark.dependency(depends=["TestFromBertModel::test_ffwd", "TestFromBertModel::test_attn"])
-    def test_blocks_individual(self, subtests, seq, hf_model, bb_model):  # type: ignore
+    @pytest.mark.dependency
+    def test_blocks(self, request, baseline_model_name, subtests, seq, hf_model, bb_model):  # type: ignore
         """Test the encoder blocks individually."""
-        from bertblocks.modeling.padding import pad_output, unpad_input
+        depends(
+            request,
+            [
+                f"TestFromBertModel::test_ffwd[{baseline_model_name}]",
+                f"TestFromBertModel::test_attn[{baseline_model_name}]",
+            ],
+        )
 
-        B, S = seq["input_ids"].shape
-        input_ids, indices, cu_seqlens, max_seq_len = unpad_input(seq["input_ids"], seq["attention_mask"])
-        bb_emb = bb_model.embd(input_ids, cu_seqlens=cu_seqlens)
+        from transformers.modeling_attn_mask_utils import _prepare_4d_attention_mask_for_sdpa
 
-        hf_emb = hf_model.embeddings(input_ids, seq["attention_mask"])
+        bb_emb = bb_model.embd(seq["input_ids"])
+        hf_emb = hf_model.embeddings(seq["input_ids"])
+        hf_msk = _prepare_4d_attention_mask_for_sdpa(
+            seq["attention_mask"], dtype=hf_emb.dtype, tgt_len=seq["input_ids"].shape[1]
+        )
 
         with torch.no_grad():
-            for layer_idx in range(len(hf_model.layers)):
+            for layer_idx in range(len(hf_model.encoder.layer)):
                 with subtests.test(f"layer_{layer_idx}"):
-                    hf_out = hf_model.layer[layer_idx](hf_emb)
-                    hf_out = hf_out * seq["attention_mask"].unsqueeze(-1)
-                    bb_out = bb_model.encd.blocks[layer_idx](bb_emb, cu_seqlens=cu_seqlens, max_seq_len=max_seq_len)[0]
-                    bb_out = pad_output(bb_out, indices, B, S)
-                    torch.testing.assert_close(hf_out, bb_out)
+                    torch.testing.assert_close(
+                        hf_model.encoder.layer[layer_idx](hf_emb, attention_mask=hf_msk)[0],
+                        bb_model.encd.blocks[layer_idx](bb_emb, attention_mask=seq["attention_mask"])[0],
+                    )
 
-    @pytest.mark.dependency(depends=["TestFromBertModel::test_weights"])
-    def test_encoder(self, subtests, seq, hf_model, bb_model):  # type: ignore
-        """Test the encoder stacks."""
+    @pytest.mark.dependency
+    def test_model(self, request, baseline_model_name, subtests, seq, hf_model, bb_model):  # type: ignore
+        """Test the model end-to-end."""
+        depends(
+            request,
+            [
+                f"TestFromBertModel::test_weights[{baseline_model_name}]",
+                f"TestFromBertModel::test_embedding[{baseline_model_name}]",
+                f"TestFromBertModel::test_ffwd[{baseline_model_name}]",
+                f"TestFromBertModel::test_attn[{baseline_model_name}]",
+                f"TestFromBertModel::test_blocks[{baseline_model_name}]",
+            ],
+        )
+
         with torch.no_grad():
-            bert_hidden = hf_model(
-                seq["input_ids"], seq["attention_mask"].bool(), output_hidden_states=True
-            ).hidden_states
-            berkit_hidden = bb_model(
-                seq["input_ids"], seq["attention_mask"].bool(), output_hidden_states=True
-            ).hidden_states
+            hf_hidden = hf_model(seq["input_ids"], seq["attention_mask"], output_hidden_states=True).hidden_states
+            bb_hidden = bb_model(seq["input_ids"], seq["attention_mask"], output_hidden_states=True).hidden_states
 
-            for layer_idx, (bhs, phs) in enumerate(zip(bert_hidden, berkit_hidden, strict=False)):
-                with subtests.test(f"layer_encoder_block_{layer_idx}"):
-                    torch.testing.assert_close(bhs * seq["attention_mask"].unsqueeze(-1), phs)
+            for layer_idx, (hf_hidden_layer, bb_hidden_layer) in enumerate(zip(hf_hidden, bb_hidden, strict=False)):
+                with subtests.test(f"layer_{layer_idx}"):
+                    torch.testing.assert_close(hf_hidden_layer, bb_hidden_layer)

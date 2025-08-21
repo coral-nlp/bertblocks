@@ -6,10 +6,12 @@ It supports streaming datasets, flexible model compilation, and various
 optimization strategies.
 
 The implementation includes:
-- MaskedLanguageModelingCollator for dynamic masking
-- BertBlocksPretrainingDataModule for data loading
-- BertBlocksPretrainingModule for training logic
-- Support for model compilation and advanced optimization
+
+    - MaskedLanguageModelingCollator for dynamic masking
+    - BertBlocksPretrainingDataModule for data loading
+    - BertBlocksPretrainingModule for training logic
+    - Support for model compilation and advanced optimization
+
 """
 
 import os.path

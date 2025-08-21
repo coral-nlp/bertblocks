@@ -15,29 +15,31 @@ class GLU(nn.Module):
 
     This class implements a GLU-style MLP layer that uses gating to control information flow.
 
+    Attributes:
+        uprj (nn.Linear): up projection layer, from hidden size to 2 * intermediate size.
+        actv (nn.Module): Activation function.
+        dprj (nn.Linear): down projection layer, from intermediate size to hidden size.
+
+    Args:
+        config (BertBlocksConfig): Configuration object determining model hyperparameters. May be passed to
+            other submodules. Keys used at top level:
+
+                - `hidden_size`: Dimensionality of hidden layers (input/output dimension)
+                - `intermediate_size`: Dimensionality of feed-forward layers
+                - `mlp_in_bias`: Whether to include bias in the input projection layer
+                - `mlp_out_bias`: Whether to include bias in the output projection layer
+                - `actv_fn`: Activation function used in feed-forward networks
+
     """
 
     def __init__(self, config: "BertBlocksConfig"):
-        """Initialize the GLU layer.
-
-        Args:
-            config (BertBlocksConfig): Configuration object determining model hyperparameters. May be passed to
-                other submodules. Keys used at top level:
-                    - hidden_size: Dimensionality of hidden layers (input/output dimension)
-                    - intermediate_size: Dimensionality of feed-forward layers
-                    - actv_fn: Activation function used in feed-forward networks
-
-        """
         super().__init__()
-        # Upwards projection to intermediate size & gate
-        self.Uprj = nn.Linear(config.hidden_size, config.intermediate_size * 2, bias=False)
-        # Activation function for gate
+        self.uprj = nn.Linear(config.hidden_size, config.intermediate_size * 2, bias=config.mlp_in_bias)
         self.actv = get_actv_fn(config)
-        # Downwards projection to hidden size
-        self.Dprj = nn.Linear(config.intermediate_size, config.hidden_size, bias=False)
+        self.dprj = nn.Linear(config.intermediate_size, config.hidden_size, bias=config.mlp_out_bias)
 
     def forward(self, x: "torch.Tensor") -> "torch.Tensor":
-        """Forward pass through the GLU layer.
+        """Forward pass of the GLU layer.
 
         Implements the gated linear unit computation: value * activation(gate)
         where both value and gate are linear projections of the input.
@@ -46,13 +48,13 @@ class GLU(nn.Module):
             x (torch.Tensor, shape [batch_size, sequence_length, hidden_size]): Input tensor.
 
         Returns:
-            torch.Tensor: Transformed tensor after gated projection, down-projection, and dropout.
-            Shape [batch_size, sequence_length, hidden_size].
+            torch.Tensor: Transformed tensor after gated projection, down-projection, and dropout,
+                shape [batch_size, sequence_length, hidden_size].
 
         """
-        x, gate = self.Uprj(x).chunk(2, axis=-1)
+        x, gate = self.uprj(x).chunk(2, axis=-1)
         x = gate * self.actv(x)
-        x = self.Dprj(x)
+        x = self.dprj(x)
         return x
 
 
@@ -61,31 +63,31 @@ class MLP(nn.Module):
 
     This class implements a standard two-layer MLP (feedforward network).
 
+    Attributes:
+        uprj (nn.Linear): up projection layer, from hidden size to intermediate size.
+        actv (nn.Module): Activation function.
+        dprj (nn.Linear): down projection layer, from intermediate size to hidden size.
+
+    Args:
+        config (BertBlocksConfig): Configuration object determining model hyperparameters. May be passed to
+            other submodules. Keys used at top level:
+
+                - `hidden_size`: Dimensionality of hidden layers (input/output dimension)
+                - `intermediate_size`: Dimensionality of feed-forward layers
+                - `mlp_in_bias`: Whether to include bias in the input projection layer
+                - `mlp_out_bias`: Whether to include bias in the output projection layer
+                - `actv_fn`: Activation function used in feed-forward networks
+
     """
 
     def __init__(self, config: "BertBlocksConfig"):
-        """Initialize the MLP layer.
-
-        Args:
-            config (BertBlocksConfig): Configuration object determining model hyperparameters. May be passed to
-                other submodules. Keys used at top level:
-                    - hidden_size: Dimensionality of hidden layers (input/output dimension)
-                    - intermediate_size: Dimensionality of feed-forward layers
-                    - mlp_in_bias: Whether to include bias in input projection of MLP layers
-                    - mlp_out_bias: Whether to include bias in output projection of MLP layers
-                    - actv_fn: Activation function used in feed-forward networks
-
-        """
         super().__init__()
-        # Upwards projection to intermediate size
-        self.Uprj = nn.Linear(config.hidden_size, config.intermediate_size, bias=config.mlp_in_bias)
-        # Activation function
+        self.uprj = nn.Linear(config.hidden_size, config.intermediate_size, bias=config.mlp_in_bias)
         self.actv = get_actv_fn(config)
-        # Downwards projection to hidden size
-        self.Dprj = nn.Linear(config.intermediate_size, config.hidden_size, bias=config.mlp_out_bias)
+        self.dprj = nn.Linear(config.intermediate_size, config.hidden_size, bias=config.mlp_out_bias)
 
     def forward(self, x: "torch.Tensor") -> "torch.Tensor":
-        """Forward pass through the MLP layer.
+        """Forward pass of the MLP layer.
 
         Applies standard feedforward transformation: activation(W1*x + b1)*W2 + b2
         where biases are optional based on configuration.
@@ -94,13 +96,13 @@ class MLP(nn.Module):
             x (torch.Tensor, shape [batch_size, sequence_length, hidden_size]): Input tensor.
 
         Returns:
-            torch.Tensor: Transformed tensor after two linear projections, activation, and dropout.
-            Shape [batch_size, sequence_length, hidden_size].
+            torch.Tensor: Transformed tensor after two linear projections, activation, and dropout,
+                shape [batch_size, sequence_length, hidden_size].
 
         """
-        x = self.Uprj(x)
+        x = self.uprj(x)
         x = self.actv(x)
-        x = self.Dprj(x)
+        x = self.dprj(x)
         return x
 
 
@@ -120,6 +122,7 @@ def get_mlp(config: "BertBlocksConfig") -> "nn.Module":
         ValueError: If the specified MLP type is not supported.
 
     Supported MLP types:
+
         - `mlp`: Standard two-layer feedforward network
         - `glu`: Gated Linear Unit with learned gating mechanism
 
@@ -133,3 +136,6 @@ def get_mlp(config: "BertBlocksConfig") -> "nn.Module":
     else:
         supported_types = ["mlp", "glu"]
         raise ValueError(f"Unknown MLP type '{mlp_type}'. Supported types: {', '.join(supported_types)}")
+
+
+__all__ = ["get_mlp", "GLU", "MLP"]

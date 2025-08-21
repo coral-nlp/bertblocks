@@ -26,6 +26,7 @@ def get_actv_fn(config: "BertBlocksConfig") -> "nn.Module":
         ValueError: If the specified activation function is not supported.
 
     Supported activation functions:
+
         - `relu`: Rectified Linear Unit
         - `silu`: Sigmoid Linear Unit (Swish)
         - `gelu`: Gaussian Error Linear Unit
@@ -55,3 +56,6 @@ def get_actv_fn(config: "BertBlocksConfig") -> "nn.Module":
             return PReLU()
         case _:
             raise ValueError(f"Unknown activation function {config.actv_fn}")
+
+
+__all__ = ["get_actv_fn"]

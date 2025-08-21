@@ -4,8 +4,10 @@ from bertblocks.modeling.model import BertBlocksModel
 
 from .load_bert import from_bert_model
 from .load_modernbert import from_modernbert_model
+from .test_load_bert import TEST_MODELS as tested_bert_models
+from .test_load_modernbert import TEST_MODELS as tested_modernbert_models
 
-SUPPORTED_MODELS = ["modernbert"]
+SUPPORTED_MODELS = tested_bert_models + tested_modernbert_models
 
 
 def from_huggingface(

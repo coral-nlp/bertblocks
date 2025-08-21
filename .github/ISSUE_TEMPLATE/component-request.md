@@ -16,10 +16,10 @@ assignees: ''
 
 ## Component Details
 
-**Name:** 
+**Name:**
 <!-- Full name of the component as referenced in literature -->
 
-**Category:** 
+**Category:**
 <!-- e.g., attention-mechanism, normalization, activation, positional-encoding, layer, loss-function, optimizer, regularization, etc. -->
 
 **Source/Citation:**
@@ -28,15 +28,6 @@ assignees: ''
 **Reference Implementation:**
 <!-- Official code repository, if available -->
 <!-- Other notable implementations to reference -->
-
-## Implementation Scope
-
-**Core Functionality:**
-- [ ] Basic component implementation
-- [ ] Configuration/hyperparameter handling
-- [ ] Integration with existing codebase
-- [ ] Unit tests
-- [ ] Documentation/docstrings
 
 ## Technical Notes
 
@@ -49,7 +40,18 @@ assignees: ''
 **Performance Considerations:**
 <!-- Memory usage, computational complexity, known bottlenecks -->
 
+## Implementation Scope
+*For progress tracking*
+
+**Core Functionality:**
+- [ ] Basic component implementation
+- [ ] Configuration/hyperparameter handling
+- [ ] Integration with existing codebase
+- [ ] Unit tests
+- [ ] Documentation/docstrings
+
 ## Validation
+*For progress tracking*
 
 **Testing Strategy:**
 - [ ] Unit tests pass
@@ -57,15 +59,12 @@ assignees: ''
 - [ ] Numerical correctness verification (if reference available)
 - [ ] Performance benchmarking
 
-**Acceptance Criteria:**
-<!-- What constitutes a complete implementation -->
-
 ## Priority & Complexity
 
-**Priority:** 
+**Priority:**
 <!-- High/Medium/Low -->
 
-**Estimated Complexity:** 
+**Estimated Complexity:**
 <!-- Simple/Medium/Complex -->
 
 **Blockers/Dependencies:**

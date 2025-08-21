@@ -4,7 +4,108 @@ from transformers.modeling_utils import PretrainedConfig
 
 
 class BertBlocksConfig(PretrainedConfig):
-    """Configuration class for BertBlocks models."""
+    """Configuration class for BertBlocks models.
+
+    Parameters
+    ----------
+        model_type (str): model type name for Huggingface config resolution. Default: 'bertblocks'
+
+    Args:
+        vocab_size: The size of the vocabulary. This determines the number of unique tokens
+            the model can process. Common values: 30522 (BERT), 50257 (GPT-2), 32000 (T5).
+            Must be greater than 0.
+        max_sequence_length: Maximum number of tokens the model can process in a single sequence.
+            This affects memory usage and determines the size of positional embeddings (if used).
+            Common values: 512 (BERT), 1024, 2048. Longer sequences require more memory.
+            Must be greater than 0.
+        pad_token_id: The token ID used for padding sequences to the same length.
+            This token is ignored during attention computation. Common values: 0 (BERT),
+            1 (RoBERTa). Must be non-negative and within the vocabulary range.
+        hidden_size: The dimensionality of the hidden layers. This is the primary dimension
+            of the model and affects memory usage and computational requirements.
+            Common values: 768 (BERT-base), 1024 (BERT-large). Must be divisible by
+            num_attention_heads. Must be greater than 0.
+        intermediate_size: The dimensionality of the feed-forward layers. This is typically
+            4x the hidden_size (e.g., 3072 for hidden_size=768). Must be greater than 0.
+        num_blocks: The number of transformer layers in the model. More layers generally
+            improve model capacity but increase computational cost. Common values: 12 (BERT-base),
+            24 (BERT-large). Must be at least 1.
+        num_attention_heads: The number of attention heads in the multi-head attention mechanism.
+            Each head has dimension hidden_size // num_attention_heads. More heads can capture
+            different types of relationships. Common values: 12 (BERT-base), 16 (BERT-large).
+            Must be at least 2 and hidden_size must be divisible by this value.
+        pos_emb_kind: The type of positional embedding to use. Available options:
+            "alibi" (ALiBi positional encoding), "sinusoidal" (Sinusoidal positional encoding),
+            "rope" (Rotary positional encoding), "relative" (Relative positional encoding),
+            "learned" (Learned positional encoding), "learned_alibi" (ALiBi positional encoding with linear layer).
+        pos_emb_kwargs: Additional keyword arguments to pass to the positional embedding class. Values dependent
+            on chosen pos_emb_kind. All positional embeddings receive `dim` and `max_seq_len` automatically, these
+            do not need to be specified.
+        add_token_type_emb: Whether to add token type embeddings to the model.
+        type_vocab_size: The size of the token_type vocabulary. Only used if add_token_type_emb is True.
+        mlp_type: The type of MLP (feed-forward) layer architecture. Available options:
+            "mlp" (Standard two-layer feed-forward network),
+            "glu" (Gated Linear Unit with learned gating mechanism, typically better performance).
+        mlp_in_bias: Whether to include bias terms in the input projection of MLP layers.
+        mlp_out_bias: Whether to include bias terms in the output projection of MLP layers.
+        attn_proj_bias: Whether to include bias terms in the qkv projection of attention layers.
+        attn_out_bias: Whether to include bias terms in the output projection of attention layers.
+        local_attention: Whether to include local attention mechanism. Default (-1, -1) means global attention.
+        global_attention_every_n_layers: The layer step size for global attention.
+        initializer_kind: The initialization method for weights. Determines the type of
+            distribution random weights are sampled from for initialization.
+            Defaults to a truncated normal distribution.
+        initializer_range: Standard deviation for weight initialization. Smaller values lead
+            to more conservative initialization. Common values: 0.02 (BERT). Must be greater than 0.0.
+        initializer_cutoff_factor: Cutoff factor for truncated normal initialization.
+            Values beyond initializer_range * initializer_cutoff_factor are redrawn.
+            This ensures no extremely large initial weights. Common values: 2.0-3.0.
+            Must be greater than 0.0.
+        initializer_gain: Gain to scale initialized weights with, e.g., for DeepNorm.
+            Must be greater than 0.0.
+        actv_fn: The activation function used in feed-forward networks.
+        norm_kind: When to apply normalization in the transformer layers. Available options:
+            "pre" (Pre-normalization, normalize before attention/FFN, default, more stable),
+            "post" (Post-normalization, normalize after attention/FFN, as in original Transformer),
+            "both" (Apply normalization both before and after),
+            "none" (No normalization, not recommended).
+        norm_fn: The type of normalization to apply. Available options:
+            "rms" (Root Mean Square Layer Normalization, default, more efficient),
+            "layer" (Standard Layer Normalization as used in BERT),
+            "group" (Group Normalization, useful for smaller batch sizes),
+            "deep" (DeepNorm),
+            "dynamictanh" (Dynamic Tanh Normalization).
+        norm_eps: Small constant added to variance for numerical stability in normalization.
+            Prevents division by zero in layer normalization. Common values: 1e-12 (BERT).
+        norm_params: Additional parameters for custom normalization layers. This field allows
+            passing custom parameters to normalization layers that require them. For example,
+            for DeepNorm: {"alpha": 0.81} where alpha is the scaling factor.
+        norm_bias: Whether to include bias terms in the output projection of normalization layers.
+        include_final_norm: Whether to apply a final normalization of the last hidden state.
+        emb_dropout_prob: Dropout probability applied to the embedding layer output.
+            Common values: 0.1 (default), 0.0 (no dropout). Must be between 0.0 and 1.0.
+        hidden_dropout_prob: Dropout probability applied to hidden layer outputs.
+            Common values: 0.1 (default), 0.0 (no dropout). Must be between 0.0 and 1.0.
+        attn_dropout_prob: Dropout probability applied to attention weights.
+            Common values: 0.1 (default), 0.0 (no dropout). Must be between 0.0 and 1.0.
+        classifier_dropout_prob: Dropout probability for the classification head. Applied to the
+            pooled representation before the final classification layer. Helps prevent
+            overfitting in downstream tasks. Must be between 0.0 and 1.0.
+        attn_implementation: Which backend implementation of attention to use; can be "fa2" for FlashAttention2,
+            "sdpa" torch, or "eager" for manual implementation.
+        problem_type: The problem type for automatic loss selection (HuggingFace standard).
+            Automatically selects appropriate loss functions: "regression" (MSE loss for
+            continuous targets), "single_label_classification" (CrossEntropy loss for
+            single-label problems), "multi_label_classification" (BCEWithLogits loss for
+            multi-label problems).
+        num_labels: The number of output labels for classification tasks. For regression tasks,
+            typically 1. For binary classification, 2. For multi-class classification, the
+            number of classes. Must be at least 1. This is the standard HuggingFace field
+            name for the number of classes.
+
+        **kwargs: Additional keyword arguments passed to the parent PretrainedConfig class.
+
+    """
 
     model_type: str = "bertblocks"
 
@@ -17,7 +118,7 @@ class BertBlocksConfig(PretrainedConfig):
         intermediate_size: int = 3072,
         num_blocks: int = 12,
         num_attention_heads: int = 12,
-        pos_emb_kind: Literal["alibi", "sinusoidal", "rope", "relative", "learned"] = "alibi",
+        pos_emb_kind: Literal["alibi", "sinusoidal", "rope", "relative", "learned", "learned_alibi"] = "alibi",
         pos_emb_kwargs: dict[str, Any] | None = None,
         add_token_type_emb: bool = False,
         type_vocab_size: int = 1,
@@ -45,109 +146,11 @@ class BertBlocksConfig(PretrainedConfig):
         hidden_dropout_prob: float = 0.1,
         attn_dropout_prob: float = 0.1,
         classifier_dropout_prob: float = 0.1,
-        attn_implementation: Literal["fa2", "sdpa"] = "fa2",
+        attn_implementation: Literal["fa2", "eager", "sdpa"] = "sdpa",
         problem_type: Literal["regression", "single_label_classification", "multi_label_classification"] = "regression",
         num_labels: int = 2,
         **kwargs: Any,
     ) -> None:
-        """Initialize BertBlocksConfig.
-
-        Args:
-            vocab_size: The size of the vocabulary. This determines the number of unique tokens
-                the model can process. Common values: 30522 (BERT), 50257 (GPT-2), 32000 (T5).
-                Must be greater than 0.
-            max_sequence_length: Maximum number of tokens the model can process in a single sequence.
-                This affects memory usage and determines the size of positional embeddings (if used).
-                Common values: 512 (BERT), 1024, 2048. Longer sequences require more memory.
-                Must be greater than 0.
-            pad_token_id: The token ID used for padding sequences to the same length.
-                This token is ignored during attention computation. Common values: 0 (BERT),
-                1 (RoBERTa). Must be non-negative and within the vocabulary range.
-            hidden_size: The dimensionality of the hidden layers. This is the primary dimension
-                of the model and affects memory usage and computational requirements.
-                Common values: 768 (BERT-base), 1024 (BERT-large). Must be divisible by
-                num_attention_heads. Must be greater than 0.
-            intermediate_size: The dimensionality of the feed-forward layers. This is typically
-                4x the hidden_size (e.g., 3072 for hidden_size=768). Must be greater than 0.
-            num_blocks: The number of transformer layers in the model. More layers generally
-                improve model capacity but increase computational cost. Common values: 12 (BERT-base),
-                24 (BERT-large). Must be at least 1.
-            num_attention_heads: The number of attention heads in the multi-head attention mechanism.
-                Each head has dimension hidden_size // num_attention_heads. More heads can capture
-                different types of relationships. Common values: 12 (BERT-base), 16 (BERT-large).
-                Must be at least 2 and hidden_size must be divisible by this value.
-            pos_emb_kind: The type of positional embedding to use. Available options:
-                "alibi" (ALiBi positional encoding), "sinusoidal" (Sinusoidal positional encoding),
-                "rope" (Rotary positional encoding), "relative" (Relative positional encoding),
-                "learned" (Learned positional encoding).
-            pos_emb_kwargs: Additional keyword arguments to pass to the positional embedding class. Values dependent
-                on chosen pos_emb_kind. All positional embeddings receive `dim` and `max_seq_len` automatically, these
-                do not need to be specified.
-            add_token_type_emb: Whether to add token type embeddings to the model.
-            type_vocab_size: The size of the token_type vocabulary. Only used if add_token_type_emb is True.
-            mlp_type: The type of MLP (feed-forward) layer architecture. Available options:
-                "mlp" (Standard two-layer feed-forward network),
-                "glu" (Gated Linear Unit with learned gating mechanism, typically better performance).
-            mlp_in_bias: Whether to include bias terms in the input projection of MLP layers.
-            mlp_out_bias: Whether to include bias terms in the output projection of MLP layers.
-            attn_proj_bias: Whether to include bias terms in the qkv projection of attention layers.
-            attn_out_bias: Whether to include bias terms in the output projection of attention layers.
-            local_attention: Whether to include local attention mechanism. Default (-1, -1) means global attention.
-            global_attention_every_n_layers: The layer step size for global attention.
-            initializer_kind: The initialization method for weights. Determines the type of
-                distribution random weights are sampled from for initialization.
-                Defaults to a truncated normal distribution.
-            initializer_range: Standard deviation for weight initialization. Smaller values lead
-                to more conservative initialization. Common values: 0.02 (BERT). Must be greater than 0.0.
-            initializer_cutoff_factor: Cutoff factor for truncated normal initialization.
-                Values beyond initializer_range * initializer_cutoff_factor are redrawn.
-                This ensures no extremely large initial weights. Common values: 2.0-3.0.
-                Must be greater than 0.0.
-            initializer_gain: Gain to scale initialized weights with, e.g., for DeepNorm.
-                Must be greater than 0.0.
-            actv_fn: The activation function used in feed-forward networks.
-            norm_kind: When to apply normalization in the transformer layers. Available options:
-                "pre" (Pre-normalization, normalize before attention/FFN, default, more stable),
-                "post" (Post-normalization, normalize after attention/FFN, as in original Transformer),
-                "both" (Apply normalization both before and after),
-                "none" (No normalization, not recommended).
-            norm_fn: The type of normalization to apply. Available options:
-                "rms" (Root Mean Square Layer Normalization, default, more efficient),
-                "layer" (Standard Layer Normalization as used in BERT),
-                "group" (Group Normalization, useful for smaller batch sizes),
-                "deep" (DeepNorm),
-                "dynamictanh" (Dynamic Tanh Normalization).
-            norm_eps: Small constant added to variance for numerical stability in normalization.
-                Prevents division by zero in layer normalization. Common values: 1e-12 (BERT).
-            norm_params: Additional parameters for custom normalization layers. This field allows
-                passing custom parameters to normalization layers that require them. For example,
-                for DeepNorm: {"alpha": 0.81} where alpha is the scaling factor.
-            norm_bias: Whether to include bias terms in the output projection of normalization layers.
-            include_final_norm: Whether to apply a final normalization of the last hidden state.
-            emb_dropout_prob: Dropout probability applied to the embedding layer output.
-                Common values: 0.1 (default), 0.0 (no dropout). Must be between 0.0 and 1.0.
-            hidden_dropout_prob: Dropout probability applied to hidden layer outputs.
-                Common values: 0.1 (default), 0.0 (no dropout). Must be between 0.0 and 1.0.
-            attn_dropout_prob: Dropout probability applied to attention weights.
-                Common values: 0.1 (default), 0.0 (no dropout). Must be between 0.0 and 1.0.
-            classifier_dropout_prob: Dropout probability for the classification head. Applied to the
-                pooled representation before the final classification layer. Helps prevent
-                overfitting in downstream tasks. Must be between 0.0 and 1.0.
-            attn_implementation: Which backend implementation of attention to use; can be "fa2" for FlashAttention2,
-                or "sdpa" for native torch.
-            problem_type: The problem type for automatic loss selection (HuggingFace standard).
-                Automatically selects appropriate loss functions: "regression" (MSE loss for
-                continuous targets), "single_label_classification" (CrossEntropy loss for
-                single-label problems), "multi_label_classification" (BCEWithLogits loss for
-                multi-label problems).
-            num_labels: The number of output labels for classification tasks. For regression tasks,
-                typically 1. For binary classification, 2. For multi-class classification, the
-                number of classes. Must be at least 1. This is the standard HuggingFace field
-                name for the number of classes.
-
-            **kwargs: Additional keyword arguments passed to the parent PretrainedConfig class.
-
-        """
         if vocab_size <= 0:
             raise ValueError(f"vocab_size must be greater than 0, got {vocab_size}")
 
@@ -201,6 +204,11 @@ class BertBlocksConfig(PretrainedConfig):
         if max_sequence_length <= 0:
             raise ValueError(f"max_sequence_length must be greater than 0, got {max_sequence_length}")
 
+        if pos_emb_kind == "learned_alibi" and attn_implementation != "eager":
+            raise ValueError(
+                f"If 'learned_alibi' is used, attn_implementation must be 'eager', got {attn_implementation}"
+            )
+
         super().__init__(**kwargs)
         # Input parameters
         self.vocab_size = vocab_size
@@ -253,3 +261,6 @@ class BertBlocksConfig(PretrainedConfig):
         self.pos_emb_kwargs.update(
             {"dim": self.hidden_size // self.num_attention_heads, "max_seq_len": self.max_sequence_length}
         )
+
+
+__all__ = ["BertBlocksConfig"]

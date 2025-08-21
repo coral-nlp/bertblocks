@@ -1,8 +1,4 @@
-"""BertBlocks: A Flexible Encoder Architecture for Research and Development.
-
-BertBlocks is a modular transformer encoder implementation designed for architecture search
-and research purposes. It provides a flexible framework for experimenting with
-different transformer configurations, attention mechanisms, and training strategies.
+"""BertBlocks is a modular transformer encoder implementation designed for architecture search and research purposes.
 
 This package includes:
 
@@ -12,11 +8,12 @@ This package includes:
     - Wide range of architecture components for research
 
 The models are compatible with HuggingFace transformers ecosystem.
+
 """
 
-from .compat import from_huggingface
-from .modeling.config import BertBlocksConfig
-from .modeling.model import (
+from bertblocks.compat import from_huggingface
+from bertblocks.modeling.config import BertBlocksConfig
+from bertblocks.modeling.model import (
     BertBlocksForMaskedLM,
     BertBlocksForQuestionAnswering,
     BertBlocksForSequenceClassification,

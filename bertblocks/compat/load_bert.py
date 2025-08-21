@@ -40,6 +40,7 @@ def from_bert_model(
         attn_dropout_prob=orig_config.attention_probs_dropout_prob or 0.0,
         hidden_dropout_prob=orig_config.hidden_dropout_prob or 0.0,
         classifier_dropout_prob=orig_config.classifier_dropout or 0.0,
+        attn_implementation="sdpa",
     )
     bertblocks_model = BertBlocksModel(bertblocks_config, add_pooling_layer=add_pooling_layer)
 
@@ -84,16 +85,16 @@ def from_bert_model(
             )
 
             # Feed-forward layers
-            bertblocks_model.encd.blocks[i].ffwd.Uprj.weight.data.copy_(
+            bertblocks_model.encd.blocks[i].ffwd.uprj.weight.data.copy_(
                 orig_model.encoder.layer[i].intermediate.dense.weight.data
             )
-            bertblocks_model.encd.blocks[i].ffwd.Uprj.bias.data.copy_(
+            bertblocks_model.encd.blocks[i].ffwd.uprj.bias.data.copy_(
                 orig_model.encoder.layer[i].intermediate.dense.bias.data
             )
-            bertblocks_model.encd.blocks[i].ffwd.Dprj.weight.data.copy_(
+            bertblocks_model.encd.blocks[i].ffwd.dprj.weight.data.copy_(
                 orig_model.encoder.layer[i].output.dense.weight.data
             )
-            bertblocks_model.encd.blocks[i].ffwd.Dprj.bias.data.copy_(
+            bertblocks_model.encd.blocks[i].ffwd.dprj.bias.data.copy_(
                 orig_model.encoder.layer[i].output.dense.bias.data
             )
 

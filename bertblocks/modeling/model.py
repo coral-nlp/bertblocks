@@ -20,6 +20,7 @@ from transformers.modeling_outputs import (
 )
 from transformers.modeling_utils import PreTrainedModel
 
+from bertblocks.modeling.backends import ATTENTION_BACKENDS
 from bertblocks.modeling.block import Encoder
 from bertblocks.modeling.config import BertBlocksConfig
 from bertblocks.modeling.embedding import TokenEmbedding
@@ -139,22 +140,27 @@ class BertBlocksModel(BertBlocksPreTrainedModel):
     This is the base BertBlocks model that outputs hidden states without any
     task-specific head. It can be used as a feature extractor for downstream tasks.
 
+    Attributes:
+        embd (TokenEmbedding): Embedding layer.
+        encd (Encoder): Encoder stack.
+        norm (nn.Module): Normalization layer. Falls back to nn.Identity if not configured.
+        pool (Pooler | None): Pooler layer, optional.
+        pad_token_id (int): Token ID to insert for padding.
+
+    Args:
+        config (BertBlocksConfig): Configuration object determining model hyperparameters. Passed to
+            other submodules.
+        add_pooling_layer (bool): Whether to add a pooling layer after the encoder layers.
+
     """
 
     def __init__(self, config: "BertBlocksConfig", add_pooling_layer: bool = False) -> None:
-        """Initialize the BertBlocks model.
-
-        Args:
-            config (BertBlocksConfig): Configuration object determining model hyperparameters. Passed to
-                other submodules.
-            add_pooling_layer (bool): Whether to add a pooling layer after the encoder layers.
-
-        """
         super().__init__(config)
         self.embd = TokenEmbedding(config)
         self.encd = Encoder(config)
         self.norm = get_norm(config) if config.include_final_norm else nn.Identity()
         self.pool = Pooler(config) if add_pooling_layer else None
+        self.pad_token_id = config.pad_token_id or 0
         self.post_init()
 
     @property
@@ -197,33 +203,54 @@ class BertBlocksModel(BertBlocksPreTrainedModel):
 
         Args:
             input_ids (torch.Tensor, shape [batch_size, seq_len]): Tensor of token ids.
-            attention_mask (torch.Tensor, shape [batch_size, seq_len], optional): Tensor indicating which tokens should
-                be attended to. Defaults to None.
-            token_type_ids (torch.Tensor, shape [batch_size, seq_len], optional): Tensor indicating type of tokens.
-                Defaults to None.
+            attention_mask (torch.Tensor | None, shape [batch_size, seq_len], optional): Tensor indicating which
+                tokens should be attended to. Defaults to None.
+            token_type_ids (torch.Tensor | None, shape [batch_size, seq_len], optional): Tensor indicating type
+                of tokens. Defaults to None.
             output_attentions: Whether to return attention weights from all layers. Defaults to None.
             output_hidden_states: Whether to return hidden states from all layers. Defaults to False.
 
         Returns:
             BaseModelOutput or BaseModelOutputWithPooling containing:
-                - last_hidden_state: Hidden states from the last layer
-                - pooler_output: Pooler output from the last layer (optional)
-                - hidden_states: Hidden states from all layers (optional)
-                - attentions: Attention weights from all layers (optional)
+
+                - `last_hidden_state`: Hidden states from the last layer
+                - `pooler_output`: Pooler output from the last layer (optional)
+                - `hidden_states`: Hidden states from all layers (optional)
+                - `attentions`: Attention weights from all layers (optional)
 
         """
-        # Unpad input sequence
         B, S = input_ids.shape
-        with torch.no_grad():
-            input_ids, indices, cu_seqlens, max_seq_len = unpad_input(input_ids, attention_mask)
 
-        x = self.embd(input_ids, token_type_ids=token_type_ids, cu_seqlens=cu_seqlens)
+        # Check if we need unpadded sequences (for FA2) or can work with padded sequences (SDPA/Native)
+        backend = ATTENTION_BACKENDS[self.config.attn_implementation]
 
-        x, hidden_states, attentions = self.encd(x, cu_seqlens, max_seq_len, output_attentions, output_hidden_states)
-        x = self.norm(x)
-        x = pad_output(x, indices, B, S)
-        if output_hidden_states:
-            hidden_states = [pad_output(h, indices, B, S) for h in hidden_states]
+        if backend.supports_unpadded:
+            # FA2 backend: Use unpadded sequences
+            with torch.no_grad():
+                input_ids_unpadded, indices, cu_seqlens, max_seq_len = unpad_input(
+                    input_ids, attention_mask, self.pad_token_id
+                )
+
+            x = self.embd(input_ids_unpadded, token_type_ids=token_type_ids, cu_seqlens=cu_seqlens)
+
+            x, hidden_states, attentions = self.encd(
+                x, attention_mask, cu_seqlens, max_seq_len, output_attentions, output_hidden_states
+            )
+            x = self.norm(x)
+
+            # Pad output back to original format
+            x = pad_output(x, indices, B, S)
+            if output_hidden_states:
+                hidden_states = [pad_output(h, indices, B, S, self.pad_token_id) for h in hidden_states]
+
+        else:
+            # SDPA/Native backends: Work directly with padded sequences
+            x = self.embd(input_ids, token_type_ids=token_type_ids)
+
+            x, hidden_states, attentions = self.encd(
+                x, attention_mask, None, None, output_attentions, output_hidden_states
+            )
+            x = self.norm(x)
 
         if self.pool is not None:
             pooler_output = self.pool(x)
@@ -246,6 +273,11 @@ class BertBlocksForTasksBase(BertBlocksPreTrainedModel):
 
     This class provides common functionality for classification, regression,
     and other downstream tasks, eliminating code duplication across task models.
+
+    Args:
+        config (BertBlocksConfig): Configuration object determining model hyperparameters. Passed to
+            other submodules.
+
     """
 
     def __init__(self, config: "BertBlocksConfig", *args: Any, **kwargs: Any) -> None:
@@ -267,7 +299,7 @@ class BertBlocksForTasksBase(BertBlocksPreTrainedModel):
             problem_type: Type of problem for loss computation
 
         Returns:
-            Computed loss tensor or None if labels is None
+            torch.Tensor | None: Computed loss tensor or None if labels are not provided.
 
         """
         if labels is None:
@@ -293,19 +325,18 @@ class BertBlocksForMaskedLM(BertBlocksPreTrainedModel):
     and decoder for masked language modeling. It can be used for
     pre-training or fine-tuning on masked language modeling tasks.
 
+    Args:
+        config (BertBlocksConfig): Configuration object determining model hyperparameters. May be passed to
+            other submodules. Keys used at top level:
+
+            - `vocab_size`: Size of the vocabulary for token embeddings
+            - `hidden_size`: Dimensionality of hidden layers
+
     """
 
     _tied_weight_keys: ClassVar = ["decoder.weight"]
 
     def __init__(self, config: "BertBlocksConfig"):
-        """Initialize the BertBlocks masked language model.
-
-        Args:
-            config (BertBlocksConfig): Configuration object containing:
-                - vocab_size: Size of the vocabulary for token embeddings
-                - hidden_size: Dimensionality of hidden layers
-
-        """
         super().__init__(config)
         self.vocab_size = config.vocab_size
         self.model = BertBlocksModel(config)
@@ -350,11 +381,12 @@ class BertBlocksForMaskedLM(BertBlocksPreTrainedModel):
             output_hidden_states (bool): Whether to return hidden states from all layers. Defaults to False.
 
         Returns:
-            MaskedLMOutput containing:
-                - loss: Masked language modeling loss if labels provided
-                - logits: Prediction scores over vocabulary
-                - hidden_states: Hidden states from all layers if requested
-                - attentions: Attention weights from all layers if requested
+            MaskedLMOutput
+
+                - `loss`: Masked language modeling loss if labels provided
+                - `logits`: Prediction scores over vocabulary
+                - `hidden_states`: Hidden states from all layers if requested
+                - `attentions`: Attention weights from all layers if requested
 
         """
         output = self.model(
@@ -386,18 +418,18 @@ class BertBlocksForSequenceClassification(BertBlocksForTasksBase):
     This model extends the base BertBlocks model with a classification head
     for sequence-level prediction tasks. It supports regression,
     single-label classification, and multi-label classification.
+
+    Args:
+        config (BertBlocksConfig): Configuration object determining model hyperparameters. May be passed to
+            other submodules. Keys used at top level:
+
+            - `hidden_size`: Dimensionality of hidden layers
+            - `num_labels`: Number of output labels for classification tasks
+            - `problem_type`: Problem type for automatic loss selection
+
     """
 
     def __init__(self, config: "BertBlocksConfig"):
-        """Initialize the BertBlocks sequence classification model.
-
-        Args:
-            config (BertBlocksConfig): Configuration object containing:
-                - hidden_size: Dimensionality of hidden layers
-                - num_labels: Number of output labels for classification tasks
-                - problem_type: Problem type for automatic loss selection
-
-        """
         super().__init__(config=config)
         self.classifier = torch.nn.Linear(config.hidden_size, config.num_labels)
         self.num_labels = config.num_labels
@@ -428,11 +460,12 @@ class BertBlocksForSequenceClassification(BertBlocksForTasksBase):
             output_hidden_states (bool): Whether to return hidden states from all layers. Defaults to False.
 
         Returns:
-            SequenceClassifierOutput containing:
-                - loss: Classification loss if labels provided
-                - logits: Classification scores
-                - hidden_states: Hidden states from all layers if requested
-                - attentions: Attention weights from all layers if requested
+            SequenceClassifierOutput
+
+                - `loss`: Classification loss if labels provided
+                - `logits`: Classification scores
+                - `hidden_states`: Hidden states from all layers if requested
+                - `attentions`: Attention weights from all layers if requested
 
         """
         output = self.model(
@@ -462,17 +495,17 @@ class BertBlocksForTokenClassification(BertBlocksForTasksBase):
     This model extends the base BertBlocks model with a classification head
     for token-level prediction tasks such as named entity recognition,
     part-of-speech tagging, and other sequence labeling tasks.
+
+    Args:
+        config (BertBlocksConfig): Configuration object determining model hyperparameters. May be passed to
+            other submodules. Keys used at top level:
+
+            - `hidden_size`: Dimensionality of hidden layers
+            - `num_labels`: Number of output labels for classification tasks
+
     """
 
     def __init__(self, config: "BertBlocksConfig"):
-        """Initialize the BertBlocks token classification model.
-
-        Args:
-            config (BertBlocksConfig): Configuration object containing:
-                - hidden_size: Dimensionality of hidden layers
-                - num_labels: Number of output labels for classification tasks
-
-        """
         super().__init__(config=config)
         self.num_labels = config.num_labels
         self.classifier = torch.nn.Linear(config.hidden_size, self.num_labels)
@@ -504,11 +537,12 @@ class BertBlocksForTokenClassification(BertBlocksForTasksBase):
             output_hidden_states (bool): Whether to return hidden states from all layers. Defaults to False.
 
         Returns:
-            TokenClassifierOutput containing:
-                - loss: Token classification loss if labels provided
-                - logits: Classification scores for each token
-                - hidden_states: Hidden states from all layers if requested
-                - attentions: Attention weights from all layers if requested
+            TokenClassifierOutput
+
+                - `loss`: Token classification loss if labels provided
+                - `logits`: Classification scores for each token
+                - `hidden_states`: Hidden states from all layers if requested
+                - `attentions`: Attention weights from all layers if requested
 
         """
         output = self.model(
@@ -537,16 +571,16 @@ class BertBlocksForQuestionAnswering(BertBlocksForTasksBase):
     that predicts start and end positions of answers in the input sequence.
     It is designed for tasks like SQuAD where the answer is a span of text
     within the provided context.
+
+    Args:
+        config (BertBlocksConfig): Configuration object determining model hyperparameters. May be passed to
+            other submodules. Keys used at top level:
+
+            - `hidden_size`: Dimensionality of hidden layers
+
     """
 
     def __init__(self, config: "BertBlocksConfig"):
-        """Initialize the BertBlocks question answering model.
-
-        Args:
-            config (BertBlocksConfig): Configuration object containing:
-                - hidden_size: Dimensionality of hidden layers
-
-        """
         super().__init__(config=config)
         self.classifier = torch.nn.Linear(config.hidden_size, 2)  # start and end positions
         self.post_init()
@@ -577,17 +611,19 @@ class BertBlocksForQuestionAnswering(BertBlocksForTasksBase):
             output_hidden_states (bool): Whether to return hidden states from all layers. Defaults to False.
 
         Returns:
-            QuestionAnsweringModelOutput containing:
-                - loss: Span prediction loss if start_positions and end_positions provided
-                - start_logits: Scores for start position of answer span
-                - end_logits: Scores for end position of answer span
-                - hidden_states: Hidden states from all layers if requested
-                - attentions: Attention weights from all layers if requested
+            QuestionAnsweringModelOutput
+
+                - `loss`: Span prediction loss if start_positions and end_positions provided
+                - `start_logits`: Scores for start position of answer span
+                - `end_logits`: Scores for end position of answer span
+                - `hidden_states`: Hidden states from all layers if requested
+                - `attentions`: Attention weights from all layers if requested
 
         """
         output = self.model(
             input_ids,
             attention_mask=attention_mask,
+            token_type_ids=token_type_ids,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
         )
@@ -619,3 +655,12 @@ class BertBlocksForQuestionAnswering(BertBlocksForTasksBase):
             hidden_states=output.hidden_states,
             attentions=output.attentions,
         )
+
+
+__all__ = [
+    "BertBlocksModel",
+    "BertBlocksForMaskedLM",
+    "BertBlocksForTokenClassification",
+    "BertBlocksForQuestionAnswering",
+    "BertBlocksForSequenceClassification",
+]
