@@ -1,6 +1,6 @@
 import torch
 
-from bertblocks.modeling.config import BertBlocksConfig
+from bertblocks.config import BertConfig
 from bertblocks.modeling.model import BertBlocksModel
 
 
@@ -8,40 +8,9 @@ def from_bert_model(
     pretrained_model_name_or_path: str, load_weights: bool = True, add_pooling_layer: bool = False
 ) -> "BertBlocksModel":
     """Instantiate an equivalent BertBlocks model from BERT weights and config."""
-    from transformers import BertConfig, BertModel
+    from transformers import BertModel
 
-    orig_config = BertConfig.from_pretrained(pretrained_model_name_or_path)
-    bertblocks_config = BertBlocksConfig(
-        vocab_size=orig_config.vocab_size,
-        max_sequence_length=orig_config.max_position_embeddings,
-        pad_token_id=orig_config.pad_token_id,
-        hidden_size=orig_config.hidden_size,
-        num_blocks=orig_config.num_hidden_layers,
-        intermediate_size=orig_config.intermediate_size,
-        num_attention_heads=orig_config.num_attention_heads,
-        pos_emb_kind="learned" if orig_config.position_embedding_type == "absolute" else "relative",
-        add_token_type_emb=True,
-        type_vocab_size=orig_config.type_vocab_size,
-        mlp_type="mlp",
-        mlp_in_bias=True,
-        mlp_out_bias=True,
-        attn_proj_bias=True,
-        attn_out_bias=True,
-        initializer_kind="trunc_normal",
-        initializer_range=orig_config.initializer_range,
-        initializer_cutoff_factor=4.0,
-        initializer_gain=1.0,
-        actv_fn=orig_config.hidden_act,
-        norm_kind="post",
-        norm_fn="layer",
-        norm_eps=orig_config.layer_norm_eps,
-        norm_bias=True,
-        emb_dropout_prob=orig_config.hidden_dropout_prob or 0.0,
-        attn_dropout_prob=orig_config.attention_probs_dropout_prob or 0.0,
-        hidden_dropout_prob=orig_config.hidden_dropout_prob or 0.0,
-        classifier_dropout_prob=orig_config.classifier_dropout or 0.0,
-        attn_implementation="sdpa",
-    )
+    bertblocks_config = BertConfig.from_huggingface(pretrained_model_name_or_path)
     bertblocks_model = BertBlocksModel(bertblocks_config, add_pooling_layer=add_pooling_layer)
 
     if load_weights:

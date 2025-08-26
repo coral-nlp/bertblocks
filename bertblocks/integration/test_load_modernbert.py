@@ -3,7 +3,7 @@ import torch
 from pytest_dependency import depends
 from transformers import AutoTokenizer, ModernBertConfig, ModernBertModel
 
-from bertblocks.compat import from_modernbert_model
+from bertblocks.integration import from_modernbert_model
 
 TEST_MODELS = ["answerdotai/ModernBERT-base", "answerdotai/ModernBERT-large"]
 

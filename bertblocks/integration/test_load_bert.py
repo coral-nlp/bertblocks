@@ -3,7 +3,7 @@ import torch
 from pytest_dependency import depends
 from transformers import AutoTokenizer, BertModel
 
-from bertblocks.compat.load_bert import from_bert_model
+from bertblocks.integration import from_bert_model
 
 TEST_MODELS = ["bert-base-uncased", "bert-base-cased", "bert-large-uncased"]
 

@@ -10,7 +10,7 @@ from torch.nn.modules.activation import (
     SiLU,
 )
 
-from bertblocks.modeling.config import BertBlocksConfig
+from bertblocks.config import BertBlocksConfig
 
 
 def get_actv_fn(config: "BertBlocksConfig") -> "nn.Module":

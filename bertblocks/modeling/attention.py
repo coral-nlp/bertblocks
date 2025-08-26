@@ -1,8 +1,8 @@
 import torch
 from torch import nn
 
+from bertblocks.config import BertBlocksConfig
 from bertblocks.modeling.backends import ATTENTION_BACKENDS
-from bertblocks.modeling.config import BertBlocksConfig
 from bertblocks.modeling.position import RotaryEmbedding, get_alibi_slopes
 
 

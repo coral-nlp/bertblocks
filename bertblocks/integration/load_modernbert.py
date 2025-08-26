@@ -1,4 +1,4 @@
-from bertblocks.modeling.config import BertBlocksConfig
+from bertblocks.config import ModernBertConfig
 from bertblocks.modeling.model import BertBlocksModel
 
 
@@ -6,49 +6,9 @@ def from_modernbert_model(
     pretrained_model_name_or_path: str, load_weights: bool = True, add_pooling_layer: bool = False
 ) -> "BertBlocksModel":
     """Instantiate an equivalent BertBlocks model from ModernBERT weights and config."""
-    from transformers import ModernBertConfig, ModernBertModel
+    from transformers import ModernBertModel
 
-    orig_config = ModernBertConfig.from_pretrained(pretrained_model_name_or_path)
-
-    bertblocks_config = BertBlocksConfig(
-        vocab_size=orig_config.vocab_size,
-        max_sequence_length=orig_config.max_position_embeddings,
-        pad_token_id=orig_config.pad_token_id,
-        hidden_size=orig_config.hidden_size,
-        num_blocks=orig_config.num_hidden_layers,
-        intermediate_size=orig_config.intermediate_size,
-        num_attention_heads=orig_config.num_attention_heads,
-        pos_emb_kind="rope",
-        pos_emb_kwargs={
-            "base_global": orig_config.global_rope_theta,
-            "base_local": orig_config.local_rope_theta,
-            "scale": 1,
-        },
-        add_token_type_emb=False,
-        mlp_type="glu",
-        mlp_in_bias=orig_config.mlp_bias,
-        mlp_out_bias=orig_config.mlp_bias,
-        attn_proj_bias=orig_config.attention_bias,
-        attn_out_bias=orig_config.attention_bias,
-        local_attention=(orig_config.local_attention // 2, orig_config.local_attention // 2),
-        global_attention_every_n_layers=orig_config.global_attn_every_n_layers,
-        initializer_kind="trunc_normal",
-        initializer_range=orig_config.initializer_range,
-        initializer_cutoff_factor=4.0,
-        initializer_gain=1.0,
-        actv_fn=orig_config.hidden_activation or "gelu",
-        norm_kind="pre",
-        norm_fn="layer",
-        norm_eps=orig_config.layer_norm_eps,
-        norm_bias=orig_config.norm_bias,
-        include_final_norm=True,
-        emb_dropout_prob=orig_config.embedding_dropout or 0.0,
-        attn_dropout_prob=orig_config.attention_dropout or 0.0,
-        hidden_dropout_prob=orig_config.mlp_dropout or 0.0,
-        classifier_dropout_prob=orig_config.classifier_dropout or 0.0,
-        attn_implementation="fa2",
-    )
-
+    bertblocks_config = ModernBertConfig.from_huggingface(pretrained_model_name_or_path)
     bertblocks_model = BertBlocksModel(bertblocks_config, add_pooling_layer=add_pooling_layer)
 
     if load_weights:

@@ -3,7 +3,7 @@ from typing import TYPE_CHECKING
 from bertblocks.modeling.norms import get_norm
 
 if TYPE_CHECKING:
-    from bertblocks.modeling.config import BertBlocksConfig
+    from bertblocks.config import BertBlocksConfig
 
 import torch
 from torch import nn

@@ -20,9 +20,9 @@ from transformers.modeling_outputs import (
 )
 from transformers.modeling_utils import PreTrainedModel
 
+from bertblocks.config import BertBlocksConfig
 from bertblocks.modeling.backends import ATTENTION_BACKENDS
 from bertblocks.modeling.block import Encoder
-from bertblocks.modeling.config import BertBlocksConfig
 from bertblocks.modeling.embedding import TokenEmbedding
 from bertblocks.modeling.head import Pooler, get_prediction_head
 from bertblocks.modeling.loss import get_loss_function

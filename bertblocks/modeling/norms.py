@@ -8,7 +8,7 @@ from torch.nn.modules.normalization import (
     RMSNorm,
 )
 
-from bertblocks.modeling.config import BertBlocksConfig
+from bertblocks.config import BertBlocksConfig
 
 
 class DynamicTanhNorm(nn.Module):

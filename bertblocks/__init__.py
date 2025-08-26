@@ -11,8 +11,8 @@ The models are compatible with HuggingFace transformers ecosystem.
 
 """
 
-from bertblocks.compat import from_huggingface
-from bertblocks.modeling.config import BertBlocksConfig
+from bertblocks.config import BertBlocksConfig
+from bertblocks.integration import from_huggingface
 from bertblocks.modeling.model import (
     BertBlocksForMaskedLM,
     BertBlocksForQuestionAnswering,
