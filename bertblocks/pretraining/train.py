@@ -14,9 +14,10 @@ The implementation includes:
 
 """
 
+import functools
 import os.path
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import lightning as L
 import torch
@@ -26,10 +27,13 @@ from torch.utils.data import DataLoader
 from transformers import AutoTokenizer
 from transformers.trainer_pt_utils import get_parameter_names
 
-from bertblocks.modeling.config import BertBlocksConfig
+from bertblocks.config import BertBlocksConfig
 from bertblocks.modeling.model import BertBlocksForMaskedLM
+from bertblocks.modeling.norms import DeepNorm, DynamicTanhNorm, GroupNorm, LayerNorm, RMSNorm
 from bertblocks.pretraining.objectives import MaskedLanguageModelingCollator
 from bertblocks.pretraining.optimizer import get_optimizer
+from bertblocks.pretraining.scheduler import get_scheduler
+from bertblocks.pretraining.utils import chunk_examples
 
 
 class BertBlocksPretrainingDataModule(L.LightningDataModule):
@@ -44,17 +48,24 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
     and includes configurable batch sizes and data loading parameters.
     """
 
+    dataset: torch.utils.data.Dataset
+
     def __init__(
         self,
         pretrained_tokenizer_name_or_path: str,
-        max_sequence_length: "int | None" = 256,
-        dataset_name_or_path: "str | list[str] | None" = None,
-        mlm_probability: "float | None" = 0.3,
-        binarize_labels: "bool | None" = False,
-        train_batch_size: "int | None" = 32,
-        val_batch_size: "int | None" = 32,
-        pretokenized: "bool | None" = False,
-        num_workers: "int | None" = 0,
+        max_sequence_length: int | None = 512,
+        dataset_name_or_path: str | list[str] | None = None,
+        file_format: str | None = None,
+        data_split: str | None = None,
+        text_column: str | None = "text",
+        split_char: str | None = None,
+        split_len: int | None = None,
+        shuffle: bool | None = False,
+        mlm_probability: float | None = 0.3,
+        train_batch_size: int | None = 32,
+        val_batch_size: int | None = 32,
+        pretokenized: bool | None = False,
+        num_workers: int | None = 0,
     ) -> None:
         """Initialize the pretraining data module.
 
@@ -62,12 +73,16 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
             pretrained_tokenizer_name_or_path: Path or name of HuggingFace tokenizer
                 to use for text processing.
             max_sequence_length: Maximum sequence length for tokenization.
-                Longer sequences will be truncated. Defaults to 256.
-            dataset_name_or_path: Dataset name or path (currently unused,
-                TinyStories is hardcoded). Defaults to None.
+                Longer sequences will be truncated. Defaults to 512.
+            dataset_name_or_path: Dataset name or path. Defaults to None.
+            data_split (str, optional): Dataset split to use for pretraining. Defaults to 'train'.
+            text_column (str, optional): Text column name pretrain with. Defaults to 'text'.
+            split_char (str, optional): Character to split examples at. Only one of `split_char` and `split_len`
+                should be specified. Defaults to None.
+            split_len (int, optional): Number of characters to split examples at. Only one of `split_char` and
+                `split_len` should be specified. Defaults to None.
+            shuffle (bool, optional): Whether to shuffle the dataset before pretraining. Defaults to False.
             mlm_probability: Probability of masking tokens. Defaults to 0.3.
-            binarize_labels: Whether to binarize labels (currently unused).
-                Defaults to False.
             train_batch_size: Batch size for training. Defaults to 32.
             val_batch_size: Batch size for validation. Defaults to 32.
             pretokenized: Whether input is pre-tokenized. Defaults to False.
@@ -80,22 +95,37 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
         self.mlm_collation_fn = MaskedLanguageModelingCollator(
             tokenizer=tokenizer,
             max_sequence_length=self.hparams.max_sequence_length,
-            text_column="text",
+            text_column=self.hparams.text_column or "text",
             pretokenized=self.hparams.pretokenized,
         )
-        # Dummy object for dataset
-        self.dataset = None
 
     def prepare_data(self) -> None:
         """Prepare the dataset for training. Called once per node."""
         if os.path.isdir(self.hparams.dataset_name_or_path):
-            # If local path, load from disk (future: not only support JSON?)
+            # If local path, load from disk
             self.dataset = load_dataset(
-                "json", data_dir=self.hparams.dataset_name_or_path, split="train", streaming=True
+                self.hparams.data_format or "json",
+                data_dir=self.hparams.dataset_name_or_path,
+                split=self.hparams.data_split or "train",
+                streaming=not self.hparams.shuffle,  # We can't stream if we're shuffling
             )
         else:
             # If not local path, try HF
-            self.dataset = load_dataset(self.hparams.dataset_name_or_path, split="train", streaming=True)
+            self.dataset = load_dataset(
+                self.hparams.dataset_name_or_path,
+                split=self.hparams.data_split or "train",
+                streaming=not self.hparams.shuffle,  # We can't stream if we're shuffling
+            )
+
+        if self.hparams.split_char or self.hparams.split_len:
+            self.dataset.map(
+                functools.partial(
+                    chunk_examples,
+                    column=self.hparams.column_text,
+                    split_char=self.hparams.split_char,
+                    split_len=self.hparams.split_len,
+                )
+            )
 
     def train_dataloader(self) -> DataLoader:
         """Create the training data loader.
@@ -109,7 +139,7 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
         return DataLoader(
             self.dataset,
             collate_fn=self.mlm_collation_fn,
-            shuffle=False,  # It's streamed so we can't shuffle it
+            shuffle=self.hparams.shuffle,
             batch_size=self.hparams.train_batch_size,
             num_workers=self.hparams.num_workers,
             pin_memory=True,
@@ -130,15 +160,22 @@ class BertBlocksPretrainingModule(L.LightningModule):
 
     def __init__(
         self,
-        learning_rate: float | None = 1e-7,
-        weight_decay: float | None = 1e-6,
-        warmup_steps: int | None = 1_000,
-        warmup_decay: float | None = 0.1,
+        learning_rate: float | None = 1e-5,
         learning_rate_decay: float | None = 0.99999,
+        weight_decay: float | None = 0.001,
         compile_model: bool | None = True,
         pretrained_tokenizer_name_or_path: str | None = None,
         optimizer_class: str = "adamw",
         optimizer_kwargs: dict | None = None,
+        scheduler_warmup_kind: Literal["constant", "linear", "cosine", "exponential"] = "linear",
+        scheduler_warmup_steps: int = 1000,
+        scheduler_warmup_decay: float = 0.0,
+        scheduler_training_kind: Literal["constant", "linear", "cosine", "exponential"] = "constant",
+        scheduler_training_steps: int = -1,
+        scheduler_training_decay: float = 1.0,
+        scheduler_cooldown_kind: Literal["constant", "linear", "cosine", "exponential"] = "linear",
+        scheduler_cooldown_steps: int = 0,
+        scheduler_cooldown_decay: float = 0.0,
         model_config_kwargs: "dict[str, Any] | None" = None,
     ):
         """Initialize the BertBlocks pretraining module.
@@ -146,18 +183,28 @@ class BertBlocksPretrainingModule(L.LightningModule):
         Args:
             learning_rate: Peak learning rate for optimization. Defaults to 1e-7.
             weight_decay: Weight decay coefficient for AdamW. Defaults to 1e-6.
-            warmup_steps: Number of warmup steps for learning rate schedule.
-                Defaults to 1,000.
-            warmup_decay: Factor to scale learning rate during warmup.
-                Defaults to 0.1 (starts at 10% of peak LR).
-            learning_rate_decay: Exponential decay factor after warmup.
-                Defaults to 0.99999 (very gradual decay).
             compile_model: Whether to compile the model with torch.compile.
                 Defaults to True for better performance.
             pretrained_tokenizer_name_or_path: str
                 Tokenizer name; if provided, will overwrite the model vocab size using the given tokenizer.
             optimizer_class: Optimizer class name. Defaults to "adamw".
             optimizer_kwargs: Optional arguments to pass to torch.optim.optimizer.
+            scheduler_warmup_kind (Literal["constant", "linear", "exponential", "cosine"]): scheduler kind for warmup
+                phase. Defaults to "linear".
+            scheduler_warmup_steps (int): Number of steps in warmup phase. Defaults to 1000.
+            scheduler_warmup_decay (float): Decay value for phase. Usage depends on scheduler kind chosen for warmup
+                phase. Defaults to 0.
+            scheduler_training_kind (Literal["constant", "linear", "exponential", "cosine"]): scheduler kind for
+                the training phase. Defaults to "constant".
+            scheduler_training_steps (int): Number of steps in training phase. Defaults to None (remains in this phase
+                forever). Defaults to -1 (indefinite).
+            scheduler_training_decay (float): Decay value for phase. Usage depends on scheduler kind chosen for
+                training phase. Defaults to 1.
+            scheduler_cooldown_kind (Literal["constant", "linear", "exponential", "cosine"]): scheduler kind for the
+                cooldown phase. Defaults to "constant".
+            scheduler_cooldown_steps (int): Number of steps in cooldown phase. Defaults to 0.
+            scheduler_cooldown_decay (float): Decay value for phase. Usage depends on scheduler kind chosen for
+                cooldown phase.
             model_config_kwargs: dict[str, Any] or None
                 Optional dictionary of model configuration options passed to BertBlocksConfig for instantiation.
 
@@ -174,14 +221,14 @@ class BertBlocksPretrainingModule(L.LightningModule):
             del tokenizer
         self.model = BertBlocksForMaskedLM(self.model_config)
         if self.hparams.compile_model:
-            torch.set_float32_matmul_precision("medium")
+            torch.set_float32_matmul_precision("high")
             self.model = torch.compile(self.model, dynamic=True)
 
     def configure_optimizers(self) -> tuple[list["torch.optim.Optimizer"], list[dict[str, Any]]]:
         """Configure optimizers and learning rate schedulers.
 
-        Sets up AdamW optimizer with weight decay only applied to non-bias parameters
-        (excluding RMSNorm parameters). Uses a sequential learning rate schedule
+        Sets up optimizer with weight decay only applied to non-bias parameters
+        (excluding norm parameters). Uses a sequential learning rate schedule
         with linear warmup followed by exponential decay.
 
         Returns:
@@ -189,7 +236,8 @@ class BertBlocksPretrainingModule(L.LightningModule):
                 The scheduler is configured to update every step during training.
 
         """
-        decay_parameters = get_parameter_names(self.model, [torch.nn.RMSNorm])
+        norm_cls = [RMSNorm, LayerNorm, GroupNorm, DeepNorm, DynamicTanhNorm]
+        decay_parameters = get_parameter_names(self.model, norm_cls)
         decay_parameters = [name for name in decay_parameters if "bias" not in name]
         optimizer_grouped_parameters = [
             {
@@ -204,15 +252,17 @@ class BertBlocksPretrainingModule(L.LightningModule):
         optimizer = get_optimizer(
             self.hparams.optimizer_class, optimizer_grouped_parameters, self.hparams.optimizer_kwargs
         )
-        scheduler = torch.optim.lr_scheduler.SequentialLR(
+        scheduler = get_scheduler(
             optimizer,
-            schedulers=[
-                torch.optim.lr_scheduler.LinearLR(
-                    optimizer, start_factor=self.hparams.warmup_decay, total_iters=self.hparams.warmup_steps
-                ),
-                torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=self.hparams.learning_rate_decay),
-            ],
-            milestones=[self.hparams.warmup_steps],
+            self.hparams.scheduler_warmup_kind,
+            self.hparams.scheduler_warmup_steps,
+            self.hparams.scheduler_warmup_decay,
+            self.hparams.scheduler_training_kind,
+            self.hparams.scheduler_training_steps,
+            self.hparams.scheduler_training_decay,
+            self.hparams.scheduler_cooldown_kind,
+            self.hparams.scheduler_cooldown_steps,
+            self.hparams.scheduler_cooldown_decay,
         )
         return [optimizer], [{"scheduler": scheduler, "interval": "step"}]
 
@@ -237,7 +287,7 @@ class BertBlocksPretrainingModule(L.LightningModule):
     def validation_step(self, batch: dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
         """Perform a single validation step."""
         output = self.model(**batch)
-        self.log("loss/valid", output.loss, prog_bar=True)
+        self.log("loss/validation", output.loss, prog_bar=True)
         return output.loss
 
     def on_before_optimizer_step(self, optimizer: torch.optim.Optimizer) -> None:
@@ -263,3 +313,6 @@ class BertBlocksPretrainingModule(L.LightningModule):
             log_dir = Path(self.trainer.log_dir)
             save_path = log_dir / "huggingface_checkpoint"
             self.model.save_pretrained(save_path, safe_serialization=False)
+
+
+__all__ = ["BertBlocksPretrainingDataModule", "BertBlocksPretrainingModule"]
