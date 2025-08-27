@@ -56,7 +56,9 @@ import bertblocks as bb
 model = bb.from_huggingface("answerdotai/ModernBERT-base", load_weights=True)
 ```
 
-We are actively working on adding more verified model loaders. If you want to contribute, have a look at [`bertblocks.compat`](bertblocks/compat).
+We are actively working on adding more verified model loaders.
+
+If you want to add one, or make general improvements to `bertblocks`, have a look at our  [contribution guide](CONTRIBUTING.md).
 
 ## License
 

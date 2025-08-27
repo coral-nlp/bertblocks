@@ -54,15 +54,8 @@ pre-commit-install: ## Install pre-commit hooks
 pre-commit-run: ## Run pre-commit hooks on all files
 	uv run pre-commit run --all-files
 
-docs-init: ## Initialize Sphinx documentation
-	mkdir -p docs/source docs/_build
-	uv run sphinx-quickstart -q -p "BertBlocks" -a "CORAL Project Contributors" -v "0.1.0" --ext-autodoc --ext-doctest --ext-intersphinx --makefile --no-batchfile docs/source
-
 docs-build: ## Build Sphinx documentation
-	uv run sphinx-build -b html docs/source docs/_build/html
-
-docs-apidoc: ## Generate API documentation from docstrings
-	uv run sphinx-apidoc -o docs/source bertblocks --force --separate
+	uv run sphinx-build -b html docs docs/_build/html --keep-going
 
 docs-serve: ## Serve documentation locally (requires Python http.server)
 	cd docs/_build/html && python -m http.server 8000
