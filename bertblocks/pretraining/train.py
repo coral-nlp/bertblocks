@@ -161,15 +161,14 @@ class BertBlocksPretrainingModule(L.LightningModule):
     def __init__(
         self,
         learning_rate: float | None = 1e-5,
-        learning_rate_decay: float | None = 0.99999,
         weight_decay: float | None = 0.001,
         compile_model: bool | None = True,
         pretrained_tokenizer_name_or_path: str | None = None,
-        optimizer_class: str = "adamw",
-        optimizer_kwargs: dict | None = None,
-        scheduler_warmup_kind: Literal["constant", "linear", "cosine", "exponential"] = "linear",
-        scheduler_warmup_steps: int = 1000,
-        scheduler_warmup_decay: float = 0.0,
+        optimizer_class: str | None = "adamw",
+        optimizer_kwargs: dict[str, Any] | None = None,
+        scheduler_warmup_kind: Literal["constant", "linear", "cosine", "exponential"] | None = "linear",
+        scheduler_warmup_steps: int | None = 1000,
+        scheduler_warmup_decay: float = 0.1,
         scheduler_training_kind: Literal["constant", "linear", "cosine", "exponential"] = "constant",
         scheduler_training_steps: int = -1,
         scheduler_training_decay: float = 1.0,
@@ -181,32 +180,32 @@ class BertBlocksPretrainingModule(L.LightningModule):
         """Initialize the BertBlocks pretraining module.
 
         Args:
-            learning_rate: Peak learning rate for optimization. Defaults to 1e-7.
-            weight_decay: Weight decay coefficient for AdamW. Defaults to 1e-6.
-            compile_model: Whether to compile the model with torch.compile.
+            learning_rate (float, optional): Peak learning rate for optimization. Defaults to 1e-7.
+            weight_decay (float, optional): Weight decay coefficient for AdamW. Defaults to 1e-6.
+            compile_model (bool, optional): Whether to compile the model with torch.compile.
                 Defaults to True for better performance.
-            pretrained_tokenizer_name_or_path: str
-                Tokenizer name; if provided, will overwrite the model vocab size using the given tokenizer.
-            optimizer_class: Optimizer class name. Defaults to "adamw".
-            optimizer_kwargs: Optional arguments to pass to torch.optim.optimizer.
-            scheduler_warmup_kind (Literal["constant", "linear", "exponential", "cosine"]): scheduler kind for warmup
-                phase. Defaults to "linear".
-            scheduler_warmup_steps (int): Number of steps in warmup phase. Defaults to 1000.
-            scheduler_warmup_decay (float): Decay value for phase. Usage depends on scheduler kind chosen for warmup
-                phase. Defaults to 0.
-            scheduler_training_kind (Literal["constant", "linear", "exponential", "cosine"]): scheduler kind for
-                the training phase. Defaults to "constant".
-            scheduler_training_steps (int): Number of steps in training phase. Defaults to None (remains in this phase
-                forever). Defaults to -1 (indefinite).
-            scheduler_training_decay (float): Decay value for phase. Usage depends on scheduler kind chosen for
-                training phase. Defaults to 1.
-            scheduler_cooldown_kind (Literal["constant", "linear", "exponential", "cosine"]): scheduler kind for the
-                cooldown phase. Defaults to "constant".
-            scheduler_cooldown_steps (int): Number of steps in cooldown phase. Defaults to 0.
-            scheduler_cooldown_decay (float): Decay value for phase. Usage depends on scheduler kind chosen for
-                cooldown phase.
-            model_config_kwargs: dict[str, Any] or None
-                Optional dictionary of model configuration options passed to BertBlocksConfig for instantiation.
+            pretrained_tokenizer_name_or_path (str, optional): Path to pretrained tokenizer; if provided, will
+                overwrite the model vocab size using the given tokenizer. Defaults to None.
+            optimizer_class (str, optional): Optimizer class name. Defaults to "adamw".
+            optimizer_kwargs (dict[str, Any], optional): Optional arguments to pass to torch.optim.optimizer.
+            scheduler_warmup_kind (Literal["constant", "linear", "exponential", "cosine"], optional): scheduler kind
+                for warmup phase. Defaults to "linear".
+            scheduler_warmup_steps (int, optional): Number of steps in warmup phase. Defaults to 1000.
+            scheduler_warmup_decay (float, optional): Decay value for phase. Usage depends on scheduler kind chosen for
+                warmup phase. Defaults to 0.1.
+            scheduler_training_kind (Literal["constant", "linear", "exponential", "cosine"], optional): scheduler kind
+                for the training phase. Defaults to "constant".
+            scheduler_training_steps (int, optional): Number of steps in training phase. Defaults to -1 (remains in this
+                phase forever).
+            scheduler_training_decay (float, optional): Decay value for phase. Usage depends on scheduler kind chosen
+                for training phase. Defaults to 1 (no decay with constant kind).
+            scheduler_cooldown_kind (Literal["constant", "linear", "exponential", "cosine"], optional): scheduler kind
+                for the cooldown phase. Defaults to "constant".
+            scheduler_cooldown_steps (int, optional): Number of steps in cooldown phase. Defaults to 0 (no cooldown).
+            scheduler_cooldown_decay (float, optional): Decay value for phase. Usage depends on scheduler kind chosen
+                for cooldown phase. Defaults to 0.0.
+            model_config_kwargs (dict[str, Any], optional): Optional dictionary of model configuration options passed
+                to BertBlocksConfig for instantiation.
 
         """
         super().__init__()
@@ -249,9 +248,9 @@ class BertBlocksPretrainingModule(L.LightningModule):
                 "weight_decay": 0.0,
             },
         ]
-        optimizer = get_optimizer(
-            self.hparams.optimizer_class, optimizer_grouped_parameters, self.hparams.optimizer_kwargs
-        )
+        optimizer_kwargs = self.hparams.optimizer_kwargs
+        optimizer_kwargs.update({"lr": self.hparams.learning_rate})
+        optimizer = get_optimizer(self.hparams.optimizer_class, optimizer_grouped_parameters, optimizer_kwargs)
         scheduler = get_scheduler(
             optimizer,
             self.hparams.scheduler_warmup_kind,
