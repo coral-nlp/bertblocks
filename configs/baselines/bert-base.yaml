@@ -1,0 +1,70 @@
+# Model: bert-base
+#
+# Model settings based on: https://huggingface.co/google-bert/bert-base-uncased
+#
+seed_everything: 153201820 # For reproducibility
+trainer:
+  accelerator: "gpu"
+  accumulate_grad_batches: 32
+  max_epochs: 1
+  gradient_clip_val: 1.0
+model:
+  class_path: bertblocks.pretraining.train.BertBlocksPretrainingModule
+  init_args:
+    pretrained_tokenizer_name_or_path: ${data.init_args.pretrained_tokenizer_name_or_path}
+    compile_model: true
+    learning_rate: 1e-4
+    learning_rate_decay: 0.99
+    weight_decay: 1e-5
+    warmup_steps: 1000
+    warmup_decay: 0.1
+    optimizer_class: "adamw"
+    optimizer_kwargs:
+      lr: 1e-4
+      weight_decay: 0.01
+    model_config_kwargs:
+      actv_fn: "gelu"
+      add_token_type_emb: true
+      attn_dropout_prob: 0.1
+      attn_implementation: "sdpa"
+      attn_out_bias: true
+      attn_proj_bias: true
+      classifier_dropout: 0.0
+      emb_dropout_prob: 0.1
+      global_attention_every_n_layers: 0
+      hidden_dropout_prob: 0.1
+      hidden_size: 768
+      include_final_norm: true
+      initializer_cutoff_factor: 4.0
+      initializer_gain: 1.0
+      initializer_kind: "trunc_normal"
+      initializer_range: 0.02
+      intermediate_size: 3072
+      local_attention:
+        - -1
+        - -1
+      max_sequence_length: ${data.init_args.max_sequence_length}
+      mlp_in_bias: true
+      mlp_out_bias: true
+      mlp_type: "mlp"
+      model_type: "bert"
+      norm_bias: true
+      norm_eps: 1e-12
+      norm_fn: "layer"
+      norm_kind: "post"
+      num_attention_heads: 12
+      num_blocks: 12
+      pad_token_id: 0
+      pos_emb_kind: "learned"
+      type_vocab_size: 2
+      vocab_size: 30522
+data:
+  class_path: bertblocks.pretraining.train.BertBlocksPretrainingDataModule
+  init_args:
+    pretrained_tokenizer_name_or_path: "bert-base-uncased"
+    dataset_name_or_path: "roneneldan/TinyStories"
+    max_sequence_length: 256
+    mlm_probability: 0.3
+    train_batch_size: 16
+    val_batch_size: 16
+    num_workers: 4
