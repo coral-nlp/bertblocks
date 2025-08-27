@@ -130,6 +130,39 @@ layer_normalization = LayerNorm(...)
 projection_layer = Linear(...)
 ```
 
+### Type Hinting Standards
+
+Follow modern Python type hinting practices:
+
+- **Use string annotations** for forward references and complex types
+- **Put typing-only imports behind `TYPE_CHECKING`** to avoid runtime imports
+- **Use native types** (`list`, `dict`, `tuple`) instead of `typing.List`, `typing.Dict`, `typing.Tuple`
+- **Use union operators** (`|`) instead of `typing.Union`
+- **Use `| None`** instead of `typing.Optional`
+
+```python
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from transformers import PreTrainedModel
+
+def process_tokens(
+    tokens: "list[str]",
+    model: "PreTrainedModel | None" = None,
+    config: "dict[str, int | float]" = None
+) -> "tuple[list[int], dict[str, float]]":
+    """Process tokens with optional model and configuration.
+
+    Args:
+        tokens: List of token strings to process.
+        model: Optional pretrained model for processing.
+        config: Optional configuration dictionary.
+
+    Returns:
+        Tuple of processed token IDs and metrics.
+    """
+```
+
 ### Code Examples
 
 **Using einops:**
