@@ -248,7 +248,7 @@ class BertBlocksPretrainingModule(L.LightningModule):
                 "weight_decay": 0.0,
             },
         ]
-        optimizer_kwargs = self.hparams.optimizer_kwargs
+        optimizer_kwargs = self.hparams.optimizer_kwargs or {}
         optimizer_kwargs.update({"lr": self.hparams.learning_rate})
         optimizer = get_optimizer(self.hparams.optimizer_class, optimizer_grouped_parameters, optimizer_kwargs)
         scheduler = get_scheduler(

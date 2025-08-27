@@ -19,7 +19,7 @@ def get_scheduler(
     cooldown_kind: Literal["linear", "exponential"] = "linear",
     cooldown_steps: int = 0,
     cooldown_decay: float = 0.0,
-) -> LRScheduler:
+) -> "LRScheduler":
     """Construct a sequential learning rate schedule with three phases warmup, training, and cooldown.
 
     Args:
