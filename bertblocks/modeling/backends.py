@@ -9,7 +9,6 @@ if TYPE_CHECKING:
 
 import torch
 from einops import einsum, rearrange
-from transformers.modeling_attn_mask_utils import _prepare_4d_attention_mask_for_sdpa
 from transformers.modeling_utils import is_flash_attn_2_available
 
 if is_flash_attn_2_available():
@@ -242,12 +241,11 @@ class SDPABackend(AttentionBackend):
         batch_size, seqlen, _ = qkv.shape
         q, k, v = rearrange(qkv, "b s (t h d) -> t b h s d", t=3, h=num_heads, d=head_dim)
 
-        attn_mask = _prepare_4d_attention_mask_for_sdpa(attention_mask, dtype=q.dtype, tgt_len=seqlen)
         output = torch.nn.functional.scaled_dot_product_attention(
             q,
             k,
             v,
-            attn_mask=attn_mask,
+            attn_mask=attention_mask,
             dropout_p=dropout_p,
             is_causal=False,
         )
@@ -296,13 +294,6 @@ class EagerBackend(AttentionBackend):
         """Eager attention forward pass with padded sequences."""
         q, k, v = rearrange(qkv, "b s (t h d) -> t b h s d", t=3, h=num_heads, d=head_dim)
         scores = einsum(q, k, "b h i d, b h j d -> b h i j") * (head_dim**-0.5)
-        mask = (attention_mask.unsqueeze(1) & attention_mask.unsqueeze(2)).bool()
-
-        if local_attention != (-1, -1) and local_attention[0] > 0:
-            window_size = local_attention[0]
-            pos = torch.arange(qkv.shape[1], device=qkv.device)
-            local_mask = (pos.unsqueeze(0) - pos.unsqueeze(1)).abs() <= window_size
-            mask = mask & local_mask.unsqueeze(0)
 
         if alibi_slopes is not None:
             pos = torch.arange(qkv.shape[1], device=qkv.device)
@@ -310,9 +301,9 @@ class EagerBackend(AttentionBackend):
             alibi_bias = einsum(alibi_slopes, pos_diff, "h, i j -> h i j").unsqueeze(0)
             scores = scores + alibi_bias
 
-        scores = scores.masked_fill(~mask.unsqueeze(1), -float("inf"))
+        scores = scores.masked_fill(~attention_mask, -float("inf"))
         attn_weights = torch.softmax(scores, dim=-1)
-        attn_weights = attn_weights.masked_fill(~mask.unsqueeze(1), 0.0)
+        attn_weights = attn_weights.masked_fill(~attention_mask, 0.0)
 
         if dropout_p > 0.0:
             attn_weights = torch.nn.functional.dropout(attn_weights, p=dropout_p)

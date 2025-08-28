@@ -28,9 +28,8 @@ from transformers import AutoTokenizer
 from transformers.trainer_pt_utils import get_parameter_names
 
 from bertblocks.config import BertBlocksConfig
-from bertblocks.modeling.model import BertBlocksForMaskedLM
 from bertblocks.modeling.norms import DeepNorm, DynamicTanhNorm, GroupNorm, LayerNorm, RMSNorm
-from bertblocks.pretraining.objectives import MaskedLanguageModelingCollator
+from bertblocks.pretraining.objectives import get_collator, get_model
 from bertblocks.pretraining.optimizer import get_optimizer
 from bertblocks.pretraining.scheduler import get_scheduler
 from bertblocks.pretraining.utils import chunk_examples
@@ -53,6 +52,7 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
     def __init__(
         self,
         pretrained_tokenizer_name_or_path: str,
+        objective: Literal["mlm", "enhanced_mlm"] = "mlm",
         max_sequence_length: int | None = 512,
         dataset_name_or_path: str | list[str] | None = None,
         file_format: str | None = None,
@@ -66,15 +66,18 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
         val_batch_size: int | None = 32,
         pretokenized: bool | None = False,
         num_workers: int | None = 0,
+        collator_kwargs: dict[str, Any] | None = None,
     ) -> None:
         """Initialize the pretraining data module.
 
         Args:
-            pretrained_tokenizer_name_or_path: Path or name of HuggingFace tokenizer
+            pretrained_tokenizer_name_or_path (str): Path or name of HuggingFace tokenizer
                 to use for text processing.
-            max_sequence_length: Maximum sequence length for tokenization.
+            objective (Literal["mlm", "enhanced_mlm"]): The training objective. Available options:
+                "mlm", "enhanced_mlm".
+            max_sequence_length (int | None): Maximum sequence length for tokenization.
                 Longer sequences will be truncated. Defaults to 512.
-            dataset_name_or_path: Dataset name or path. Defaults to None.
+            dataset_name_or_path (str | list[str] | None): Dataset name or path. Defaults to None.
             data_split (str, optional): Dataset split to use for pretraining. Defaults to 'train'.
             text_column (str, optional): Text column name pretrain with. Defaults to 'text'.
             split_char (str, optional): Character to split examples at. Only one of `split_char` and `split_len`
@@ -82,21 +85,23 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
             split_len (int, optional): Number of characters to split examples at. Only one of `split_char` and
                 `split_len` should be specified. Defaults to None.
             shuffle (bool, optional): Whether to shuffle the dataset before pretraining. Defaults to False.
-            mlm_probability: Probability of masking tokens. Defaults to 0.3.
-            train_batch_size: Batch size for training. Defaults to 32.
-            val_batch_size: Batch size for validation. Defaults to 32.
-            pretokenized: Whether input is pre-tokenized. Defaults to False.
-            num_workers: Number of workers for data loading. Defaults to 0.
+            train_batch_size (int | None): Batch size for training. Defaults to 32.
+            val_batch_size (int | None): Batch size for validation. Defaults to 32.
+            pretokenized (bool | None): Whether input is pre-tokenized. Defaults to False.
+            num_workers (int | None): Number of workers for data loading. Defaults to 0.
+            collator_kwargs (dict[str, Any] | None): Additional keyword arguments for the data collator.
+                For example, the mlm_probability.
 
         """
         super().__init__()
         self.save_hyperparameters()
         tokenizer = AutoTokenizer.from_pretrained(self.hparams.pretrained_tokenizer_name_or_path)
-        self.mlm_collation_fn = MaskedLanguageModelingCollator(
+        self.collator = get_collator(objective)(
             tokenizer=tokenizer,
             max_sequence_length=self.hparams.max_sequence_length,
             text_column=self.hparams.text_column or "text",
             pretokenized=self.hparams.pretokenized,
+            **(self.hparams.collator_kwargs or {}),
         )
 
     def prepare_data(self) -> None:
@@ -138,7 +143,7 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
         """
         return DataLoader(
             self.dataset,
-            collate_fn=self.mlm_collation_fn,
+            collate_fn=self.collator,
             shuffle=self.hparams.shuffle,
             batch_size=self.hparams.train_batch_size,
             num_workers=self.hparams.num_workers,
@@ -175,7 +180,9 @@ class BertBlocksPretrainingModule(L.LightningModule):
         scheduler_cooldown_kind: Literal["constant", "linear", "cosine", "exponential"] = "linear",
         scheduler_cooldown_steps: int = 0,
         scheduler_cooldown_decay: float = 0.0,
+        objective: Literal["mlm", "enhanced_mlm"] = "mlm",
         model_config_kwargs: "dict[str, Any] | None" = None,
+        model_kwargs: "dict[str, Any] | None" = None,
     ):
         """Initialize the BertBlocks pretraining module.
 
@@ -204,21 +211,23 @@ class BertBlocksPretrainingModule(L.LightningModule):
             scheduler_cooldown_steps (int, optional): Number of steps in cooldown phase. Defaults to 0 (no cooldown).
             scheduler_cooldown_decay (float, optional): Decay value for phase. Usage depends on scheduler kind chosen
                 for cooldown phase. Defaults to 0.0.
+            objective: The training objective. Available options:
+                "mlm", "enhanced_mlm".
             model_config_kwargs (dict[str, Any], optional): Optional dictionary of model configuration options passed
                 to BertBlocksConfig for instantiation.
+            model_kwargs (dict[str, Any], optional): Optional dictionary of model-specific and objective-specific
+                arguments.
 
         """
         super().__init__()
         self.save_hyperparameters(ignore=["model_config"])
-        if model_config_kwargs is None:
-            model_config_kwargs = {}
-        self.model_config = BertBlocksConfig(**model_config_kwargs)
+        self.model_config = BertBlocksConfig(**(model_config_kwargs or {}))
         # Patch model config with tokenizer vocab size if given
         if self.hparams.pretrained_tokenizer_name_or_path is not None:
             tokenizer = AutoTokenizer.from_pretrained(self.hparams.pretrained_tokenizer_name_or_path)
             self.model_config.vocab_size = tokenizer.vocab_size
             del tokenizer
-        self.model = BertBlocksForMaskedLM(self.model_config)
+        self.model = get_model(objective)(self.model_config, **(model_kwargs or {}))
         if self.hparams.compile_model:
             torch.set_float32_matmul_precision("high")
             # torch._dynamo.config.capture_dynamic_output_shape_ops = True

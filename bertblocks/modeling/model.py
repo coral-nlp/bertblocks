@@ -1,6 +1,7 @@
 import functools
 import math
 from collections.abc import Callable
+from copy import deepcopy
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
 from bertblocks.modeling.norms import get_norm
@@ -22,11 +23,25 @@ from transformers.modeling_utils import PreTrainedModel
 
 from bertblocks.config import BertBlocksConfig
 from bertblocks.modeling.backends import ATTENTION_BACKENDS
-from bertblocks.modeling.block import Encoder
+from bertblocks.modeling.block import Block, Encoder
 from bertblocks.modeling.embedding import TokenEmbedding
 from bertblocks.modeling.head import Pooler, get_prediction_head
 from bertblocks.modeling.loss import get_loss_function
 from bertblocks.modeling.padding import pad_output, unpad_input
+
+
+def convert_to_4d_attention_mask(attention_mask: torch.Tensor) -> torch.Tensor:
+    """Convert a 2D attention mask to 4D.
+
+    Args:
+        attention_mask (torch.Tensor, shape [batch_size, seq_length]): The input attention mask.
+
+    Returns:
+        torch.Tensor: The converted 4D attention mask.
+    """
+    attention_mask = attention_mask.unsqueeze(1) & attention_mask.unsqueeze(2)
+    attention_mask = attention_mask.unsqueeze(1)
+    return attention_mask
 
 
 class BertBlocksPreTrainedModel(PreTrainedModel):
@@ -163,6 +178,7 @@ class BertBlocksModel(BertBlocksPreTrainedModel):
         self.pool = Pooler(config) if add_pooling_layer else None
         self.pad_token_id = config.pad_token_id or 0
         self.post_init()
+        self.local_attention = config.local_attention
 
     @property
     def dtype(self) -> "torch.dtype":
@@ -244,6 +260,17 @@ class BertBlocksModel(BertBlocksPreTrainedModel):
 
         elif not self.unpadding and backend.supports_unpadded:
             x = self.embd(input_ids, token_type_ids=token_type_ids)
+
+            attention_mask = (
+                torch.ones_like(input_ids, dtype=torch.bool) if attention_mask is None else attention_mask.bool()
+            )
+            attention_mask = convert_to_4d_attention_mask(attention_mask)
+
+            if self.local_attention != (-1, -1) and self.local_attention[0] > 0:
+                window_size = self.local_attention[0]
+                pos = torch.arange(input_ids.shape[1], device=input_ids.device)
+                local_mask = (pos.unsqueeze(0) - pos.unsqueeze(1)).abs() <= window_size
+                attention_mask = attention_mask & local_mask
 
             x, hidden_states, attentions = self.encd(
                 x, attention_mask, None, None, output_attentions, output_hidden_states
@@ -398,6 +425,198 @@ class BertBlocksForMaskedLM(BertBlocksPreTrainedModel):
             output_hidden_states=output_hidden_states,
         )
         logits = self.decoder(self.head(output.last_hidden_state))
+
+        loss = None
+        if labels is not None:
+            labels = labels.flatten()  # (b d -> (b d))
+            logits = logits.flatten(0, 1)  # (b d v -> (b d) v)
+            loss = self.loss_fn(logits, labels)
+
+        return MaskedLMOutput(
+            loss=loss,
+            logits=logits,
+            hidden_states=output.hidden_states,
+            attentions=output.attentions,
+        )
+
+
+class EnhancedMaskingBlock(Block):
+    """A single transformer block.
+
+    Implements an enhanced masking transformer block which allows for custom
+    modifications of the attention mask.
+
+    Attributes:
+        layer_id (int): index position of the layer in the models' encoder stack.
+        attn (Attention): Attention module.
+        ffwd (nn.Module): Feed-forward module.
+        pre_norm_attn (nn.Module): Pre-normalization layer for attention module. Falls back to `nn.Identity` if not
+            configured.
+        pre_norm_ffwd (nn.Module): Pre-normalization layer for feed-forward module. Falls back to `nn.Identity` if not
+            configured.
+        post_norm_attn (nn.Module): Pre-normalization function for attention module. Falls back to `nn.Identity` if not
+            configured.
+        post_norm_ffwd (nn.Module): Post-normalization function for feed-forward module. Falls back to `nn.Identity` if
+            not configured.
+        attn_drop (nn.Dropout): Post-attention dropout layer. Falls back to `nn.Identity` if not configured.
+        ffwd_drop (nn.Dropout): Post-Feed-forward dropout layer. Falls back to `nn.Identity` if not configured.
+
+    Args:
+        config (BertBlocksConfig): Configuration object determining model hyperparameters. May be passed to
+            other submodules. Keys used at top level:
+
+                - `norm_kind`: Normalization layer type
+                - `attn_dropout_prob`: Dropout probability for attention layer
+                - `hidden_dropout_prob`: Dropout probability for feed-forward layers
+
+        layer_id (int): layer id indicating index in the encoder stack.
+        masking_strategy (str): Masking strategy to use.
+            Available options: "random".
+        masking_probability (float): Probability of masking tokens. Defaults to 0.5.
+
+    References:
+         - "Attention Is All You Need" (https://arxiv.org/pdf/1706.03762)
+         - "On Layer Normalization in the Transformer Architecture" (https://arxiv.org/pdf/2002.04745)
+
+    """
+
+    def __init__(
+        self,
+        config: BertBlocksConfig,
+        layer_id: int,
+        masking_strategy: Literal["random"],
+        masking_probability: float = 0.5,
+    ):
+        config = deepcopy(config)
+        config.attn_implementation = "sdpa"
+        super().__init__(config, layer_id)
+        self.masking_strategy = masking_strategy
+        self.masking_probability = masking_probability
+
+    def forward(
+        self,
+        x: "torch.Tensor",
+        attention_mask: "torch.Tensor | None" = None,
+        cu_seqlens: "torch.Tensor | None" = None,
+        max_seq_len: int | None = None,
+    ) -> "tuple[torch.Tensor, torch.Tensor | None]":
+        """Forward pass of the transformer block.
+
+        Args:
+            x (torch.Tensor): Hidden state (unpadded or padded).
+            attention_mask (torch.Tensor | None): Attention mask (for padded sequences).
+            cu_seqlens (torch.Tensor | None): Cumulative sequence lengths (for unpadded sequences).
+            max_seq_len (int | None): Maximum sequence length (for unpadded sequences).
+
+        Returns:
+            tuple[torch.Tensor, torch.Tensor | None]:
+
+                - `output` (torch.Tensor): Transformed hidden state with same shape as input
+                - `attention_weights` (torch.Tensor | None): Attention weights
+
+        """
+        attention_mask = torch.ones(x.shape[:2], dtype=torch.bool) if attention_mask is None else attention_mask.bool()
+        attention_mask = convert_to_4d_attention_mask(attention_mask)
+        if attention_mask is None:
+            raise RuntimeError("Attention mask is required for an enhanced masking block.")
+        match self.masking_strategy:
+            case "random":
+                attention_mask = self._apply_random_mask(attention_mask)
+            case _:
+                raise ValueError(f"Unknown masking strategy: {self.masking_strategy}")
+        # set diagonal to 0 so that a token cannot attend to itself
+        attention_mask[..., range(attention_mask.shape[-2]), range(attention_mask.shape[-1])] = 0
+        return super().forward(x, attention_mask, cu_seqlens, max_seq_len)
+
+    def _apply_random_mask(self, attention_mask: "torch.Tensor") -> "torch.Tensor":
+        """Apply random masking to the attention mask.
+
+        Args:
+            attention_mask (torch.Tensor, shape [batch_size, seq_len]): The original attention mask.
+
+        Returns:
+            torch.Tensor: The modified attention mask with random masking applied.
+        """
+        attention_mask = attention_mask & (
+            torch.rand(attention_mask.shape, device=attention_mask.device) > self.masking_probability
+        )
+        return attention_mask
+
+
+class BertBlocksForEnhancedMaskedLM(BertBlocksForMaskedLM):
+    """BertBlocks model for enhanced masked language modeling tasks.
+
+    This model extends the base BertBlocks model with a prediction head
+    and decoder for enhanced masked language modeling. It can be used for
+    pre-training or fine-tuning on enhanced masked language modeling tasks.
+    Enhanced masked language modeling uses one additional transformer layer
+    to handle the masking, instead of masking input tokens.
+
+    Args:
+        config (BertBlocksConfig): Configuration object determining model hyperparameters. May be passed to
+            other submodules. Keys used at top level:
+
+            - `vocab_size`: Size of the vocabulary for token embeddings
+            - `hidden_size`: Dimensionality of hidden layers
+        masking_strategy (str): Masking strategy to use.
+            Available options: "random".
+        masking_probability (float): Probability of masking tokens. Defaults to 0.5.
+    """
+
+    _tied_weight_keys: ClassVar = ["decoder.weight"]
+
+    def __init__(
+        self,
+        config: "BertBlocksConfig",
+        masking_strategy: Literal["random"] = "random",
+        masking_probability: float = 0.5,
+    ):
+        super().__init__(config)
+        self.enhanced_masking_block = EnhancedMaskingBlock(
+            config, config.num_blocks + 1, masking_strategy, masking_probability
+        )
+        self.post_init()
+
+    def forward(
+        self,
+        input_ids: "torch.Tensor",
+        attention_mask: "torch.Tensor | None" = None,
+        token_type_ids: "torch.Tensor | None" = None,
+        labels: "torch.Tensor | None" = None,
+        output_attentions: "bool | None" = False,
+        output_hidden_states: "bool | None" = False,
+    ) -> "MaskedLMOutput":
+        """Forward pass for masked language modeling.
+
+        Args:
+            input_ids (torch.Tensor, shape [batch_size, seq_len]): Tensor of token ids.
+            attention_mask (torch.Tensor, shape [batch_size, seq_len], optional): Tensor indicating which tokens should
+                be attended to. Defaults to None.
+            token_type_ids (torch.Tensor, shape [batch_size, seq_len], optional): Tensor indicating type of tokens.
+                Defaults to None.
+            labels (torch.Tensor, shape [batch_size, seq_len], optional): Tensor of target token ids for computing loss.
+                Defaults to None.
+            output_attentions (bool): Whether to return attention weights from all layers. Defaults to None.
+            output_hidden_states (bool): Whether to return hidden states from all layers. Defaults to False.
+
+        Returns:
+            MaskedLMOutput
+
+                - `loss`: Masked language modeling loss if labels provided
+                - `logits`: Prediction scores over vocabulary
+                - `hidden_states`: Hidden states from all layers if requested
+                - `attentions`: Attention weights from all layers if requested
+
+        """
+        output = self.model(
+            input_ids,
+            attention_mask=attention_mask,
+            token_type_ids=token_type_ids,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+        )
+        hidden_state, _ = self.enhanced_masking_block(output.last_hidden_state, attention_mask)
+        logits = self.decoder(self.head(hidden_state))
 
         loss = None
         if labels is not None:
