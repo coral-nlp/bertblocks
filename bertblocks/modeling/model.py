@@ -9,6 +9,7 @@ if TYPE_CHECKING:
     pass
 
 import torch
+from einops import einsum
 from torch import nn
 from transformers.modeling_outputs import (
     BaseModelOutput,
@@ -21,12 +22,12 @@ from transformers.modeling_outputs import (
 from transformers.modeling_utils import PreTrainedModel
 
 from bertblocks.config import BertBlocksConfig
-from bertblocks.modeling.backends import ATTENTION_BACKENDS
 from bertblocks.modeling.block import Encoder, EnhancedMaskingBlock, convert_to_4d_attention_mask
 from bertblocks.modeling.embedding import TokenEmbedding
 from bertblocks.modeling.head import Pooler, get_prediction_head
 from bertblocks.modeling.loss import get_loss_function
 from bertblocks.modeling.padding import pad_output, unpad_input
+from bertblocks.modeling.position import get_alibi_slopes
 
 
 class BertBlocksPreTrainedModel(PreTrainedModel):
@@ -222,9 +223,7 @@ class BertBlocksModel(BertBlocksPreTrainedModel):
         """
         B, S = input_ids.shape
 
-        backend = ATTENTION_BACKENDS[self.config.attn_implementation]
-
-        if self.config.unpadding and backend.supports_unpadded:
+        if self.config.unpadding:
             with torch.no_grad():
                 input_ids_unpadded, indices, cu_seqlens, max_seq_len = unpad_input(
                     input_ids, attention_mask, self.pad_token_id
@@ -241,7 +240,7 @@ class BertBlocksModel(BertBlocksPreTrainedModel):
             if output_hidden_states:
                 hidden_states = [pad_output(h, indices, B, S, self.pad_token_id) for h in hidden_states]
 
-        elif not self.config.unpadding and backend.supports_padded:
+        else:
             x = self.embd(input_ids, token_type_ids=token_type_ids)
 
             attention_mask = (
@@ -249,19 +248,35 @@ class BertBlocksModel(BertBlocksPreTrainedModel):
             )
             attention_mask = convert_to_4d_attention_mask(attention_mask)
 
+            if self.config.pos_emb_kind in ["alibi", "learned_alibi"]:
+                seqlen = input_ids.shape[1]
+                alibi_slopes = get_alibi_slopes(self.config.num_attention_heads, device=input_ids.device, dtype=x.dtype)
+                pos = torch.arange(seqlen, device=input_ids.device)
+                pos_diff = (pos.unsqueeze(0) - pos.unsqueeze(1)).abs()
+                alibi_bias = einsum(alibi_slopes, pos_diff, "h, i j -> h i j").unsqueeze(0)
+
+                if attention_mask.dtype == torch.bool:
+                    attention_bias = torch.zeros_like(attention_mask, dtype=x.dtype)
+                    attention_bias = attention_bias.masked_fill(~attention_mask, -float("inf"))
+                else:
+                    attention_bias = attention_mask
+
+                attention_mask = attention_bias + alibi_bias
+
             if self.local_attention != (-1, -1) and self.local_attention[0] > 0:
                 window_size = self.local_attention[0]
                 pos = torch.arange(input_ids.shape[1], device=input_ids.device)
                 local_mask = (pos.unsqueeze(0) - pos.unsqueeze(1)).abs() <= window_size
-                attention_mask = attention_mask & local_mask
+                if self.config.pos_emb_kind in ["alibi", "learned_alibi"]:
+                    # For ALiBi, we need to set invalid positions to -inf instead of masking
+                    attention_mask = attention_mask.masked_fill(~local_mask, -float("inf"))
+                else:
+                    attention_mask = attention_mask & local_mask
 
             x, hidden_states, attentions = self.encd(
                 x, attention_mask, None, None, output_attentions, output_hidden_states
             )
             x = self.norm(x)
-
-        else:
-            raise ValueError("Model is loaded for unpadding mode, but attention backend does not support it.")
 
         if self.pool is not None:
             pooler_output = self.pool(x)

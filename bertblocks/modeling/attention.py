@@ -160,8 +160,6 @@ class Attention(nn.Module):
             attention_mask,
             self.num_heads,
             self.head_dim,
-            alibi_slopes=self.slopes,
-            local_attention=self.local_attention,
             dropout_p=self.dropout_p if self.training else 0.0,
             deterministic=self.deterministic,
         )
@@ -190,15 +188,13 @@ class Attention(nn.Module):
         Returns:
             tuple[torch.Tensor, torch.Tensor | None]: Output and optional attention weights
         """
-        if self.backend.supports_unpadded and cu_seqlens is not None and max_seq_len is not None:
+        if cu_seqlens is not None and max_seq_len is not None:
             return self.forward_unpadded(x, cu_seqlens, max_seq_len)
-        elif self.backend.supports_padded and attention_mask is not None:
+        elif attention_mask is not None:
             return self.forward_padded(x, attention_mask)
         else:
             raise ValueError(
-                f"Backend {self.backend.__class__.__name__} requires "
-                f"{'unpadded' if self.backend.supports_unpadded else 'padded'} sequences, "
-                f"but the required parameters were not provided."
+                "Neither `attention_mask` nor `cu_seqlens` were provided, no attention implementation applicable"
             )
 
 
