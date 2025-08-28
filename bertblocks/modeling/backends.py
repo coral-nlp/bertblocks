@@ -1,7 +1,7 @@
 """Attention backend implementations with unified interface."""
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
     from torch import Tensor
@@ -50,6 +50,24 @@ class AttentionBackend(ABC):
         """Whether this backend supports RoPE positional encoding."""
         pass
 
+    def _compatible(
+        self,
+        rotary_emb: "PaddedRotaryEncoding | UnpaddedRotaryEncoding | None" = None,
+        alibi_slopes: "Tensor | None" = None,
+        local_attention: tuple[int, int] = (-1, -1),
+        mode: Literal["unpadded", "padded"] | None = None,
+    ) -> None:
+        if rotary_emb is not None and not self.supports_rope:
+            raise NotImplementedError(f"{self.__class__.__name__} does not support ROPE positional encoding")
+        if alibi_slopes is not None and not self.supports_alibi:
+            raise NotImplementedError(f"{self.__class__.__name__} does not support ALIBI positional encoding")
+        if local_attention != (-1, -1) and not self.supports_local_attention:
+            raise NotImplementedError(f"{self.__class__.__name__} does not support local attention")
+        if mode == "unpadded" and not self.supports_unpadded:
+            raise NotImplementedError(f"{self.__class__.__name__} does not support unpadded sequences")
+        if mode == "padded" and not self.supports_padded:
+            raise NotImplementedError(f"{self.__class__.__name__} does not support padded sequences")
+
     def forward_unpadded(
         self,
         qkv: "Tensor",
@@ -64,8 +82,7 @@ class AttentionBackend(ABC):
         deterministic: bool = False,
     ) -> "tuple[Tensor, Tensor | None]":
         """Forward pass with unpadded sequences."""
-        if not self.supports_unpadded:
-            raise NotImplementedError(f"{self.__class__.__name__} does not support unpadded sequences")
+        self._compatible(rotary_emb, alibi_slopes, local_attention, "unpadded")
         return self._forward_unpadded(
             qkv,
             cu_seqlens,
@@ -92,8 +109,7 @@ class AttentionBackend(ABC):
         deterministic: bool = False,
     ) -> "tuple[Tensor, Tensor | None]":
         """Forward pass with padded sequences."""
-        if not self.supports_padded:
-            raise NotImplementedError(f"{self.__class__.__name__} does not support padded sequences")
+        self._compatible(rotary_emb, alibi_slopes, local_attention, "padded")
         return self._forward_padded(
             qkv,
             attention_mask,
@@ -263,13 +279,6 @@ class SDPABackend(AttentionBackend):
         deterministic: bool = False,
     ) -> "tuple[Tensor, Tensor | None]":
         """SDPA forward pass with padded sequences."""
-        if rotary_emb is not None:
-            raise NotImplementedError("RoPE is not supported with SDPA backend")
-        if alibi_slopes is not None:
-            raise NotImplementedError("ALiBi is not supported with SDPA backend")
-        if local_attention != (-1, -1):
-            raise NotImplementedError("Local attention is not supported with SDPA backend")
-
         batch_size, seqlen, _ = qkv.shape
         q, k, v = rearrange(qkv, "b s (t h d) -> t b h s d", t=3, h=num_heads, d=head_dim)
 
@@ -285,9 +294,9 @@ class SDPABackend(AttentionBackend):
         output = rearrange(output, "b h s d -> b s (h d)")
         return output, None
 
-    def _forward_unpadded(self, *args, **kwargs) -> "tuple[Tensor, Tensor | None]":  # type: ignore
+    def _forward_unpadded(self, *args, **kwargs):  # type: ignore
         """SDPA backend does not support unpadded sequences."""
-        raise NotImplementedError("SDPA backend only supports padded sequences")
+        raise NotImplementedError
 
 
 class EagerBackend(AttentionBackend):
@@ -331,9 +340,6 @@ class EagerBackend(AttentionBackend):
         deterministic: bool = False,
     ) -> "tuple[Tensor, Tensor | None]":
         """Eager attention forward pass with padded sequences."""
-        if rotary_emb is not None:
-            raise NotImplementedError("Eager backedn does not support RoPE positional encoding")
-
         q, k, v = rearrange(qkv, "b s (t h d) -> t b h s d", t=3, h=num_heads, d=head_dim)
         scores = einsum(q, k, "b h i d, b h j d -> b h i j") * (head_dim**-0.5)
         mask = (attention_mask.unsqueeze(1) & attention_mask.unsqueeze(2)).bool()
@@ -361,9 +367,9 @@ class EagerBackend(AttentionBackend):
         output = rearrange(output, "b h s d -> b s (h d)")
         return output, None
 
-    def _forward_unpadded(self, *args, **kwargs) -> "tuple[Tensor, Tensor | None]":  # type: ignore
+    def _forward_unpadded(self, *args, **kwargs):  # type: ignore
         """Eager backend does not support unpadded sequences."""
-        raise NotImplementedError("Eager backend only supports padded sequences")
+        raise NotImplementedError
 
 
 # Registry of available backends
