@@ -7,7 +7,7 @@ from torch import nn
 
 from bertblocks.config import BertBlocksConfig
 from bertblocks.modeling.backends import ATTENTION_BACKENDS
-from bertblocks.modeling.position import PaddedRotaryEncoding, UnpaddedRotaryEncoding, get_alibi_slopes
+from bertblocks.modeling.position import RotaryPositionalEncoding, get_alibi_slopes
 
 
 class Attention(nn.Module):
@@ -86,6 +86,7 @@ class Attention(nn.Module):
             case "rope":
                 match config.attn_implementation:
                     case "fa2":
+                        interleaved = config.pos_emb_kwargs.get("interleaved", False)
                         if "base_global" in config.pos_emb_kwargs:
                             theta_global = config.pos_emb_kwargs["base_global"]
                         else:
@@ -101,10 +102,14 @@ class Attention(nn.Module):
                             theta = (
                                 theta_local if layer_id % config.global_attention_every_n_layers != 0 else theta_global
                             )
-                        if config.unpadding:
-                            self.rotary_emb = UnpaddedRotaryEncoding(dim=config.pos_emb_kwargs["dim"], base=theta)
-                        else:
-                            self.rotary_emb = PaddedRotaryEncoding(dim=config.pos_emb_kwargs["dim"], base=theta)
+
+                        self.rotary_emb = RotaryPositionalEncoding(
+                            dim=config.pos_emb_kwargs["dim"],
+                            base=theta,
+                            interleaved=interleaved,
+                            max_seq_len=self.max_seq_len,
+                        )
+
                     case _:
                         raise NotImplementedError("Only flash attention is supported as backend for rotary encodings.")
             case _:
@@ -117,19 +122,24 @@ class Attention(nn.Module):
         max_seq_len: int,
     ) -> "tuple[Tensor, Tensor | None]":
         """Forward pass with unpadded sequences."""
+        # Fused projection
         qkv = self.proj(x)
+        # Rotary encoding if applicable
+        if self.rotary_emb is not None:
+            qkv = self.rotary_emb(qkv, self.num_heads, self.head_dim, cu_seqlens, max_seq_len)
+        # Attention backend call
         x, w = self.backend.forward_unpadded(
             qkv,
             cu_seqlens,
             max_seq_len,
             self.num_heads,
             self.head_dim,
-            rotary_emb=self.rotary_emb,
             alibi_slopes=self.slopes,
             local_attention=self.local_attention,
             dropout_p=self.dropout_p if self.training else 0.0,
             deterministic=self.deterministic,
         )
+        # Fuse heads back together
         x = self.ffwd(x)
         return x, w
 
@@ -141,17 +151,21 @@ class Attention(nn.Module):
         """Forward pass with padded sequences."""
         # Fused projection
         qkv = self.proj(x)
+        # Rotary encoding if applicable
+        if self.rotary_emb is not None:
+            qkv = self.rotary_emb(qkv, self.num_heads, self.head_dim)
+        # Attention backend call
         x, w = self.backend.forward_padded(
             qkv,
             attention_mask,
             self.num_heads,
             self.head_dim,
-            rotary_emb=self.rotary_emb,
             alibi_slopes=self.slopes,
             local_attention=self.local_attention,
             dropout_p=self.dropout_p if self.training else 0.0,
             deterministic=self.deterministic,
         )
+        # Fuse heads back together
         x = self.ffwd(x)
         return x, w
 
