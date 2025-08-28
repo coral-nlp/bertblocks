@@ -1,9 +1,13 @@
-import torch
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from torch import Tensor
+
 from torch import nn
 
 from bertblocks.config import BertBlocksConfig
 from bertblocks.modeling.backends import ATTENTION_BACKENDS
-from bertblocks.modeling.position import RotaryEmbedding, get_alibi_slopes
+from bertblocks.modeling.position import RotaryPositionalEncoding, get_alibi_slopes
 
 
 class Attention(nn.Module):
@@ -56,7 +60,7 @@ class Attention(nn.Module):
         self._initialize_pos_buffers(config, layer_id=layer_id)
         self.backend = ATTENTION_BACKENDS[config.attn_implementation]
 
-    def _initialize_pos_buffers(self, config: BertBlocksConfig, layer_id: int) -> None:
+    def _initialize_pos_buffers(self, config: "BertBlocksConfig", layer_id: int) -> None:
         """Initialize positional encoding buffers if needed.
 
         Args:
@@ -82,6 +86,7 @@ class Attention(nn.Module):
             case "rope":
                 match config.attn_implementation:
                     case "fa2":
+                        interleaved = config.pos_emb_kwargs.get("interleaved", False)
                         if "base_global" in config.pos_emb_kwargs:
                             theta_global = config.pos_emb_kwargs["base_global"]
                         else:
@@ -98,7 +103,13 @@ class Attention(nn.Module):
                                 theta_local if layer_id % config.global_attention_every_n_layers != 0 else theta_global
                             )
 
-                        self.rotary_emb = RotaryEmbedding(dim=config.pos_emb_kwargs["dim"], base=theta)
+                        self.rotary_emb = RotaryPositionalEncoding(
+                            dim=config.pos_emb_kwargs["dim"],
+                            base=theta,
+                            interleaved=interleaved,
+                            max_seq_len=self.max_seq_len,
+                        )
+
                     case _:
                         raise NotImplementedError("Only flash attention is supported as backend for rotary encodings.")
             case _:
@@ -106,56 +117,65 @@ class Attention(nn.Module):
 
     def forward_unpadded(
         self,
-        x: torch.Tensor,
-        cu_seqlens: torch.Tensor,
+        x: "Tensor",
+        cu_seqlens: "Tensor",
         max_seq_len: int,
-    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+    ) -> "tuple[Tensor, Tensor | None]":
         """Forward pass with unpadded sequences."""
+        # Fused projection
         qkv = self.proj(x)
+        # Rotary encoding if applicable
+        if self.rotary_emb is not None:
+            qkv = self.rotary_emb(qkv, self.num_heads, self.head_dim, cu_seqlens, max_seq_len)
+        # Attention backend call
         x, w = self.backend.forward_unpadded(
             qkv,
             cu_seqlens,
             max_seq_len,
             self.num_heads,
             self.head_dim,
-            rotary_emb=self.rotary_emb,
             alibi_slopes=self.slopes,
             local_attention=self.local_attention,
             dropout_p=self.dropout_p if self.training else 0.0,
             deterministic=self.deterministic,
         )
+        # Fuse heads back together
         x = self.ffwd(x)
         return x, w
 
     def forward_padded(
         self,
-        x: torch.Tensor,
-        attention_mask: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        x: "Tensor",
+        attention_mask: "Tensor",
+    ) -> "tuple[Tensor, Tensor | None]":
         """Forward pass with padded sequences."""
         # Fused projection
         qkv = self.proj(x)
+        # Rotary encoding if applicable
+        if self.rotary_emb is not None:
+            qkv = self.rotary_emb(qkv, self.num_heads, self.head_dim)
+        # Attention backend call
         x, w = self.backend.forward_padded(
             qkv,
             attention_mask,
             self.num_heads,
             self.head_dim,
-            rotary_emb=self.rotary_emb,
             alibi_slopes=self.slopes,
             local_attention=self.local_attention,
             dropout_p=self.dropout_p if self.training else 0.0,
             deterministic=self.deterministic,
         )
+        # Fuse heads back together
         x = self.ffwd(x)
         return x, w
 
     def forward(
         self,
-        x: torch.Tensor,
-        attention_mask: torch.Tensor | None = None,
-        cu_seqlens: torch.Tensor | None = None,
+        x: "Tensor",
+        attention_mask: "Tensor | None" = None,
+        cu_seqlens: "Tensor | None" = None,
         max_seq_len: int | None = None,
-    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+    ) -> "tuple[Tensor, Tensor | None]":
         """Forward pass of the attention mechanism.
 
         Automatically routes to padded or unpadded implementation based on backend capabilities.

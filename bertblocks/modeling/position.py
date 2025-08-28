@@ -1,15 +1,102 @@
 import math
-from typing import Any
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from torch import Tensor, device, dtype
 
 import torch
-from torch import nn
+from einops import rearrange, repeat
+from torch import Tensor, nn
 from transformers.modeling_utils import is_flash_attn_2_available
 
 if is_flash_attn_2_available():
-    from flash_attn.layers.rotary import RotaryEmbedding as FlashRotaryEmbedding
-    from flash_attn.ops.triton.rotary import apply_rotary
+    # We have flash attention, so we can use their kernel with some modifications
+    from flash_attn.ops.triton.rotary import apply_rotary as flash_apply_rotary
+
+    @torch.library.triton_op("bertblocks::apply_rotary", mutates_args={})
+    def apply_rotary(
+        x: Tensor,
+        cos: Tensor,
+        sin: Tensor,
+        interleaved: bool = False,
+        cu_seqlens: Tensor | None = None,
+        max_seqlen: int | None = None,
+    ) -> "Tensor":
+        return flash_apply_rotary(
+            x,
+            cos,
+            sin,
+            seqlen_offsets=0,
+            cu_seqlens=cu_seqlens,
+            max_seqlen=max_seqlen,
+            interleaved=interleaved,
+            inplace=False,
+        )
+
+    def apply_rotary_backward(ctx, grad):  # type: ignore
+        cos, sin, cu_seqlens = ctx.saved_tensors
+        dx = flash_apply_rotary(
+            grad,
+            cos,
+            sin,
+            seqlen_offsets=0,
+            cu_seqlens=cu_seqlens,
+            max_seqlen=ctx.max_seqlen,
+            interleaved=ctx.interleaved,
+            inplace=False,
+            conjugate=True,
+        )
+        return dx, None, None, None, None, None, None, None
+
+    def apply_rotary_setup_context(ctx, inputs, output):  # type: ignore
+        x, cos, sin, interleaved, cu_seqlens, max_seqlen = inputs
+        ctx.save_for_backward(cos, sin, cu_seqlens)
+        ctx.interleaved = interleaved
+        ctx.max_seqlen = max_seqlen
+
+    apply_rotary.register_autograd(apply_rotary_backward, setup_context=apply_rotary_setup_context)
+
 else:
-    FlashRotaryEmbedding = object
+    # We don't have flash attention, so native torch it is
+
+    def rotate_half(x, interleaved=False):  # type: ignore
+        if not interleaved:
+            x1, x2 = x.chunk(2, dim=-1)
+            return torch.cat((-x2, x1), dim=-1)
+        else:
+            x1, x2 = x[..., ::2], x[..., 1::2]
+            return rearrange(torch.stack((-x2, x1), dim=-1), "... d t -> ... (d t)", t=2)
+
+    def apply_rotary(
+        x: "Tensor",
+        cos: "Tensor",
+        sin: "Tensor",
+        interleaved: bool = False,
+        cu_seqlens: "Tensor | None" = None,
+        max_seqlen: int | None = None,
+    ) -> "Tensor":
+        """Native torch implementation of apply_rotary, for use if flash attention is not available.
+
+        Args:
+            x (Tensor, shape [batch_size, seq_len, num_heads, head_dim]): tensor to apply rotary encoding to.
+            cos (Tensor, shape [seq_len, head_dim/2]): Cosine rotary tensor.
+            sin (Tensor, shape [seq_len, head_dim/2]): Sine rotary tensor.
+            cu_seqlens (Tensor, shape [batch_size + 1,], optional): tensor of cumulative sequence lengths in unpadded
+                data.
+            max_seqlen (int, optional): maximum sequence length in batch.
+
+        Returns:
+            Tensor, shape [batch_size, seq_len, num_heads, head_dim]: input tensor with rotary encoding applied.
+        """
+        if cu_seqlens is None:
+            # Padded code path
+            dim = cos.shape[-1] * 2
+            cos = repeat(cos, "... d -> ... 1 (2 d)" if not interleaved else "... d -> ... 1 (d 2)")
+            sin = repeat(sin, "... d -> ... 1 (2 d)" if not interleaved else "... d -> ... 1 (d 2)")
+            return torch.cat([x[..., :dim] * cos + rotate_half(x[..., :dim], interleaved) * sin, x[..., dim:]], dim=-1)
+        else:
+            # Unpadded path (we will likely have flash attention here?)
+            raise NotImplementedError
 
 
 class SinusoidalPositionalEncoding(nn.Module):
@@ -140,131 +227,120 @@ def get_alibi_slopes(
     return torch.Tensor(out).to(device=device, dtype=dtype)
 
 
-class ApplyRotaryEmbUnpad(torch.autograd.Function):
-    """Autograd for rotary positional encodings."""
+class RotaryPositionalEncoding(nn.Module):
+    """Implementation of rotary positional encodings.
 
-    @staticmethod
-    def forward(
-        ctx: Any,
-        qkv: "torch.Tensor",
-        cos: "torch.Tensor",
-        sin: "torch.Tensor",
-        cu_seqlens: "torch.Tensor | None" = None,
-        max_seqlen: "torch.Tensor | None" = None,
-    ) -> "torch.Tensor":
-        """Forward pass."""
-        # (total_nnz, 3, nheads, headdim)
-        qkv = qkv.contiguous()
-        total_nnz, _three, _nheads, headdim = qkv.shape
-        # We need qkv to be contiguous so that when we reshape to combine (3, nheads) dimensions,
-        # we get the same tensor
-        # qk = rearrange(qkv[:, :2], "b_s t h d -> b_s (t h) d")
-        qk = qkv[:, :2].view(total_nnz, -1, headdim)
-        apply_rotary(
-            qk,
-            cos,
-            sin,
-            seqlen_offsets=0,
-            cu_seqlens=cu_seqlens,
-            max_seqlen=max_seqlen,
-            interleaved=False,
-            inplace=True,
-        )
+    Args:
+        dim (int): dimensionality of positional encoding. Should be head_dim // 2.
+        base (float, optional): frequency base for positional encodings. Defaults to 10_000.0
+        interleaved (bool, optional): indicates whether to rotate pairs of even and odd dimensions (True, GPT-J style)
+            instead of 1st half and 2nd half (False, GPT-NeoX style). Defaults to False.
+        device (torch.device, optional): device on which to allocate the frequency buffer. Defaults to None (cpu).
 
-        ctx.save_for_backward(cos, sin, cu_seqlens)
-        ctx.max_seqlen = max_seqlen
-        return qkv
-
-    @staticmethod
-    def backward(ctx: Any, do: Any) -> Any:
-        """Backward pass."""
-        cos, sin, cu_seqlens = ctx.saved_tensors
-        do = do.contiguous()
-        total_nnz, _three, _nheads, headdim = do.shape
-        # We need dqkv to be contiguous so that when we reshape to combine (3, nheads) dimensions,
-        # we get the same tensor
-        dqk = do[:, :2].view(total_nnz, -1, headdim)
-        apply_rotary(
-            dqk,
-            cos,
-            sin,
-            seqlen_offsets=0,
-            cu_seqlens=cu_seqlens,
-            max_seqlen=ctx.max_seqlen,
-            interleaved=False,
-            inplace=True,
-            conjugate=True,
-        )
-
-        return do, None, None, None, None, None, None
-
-
-def apply_rotary_unpadded(
-    qkv: "torch.Tensor",
-    cos: "torch.Tensor",
-    sin: "torch.Tensor",
-    cu_seqlens: "torch.Tensor | None" = None,
-    max_seqlen: int | None = None,
-) -> "torch.Tensor":
-    """Apply rotary positional encoding to unpadded qkv tensors.
-
-    Arguments:
-        qkv: (total_nnz, 3, nheads, headdim) - input tensor for packed QKV.
-        cos: (seqlen_rotary, rotary_dim / 2)
-        sin: (seqlen_rotary, rotary_dim / 2)
-        interleaved: if True, rotate pairs of even and odd dimensions (GPT-J style) instead
-            of 1st half and 2nd half (GPT-NeoX style).
-        inplace: if True, apply rotary embedding in-place.
-        seqlen_offsets: (batch_size,) or int. Each sequence in x is shifted by this amount.
-            Most commonly used in inference when we have KV cache.
-        cu_seqlens: (batch + 1,) or None
-        max_seqlen: int
-    Return:
-        out: (total_nnz, dim)
-    rotary_dim must be <= headdim
-    Apply rotary embedding to the first rotary_dim of x.
-
+    References:
+        - "RoFormer: Enhanced Transformer with Rotary Position Embedding" (https://arxiv.org/abs/2104.09864)
+        - "GPT-NeoX-20B: An Open-Source Autoregressive Language Model" (https://arxiv.org/abs/2204.06745)
     """
-    return ApplyRotaryEmbUnpad.apply(qkv, cos, sin, cu_seqlens, max_seqlen)
-
-
-class RotaryEmbedding(FlashRotaryEmbedding):
-    """The rotary position embeddings applied directly to unpadded sequences."""
 
     def __init__(
         self,
         dim: int,
-        base: float = 10000.0,
-        max_seqlen: int | None = None,
-        device: "torch.device | None" = None,
-        dtype: "torch.dtype | None" = None,
+        base: float | None = 10_000.0,
+        interleaved: bool | None = False,
+        max_seq_len: int = 512,
+        device: "device | str" = "cuda",
     ):
-        super().__init__(dim=dim, base=base, device=device, interleaved=False)
-        self.max_seqlen = max_seqlen
+        super().__init__()
+        self.interleaved = interleaved
+        inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2, device=device, dtype=torch.float32) / dim))
+        self.register_buffer("_inv_freq", inv_freq, persistent=False)
 
-        if max_seqlen is not None and device is not None and dtype is not None:
-            self._update_cos_sin_cache(max_seqlen, device=device, dtype=dtype)
+        self._seq_len_cached = max_seq_len
+        self._cos_cached = None
+        self._sin_cached = None
+        self._update_cos_sin_cache(max_seq_len, device, torch.float32)
+
+    def _update_cos_sin_cache(
+        self, seqlen: int, device: "device | str | None" = None, dtype: "dtype | None" = None
+    ) -> None:
+        """Recompute the sin/cos cache if the device or maximum sequence length changed.
+
+        Args:
+            seqlen (int): maximum sequence length to update the buffers to.
+            device (torch.device, optional): device on which to allocate the frequency buffer. Defaults to None.
+            dtype (torch.dtype, optional): type with which to allocate the frequency buffer. Defaults to None.
+        """
+        if (
+            seqlen > self._seq_len_cached
+            or self._cos_cached is None
+            or self._cos_cached.device != device
+            or self._cos_cached.dtype != dtype
+            or (self.training and self._cos_cached.is_inference())
+        ):
+            self._seq_len_cached = seqlen
+            t = torch.arange(seqlen, device=device, dtype=torch.float32)
+            freqs = torch.outer(t, self._inv_freq)
+            self._cos_cached = torch.cos(freqs).to(dtype)
+            self._sin_cached = torch.sin(freqs).to(dtype)
 
     def forward(
         self,
-        qkv: "torch.Tensor",
-        cu_seqlens: "torch.Tensor",
+        qkv: "Tensor",
+        num_heads: int,
+        head_dim: int,
+        cu_seqlens: "Tensor | None" = None,
         max_seqlen: int | None = None,
-    ) -> "torch.Tensor":
-        """Apply rotary embedding inplace to qkv."""
+    ) -> "Tensor | tuple[Tensor, Tensor]":
+        """Apply rotary positional encoding to qkv.
+
+        Args:
+            qkv (Tensor, shape [batch, seqlen, 3 * num_heads * head_dim] if padded or
+                shape [total_seqlen, 3 * num_heads * head_dim] if unpadded): combined query/key/value tensor.
+            number
+            cu_seqlens (Tensor, shape [total_seq_len + 1,], optional): Cumulative sequence lengths if qkv is unpadded.
+                Defaults to None.
+            max_seqlen (int, optional): Maximum sequence length in batch. Defaults to None.
+
+        Returns:
+            Tensor, same shape as qkv; qkv with rotary position encoding applied.
+        """
         if max_seqlen is not None:
             self._update_cos_sin_cache(max_seqlen, device=qkv.device, dtype=qkv.dtype)
-
-        qkv = apply_rotary_unpadded(
-            qkv,
+        if cu_seqlens is not None:  # Unpadded
+            q, k, v = rearrange(qkv, "s (t h d) -> t s h d", t=3, h=num_heads, d=head_dim)
+        else:
+            batch_size, seq_len, _ = qkv.shape
+            q, k, v = rearrange(qkv, "b s (t h d) -> t b s h d", b=batch_size, s=seq_len, t=3, h=num_heads, d=head_dim)
+        q = apply_rotary(
+            q,
             self._cos_cached,
             self._sin_cached,
+            interleaved=self.interleaved,
             cu_seqlens=cu_seqlens,
             max_seqlen=max_seqlen,
         )
-
+        k = apply_rotary(
+            k,
+            self._cos_cached,
+            self._sin_cached,
+            interleaved=self.interleaved,
+            cu_seqlens=cu_seqlens,
+            max_seqlen=max_seqlen,
+        )
+        if cu_seqlens is not None:
+            qkv = rearrange(torch.stack([q, k, v], 0), "t s h d -> s (t h d)", t=3, h=num_heads, d=head_dim)
+        else:
+            batch_size, seq_len, _ = qkv.shape
+            qkv = rearrange(
+                torch.stack([q, k, v], 0),
+                "t b s h d -> b s (t h d)",
+                b=batch_size,
+                s=seq_len,
+                t=3,
+                h=num_heads,
+                d=head_dim,
+            )
         return qkv
 
-    def extra_repr(self) -> str:
-        """Construct string representation."""
-        return f"dim={self.dim}, base={self.base}, scale_base={self.scale_base}"
+
+__all__ = ["SinusoidalPositionalEncoding", "LearnedPositionalEncoding", "get_alibi_slopes", "RotaryPositionalEncoding"]
