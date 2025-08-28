@@ -1,7 +1,9 @@
-"""Attention backend implementations with unified interface."""
+"""Attention _backend implementations with unified interface."""
 
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING
+
+from bertblocks import BertBlocksConfig
 
 if TYPE_CHECKING:
     from torch import Tensor
@@ -93,7 +95,7 @@ class AttentionBackend(ABC):
 
 
 class FlashBackend(AttentionBackend):
-    """Flash Attention 2 backend."""
+    """Flash Attention 2 _backend."""
 
     def _forward_unpadded(
         self,
@@ -136,12 +138,12 @@ class FlashBackend(AttentionBackend):
         dropout_p: float = 0.0,
         deterministic: bool = False,
     ) -> "tuple[Tensor, Tensor | None]":  # type: ignore
-        """FlashAttention backend does not support unpadded sequences."""
+        """FlashAttention _backend does not support unpadded sequences."""
         raise NotImplementedError
 
 
 class SDPABackend(AttentionBackend):
-    """PyTorch SDPA backend - works efficiently with padded sequences."""
+    """PyTorch SDPA _backend - works efficiently with padded sequences."""
 
     def _forward_padded(
         self,
@@ -168,12 +170,12 @@ class SDPABackend(AttentionBackend):
         return output, None
 
     def _forward_unpadded(self, *args, **kwargs):  # type: ignore
-        """SDPA backend does not support unpadded sequences."""
+        """SDPA _backend does not support unpadded sequences."""
         raise NotImplementedError
 
 
 class EagerBackend(AttentionBackend):
-    """Native PyTorch backend."""
+    """Native PyTorch _backend."""
 
     def _forward_padded(
         self,
@@ -208,13 +210,40 @@ class EagerBackend(AttentionBackend):
         return output, None
 
     def _forward_unpadded(self, *args, **kwargs):  # type: ignore
-        """Eager backend does not support unpadded sequences."""
+        """Eager _backend does not support unpadded sequences."""
         raise NotImplementedError
 
 
-# Registry of available backends
-ATTENTION_BACKENDS = {
-    "fa2": FlashBackend(),
-    "sdpa": SDPABackend(),
-    "eager": EagerBackend(),
-}
+def get_attention(config: "BertBlocksConfig") -> "AttentionBackend":
+    """Get the Attention backend specified in the configuration.
+
+    This factory function returns the appropriate attention backend based on
+    the configuration.
+
+    Args:
+        config (BertBlocksConfig): Configuration object determining model hyperparameters.
+
+    Returns:
+        An attention backend module.
+
+    Raises:
+        ValueError: If the specified attention backend is not supported.
+
+    Supported backends:
+
+        - `fa2`: Flash Attention
+        - `sdpa`: torch scaled dot product attention
+        - `eager`: native torch attention
+
+    """
+    match config.attn_implementation:
+        case "fa2":
+            return FlashBackend()
+        case "sdpa":
+            return SDPABackend()
+        case "eager":
+            return EagerBackend()
+        case _:
+            raise ValueError(
+                f"Unsupported _backend: {config.attn_implementation}, expected one of 'sdpa', 'eager', 'fa2'"
+            )

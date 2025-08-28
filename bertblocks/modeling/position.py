@@ -2,10 +2,10 @@ import math
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from torch import Tensor, device, dtype
+    from torch import device, dtype
 
 import torch
-from einops import rearrange, repeat
+from einops import einsum, rearrange, repeat
 from torch import Tensor, nn
 from transformers.modeling_utils import is_flash_attn_2_available
 
@@ -158,16 +158,17 @@ class SinusoidalPositionalEncoding(nn.Module):
 
 
 class LearnedPositionalEncoding(nn.Module):
-    """Learned Positional Encodings."""
+    """Learned Positional Encodings.
 
-    def __init__(self, dim: int, max_seq_len: int):
-        """Initialize learned positional encodings.
+    Attributes:
+        embd (nn.Embedding): The embedding layer encoding position.
 
-        Args:
+    Args:
             dim (int): Hidden size of the model.
             max_seq_len (int): Maximum sequence length for the model.
+    """
 
-        """
+    def __init__(self, dim: int, max_seq_len: int):
         super().__init__()
         self.embd = nn.Embedding(max_seq_len, dim)
 
@@ -207,24 +208,66 @@ class LearnedPositionalEncoding(nn.Module):
         return x + self.embd(pos_ids)
 
 
-def get_alibi_slopes(
-    nheads: int, device: "torch.device | str" = "cuda", dtype: "torch.dtype" = torch.float32
-) -> "torch.Tensor":
-    """Construct ALiBi slopes."""
+class AlibiPositionalEncoding(nn.Module):
+    """Alibi Positional Encodings.
 
-    def __inner__(nheads: int) -> list:
-        base = 2 ** (-(2 ** -(math.log2(nheads) - 3)))
-        return [base * base**i for i in range(nheads)]
+    Attributes:
+        slopes (torch.Tensor): The alibi slope tensor indicating degree of positional bias for each head.
 
-    if math.log2(nheads).is_integer():
-        out = __inner__(nheads)
-    else:
-        # If not a power of 2, find the closest one
-        po2 = 2 ** math.floor(math.log2(nheads))
-        # Fill remaining to actual head size with doubled base value and step size
-        out = __inner__(po2) + __inner__(2 * po2)[0::2][: nheads - po2]
+    Args:
+        num_heads (int): Number of attention heads.
 
-    return torch.Tensor(out).to(device=device, dtype=dtype)
+    """
+
+    slopes: torch.Tensor
+
+    def __init__(self, num_heads: int):
+        super().__init__()
+        slopes = self.get_slopes(num_heads)
+        self.register_buffer("slopes", slopes, persistent=False)
+
+    @staticmethod
+    def get_slopes(
+        num_heads: int, device: "torch.device | str" = "cuda", dtype: "torch.dtype" = torch.float32
+    ) -> "torch.Tensor":
+        """Construct ALiBi slopes."""
+
+        def __inner__(num_heads: int) -> list:
+            base = 2 ** (-(2 ** -(math.log2(num_heads) - 3)))
+            return [base * base**i for i in range(num_heads)]
+
+        if math.log2(num_heads).is_integer():
+            out = __inner__(num_heads)
+        else:
+            # If not a power of 2, find the closest one
+            po2 = 2 ** math.floor(math.log2(num_heads))
+            # Fill remaining to actual head size with doubled base value and step size
+            out = __inner__(po2) + __inner__(2 * po2)[0::2][: num_heads - po2]
+
+        return torch.Tensor(out).to(device=device, dtype=dtype)
+
+    def forward(self, attention_mask: "torch.Tensor") -> "torch.Tensor":
+        """Add AliBi biases to a given attention mask.
+
+        Args:
+            attention_mask (torch.Tensor, shape [batch_size, num_heads, seq_len, seq_len]): The attention mask.
+
+        Returns:
+            torch.Tensor: The attention mask after adding alibi biases. Same shape as input.
+        """
+        seqlen = attention_mask.shape[1]
+        pos = torch.arange(seqlen, device=attention_mask.device)
+        pos_diff = (pos.unsqueeze(0) - pos.unsqueeze(1)).abs()
+        alibi_bias = einsum(self.slopes, pos_diff, "h, i j -> h i j").unsqueeze(0)
+
+        if attention_mask.dtype == torch.bool:
+            attention_bias = torch.zeros_like(attention_mask, device=alibi_bias.device, dtype=alibi_bias.dtype)
+            attention_bias = attention_bias.masked_fill(~attention_mask, -float("inf"))
+        else:
+            attention_bias = attention_mask
+
+        attention_mask = attention_bias + alibi_bias
+        return attention_mask
 
 
 class RotaryPositionalEncoding(nn.Module):
@@ -304,8 +347,9 @@ class RotaryPositionalEncoding(nn.Module):
         Returns:
             Tensor, same shape as qkv; qkv with rotary position encoding applied.
         """
-        if max_seqlen is not None:
-            self._update_cos_sin_cache(max_seqlen, device=qkv.device, dtype=qkv.dtype)
+        # TODO: this yields a graph break and is not critically needed in a training setting, so disable it for now
+        # if max_seqlen is not None:
+        #    self._update_cos_sin_cache(max_seqlen, device=qkv.device, dtype=qkv.dtype)
         if cu_seqlens is not None:  # Unpadded
             q, k, v = rearrange(qkv, "s (t h d) -> t s h d", t=3, h=num_heads, d=head_dim)
         else:
@@ -343,4 +387,9 @@ class RotaryPositionalEncoding(nn.Module):
         return qkv
 
 
-__all__ = ["SinusoidalPositionalEncoding", "LearnedPositionalEncoding", "get_alibi_slopes", "RotaryPositionalEncoding"]
+__all__ = [
+    "SinusoidalPositionalEncoding",
+    "LearnedPositionalEncoding",
+    "AlibiPositionalEncoding",
+    "RotaryPositionalEncoding",
+]

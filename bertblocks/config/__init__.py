@@ -52,7 +52,7 @@ class BertBlocksConfig(PretrainedConfig):
         attn_out_bias: Whether to include bias terms in the output projection of attention layers.
         local_attention: Whether to include local attention mechanism. Default (-1, -1) means global attention.
         global_attention_every_n_layers: The layer step size for global attention.
-        unpadding: Whether to use sequence packing for higher throughput. Only supported for flash attention backend.
+        unpadding: Whether to use sequence packing for higher throughput. Only supported for flash attention _backend.
         initializer_kind: The initialization method for weights. Determines the type of
             distribution random weights are sampled from for initialization.
             Defaults to a truncated normal distribution.
@@ -92,7 +92,7 @@ class BertBlocksConfig(PretrainedConfig):
         classifier_dropout_prob: Dropout probability for the classification head. Applied to the
             pooled representation before the final classification layer. Helps prevent
             overfitting in downstream tasks. Must be between 0.0 and 1.0.
-        attn_implementation: Which backend implementation of attention to use; can be "fa2" for FlashAttention2,
+        attn_implementation: Which _backend implementation of attention to use; can be "fa2" for FlashAttention2,
             "sdpa" torch, or "eager" for manual implementation.
         problem_type: The problem type for automatic loss selection (HuggingFace standard).
             Automatically selects appropriate loss functions: "regression" (MSE loss for
