@@ -36,22 +36,13 @@ class AttentionBackend(ABC):
         """Whether this backend supports ALiBi positional bias."""
         pass
 
-    @property
-    @abstractmethod
-    def supports_local_attention(self) -> bool:
-        """Whether this backend supports local attention."""
-        pass
-
     def _compatible(
         self,
         alibi_slopes: "Tensor | None" = None,
-        local_attention: tuple[int, int] = (-1, -1),
         mode: Literal["unpadded", "padded"] | None = None,
     ) -> None:
         if alibi_slopes is not None and not self.supports_alibi:
             raise NotImplementedError(f"{self.__class__.__name__} does not support ALIBI positional encoding")
-        if local_attention != (-1, -1) and not self.supports_local_attention:
-            raise NotImplementedError(f"{self.__class__.__name__} does not support local attention")
         if mode == "unpadded" and not self.supports_unpadded:
             raise NotImplementedError(f"{self.__class__.__name__} does not support unpadded sequences")
         if mode == "padded" and not self.supports_padded:
@@ -70,7 +61,7 @@ class AttentionBackend(ABC):
         deterministic: bool = False,
     ) -> "tuple[Tensor, Tensor | None]":
         """Forward pass with unpadded sequences."""
-        self._compatible(alibi_slopes, local_attention, "unpadded")
+        self._compatible(alibi_slopes, "unpadded")
         return self._forward_unpadded(
             qkv,
             cu_seqlens,
@@ -95,7 +86,7 @@ class AttentionBackend(ABC):
         deterministic: bool = False,
     ) -> "tuple[Tensor, Tensor | None]":
         """Forward pass with padded sequences."""
-        self._compatible(alibi_slopes, local_attention, "padded")
+        self._compatible(alibi_slopes, "padded")
         return self._forward_padded(
             qkv,
             attention_mask,
@@ -134,11 +125,6 @@ class FlashBackend(AttentionBackend):
     @property
     def supports_alibi(self) -> bool:
         """Whether this backend supports ALiBi positional bias."""
-        return True
-
-    @property
-    def supports_local_attention(self) -> bool:
-        """Whether this backend supports local attention."""
         return True
 
     def _forward_unpadded(
@@ -221,11 +207,6 @@ class SDPABackend(AttentionBackend):
         """Whether this backend supports ALiBi positional bias."""
         return False
 
-    @property
-    def supports_local_attention(self) -> bool:
-        """Whether this backend supports local attention."""
-        return False
-
     def _forward_padded(
         self,
         qkv: "Tensor",
@@ -273,11 +254,6 @@ class EagerBackend(AttentionBackend):
     @property
     def supports_alibi(self) -> bool:
         """Whether this backend supports ALiBi positional bias."""
-        return True
-
-    @property
-    def supports_local_attention(self) -> bool:
-        """Whether this backend supports local attention."""
         return True
 
     def _forward_padded(
