@@ -273,31 +273,6 @@ class BertConfig(BertBlocksConfig):
 
     model_type = "bert"
 
-    @classmethod
-    def from_huggingface(cls, pretrained_model_name_or_path: str) -> "BertConfig":
-        """Instantiate an equivalent BertBlocks BertConfig from a pretrained HuggingFace config."""
-        from transformers import BertConfig
-
-        orig_config = BertConfig.from_pretrained(pretrained_model_name_or_path)
-        return cls(
-            vocab_size=orig_config.vocab_size,
-            max_sequence_length=orig_config.max_position_embeddings,
-            pad_token_id=orig_config.pad_token_id,
-            hidden_size=orig_config.hidden_size,
-            num_blocks=orig_config.num_hidden_layers,
-            intermediate_size=orig_config.intermediate_size,
-            num_attention_heads=orig_config.num_attention_heads,
-            pos_emb_kind=orig_config.position_embedding_type,
-            type_vocab_size=orig_config.type_vocab_size,
-            initializer_range=orig_config.initializer_range,
-            actv_fn=orig_config.hidden_act,
-            norm_eps=orig_config.layer_norm_eps,
-            emb_dropout_prob=orig_config.hidden_dropout_prob or 0.0,
-            attn_dropout_prob=orig_config.attention_probs_dropout_prob or 0.0,
-            hidden_dropout_prob=orig_config.hidden_dropout_prob or 0.0,
-            classifier_dropout_prob=orig_config.classifier_dropout or 0.0,
-        )
-
     def __init__(
         self,
         vocab_size: int = 28996,
@@ -316,6 +291,8 @@ class BertConfig(BertBlocksConfig):
         attn_dropout_prob: float = 0.1,
         hidden_dropout_prob: float = 0.1,
         classifier_dropout_prob: float = 0.1,
+        unpadding: bool = True,
+        attn_implementation: Literal["fa2", "eager", "sdpa"] = "fa2",
     ):
         super().__init__(
             # User-configurable args
@@ -348,6 +325,34 @@ class BertConfig(BertBlocksConfig):
             norm_kind="post",
             norm_fn="layer",
             norm_bias=True,
+            attn_implementation=attn_implementation,
+            unpadding=unpadding,
+        )
+
+    @classmethod
+    def from_huggingface(cls, pretrained_model_name_or_path: str) -> "BertConfig":
+        """Instantiate an equivalent BertBlocks BertConfig from a pretrained HuggingFace config."""
+        from transformers import BertConfig
+
+        orig_config = BertConfig.from_pretrained(pretrained_model_name_or_path)
+        return cls(
+            vocab_size=orig_config.vocab_size,
+            max_sequence_length=orig_config.max_position_embeddings,
+            pad_token_id=orig_config.pad_token_id,
+            hidden_size=orig_config.hidden_size,
+            num_blocks=orig_config.num_hidden_layers,
+            intermediate_size=orig_config.intermediate_size,
+            num_attention_heads=orig_config.num_attention_heads,
+            pos_emb_kind=orig_config.position_embedding_type,
+            type_vocab_size=orig_config.type_vocab_size,
+            initializer_range=orig_config.initializer_range,
+            actv_fn=orig_config.hidden_act,
+            norm_eps=orig_config.layer_norm_eps,
+            emb_dropout_prob=orig_config.hidden_dropout_prob or 0.0,
+            attn_dropout_prob=orig_config.attention_probs_dropout_prob or 0.0,
+            hidden_dropout_prob=orig_config.hidden_dropout_prob or 0.0,
+            classifier_dropout_prob=orig_config.classifier_dropout or 0.0,
+            unpadding=False,
             attn_implementation="sdpa",
         )
 
@@ -356,6 +361,70 @@ class ModernBertConfig(BertBlocksConfig):
     """BertBlocksConfig with default arguments applied for ModernBert architecture."""
 
     model_type = "modernbert"
+
+    def __init__(
+        self,
+        vocab_size: int,
+        max_sequence_length: int,
+        pad_token_id: int,
+        hidden_size: int,
+        num_blocks: int,
+        intermediate_size: int,
+        num_attention_heads: int,
+        pos_emb_kwargs: dict[str, Any],
+        mlp_in_bias: bool,
+        mlp_out_bias: bool,
+        attn_proj_bias: bool,
+        attn_out_bias: bool,
+        local_attention: tuple[int, int],
+        global_attention_every_n_layers: int,
+        initializer_range: float,
+        actv_fn: Literal["relu", "silu", "gelu", "leakyrelu", "selu", "logsigmoid", "sigmoid", "prelu"],
+        norm_eps: float,
+        norm_bias: bool,
+        emb_dropout_prob: float,
+        attn_dropout_prob: float,
+        hidden_dropout_prob: float,
+        classifier_dropout_prob: float,
+        unpadding: bool = True,
+        attn_implementation: Literal["fa2", "eager", "sdpa"] = "fa2",
+    ):
+        super().__init__(
+            vocab_size=vocab_size,
+            max_sequence_length=max_sequence_length,
+            pad_token_id=pad_token_id,
+            hidden_size=hidden_size,
+            num_blocks=num_blocks,
+            intermediate_size=intermediate_size,
+            num_attention_heads=num_attention_heads,
+            pos_emb_kwargs=pos_emb_kwargs,
+            mlp_in_bias=mlp_in_bias,
+            mlp_out_bias=mlp_out_bias,
+            attn_proj_bias=attn_proj_bias,
+            attn_out_bias=attn_out_bias,
+            local_attention=local_attention,
+            global_attention_every_n_layers=global_attention_every_n_layers,
+            initializer_range=initializer_range,
+            actv_fn=actv_fn,
+            norm_eps=norm_eps,
+            norm_bias=norm_bias,
+            emb_dropout_prob=emb_dropout_prob,
+            attn_dropout_prob=attn_dropout_prob,
+            hidden_dropout_prob=hidden_dropout_prob,
+            classifier_dropout_prob=classifier_dropout_prob,
+            # Hard-coded values for architecture compatibility
+            pos_emb_kind="rope",
+            add_token_type_emb=False,
+            mlp_type="glu",
+            initializer_kind="trunc_normal",
+            initializer_cutoff_factor=4.0,
+            initializer_gain=1.0,
+            norm_kind="pre",
+            norm_fn="layer",
+            include_final_norm=True,
+            attn_implementation=attn_implementation,
+            unpadding=unpadding,
+        )
 
     @classmethod
     def from_huggingface(cls, pretrained_model_name_or_path: str) -> "ModernBertConfig":
@@ -392,66 +461,7 @@ class ModernBertConfig(BertBlocksConfig):
             attn_dropout_prob=orig_config.attention_dropout or 0.0,
             hidden_dropout_prob=orig_config.mlp_dropout or 0.0,
             classifier_dropout_prob=orig_config.classifier_dropout or 0.0,
-        )
-
-    def __init__(
-        self,
-        vocab_size: int,
-        max_sequence_length: int,
-        pad_token_id: int,
-        hidden_size: int,
-        num_blocks: int,
-        intermediate_size: int,
-        num_attention_heads: int,
-        pos_emb_kwargs: dict[str, Any],
-        mlp_in_bias: bool,
-        mlp_out_bias: bool,
-        attn_proj_bias: bool,
-        attn_out_bias: bool,
-        local_attention: tuple[int, int],
-        global_attention_every_n_layers: int,
-        initializer_range: float,
-        actv_fn: Literal["relu", "silu", "gelu", "leakyrelu", "selu", "logsigmoid", "sigmoid", "prelu"],
-        norm_eps: float,
-        norm_bias: bool,
-        emb_dropout_prob: float,
-        attn_dropout_prob: float,
-        hidden_dropout_prob: float,
-        classifier_dropout_prob: float,
-    ):
-        super().__init__(
-            vocab_size=vocab_size,
-            max_sequence_length=max_sequence_length,
-            pad_token_id=pad_token_id,
-            hidden_size=hidden_size,
-            num_blocks=num_blocks,
-            intermediate_size=intermediate_size,
-            num_attention_heads=num_attention_heads,
-            pos_emb_kwargs=pos_emb_kwargs,
-            mlp_in_bias=mlp_in_bias,
-            mlp_out_bias=mlp_out_bias,
-            attn_proj_bias=attn_proj_bias,
-            attn_out_bias=attn_out_bias,
-            local_attention=local_attention,
-            global_attention_every_n_layers=global_attention_every_n_layers,
-            initializer_range=initializer_range,
-            actv_fn=actv_fn,
-            norm_eps=norm_eps,
-            norm_bias=norm_bias,
-            emb_dropout_prob=emb_dropout_prob,
-            attn_dropout_prob=attn_dropout_prob,
-            hidden_dropout_prob=hidden_dropout_prob,
-            classifier_dropout_prob=classifier_dropout_prob,
-            # Hard-coded values for architecture compatibility
-            pos_emb_kind="rope",
-            add_token_type_emb=False,
-            mlp_type="glu",
-            initializer_kind="trunc_normal",
-            initializer_cutoff_factor=4.0,
-            initializer_gain=1.0,
-            norm_kind="pre",
-            norm_fn="layer",
-            include_final_norm=True,
+            unpadding=True,
             attn_implementation="fa2",
         )
 

@@ -1,4 +1,7 @@
-from typing import TYPE_CHECKING
+from copy import deepcopy
+from typing import TYPE_CHECKING, Literal
+
+from bertblocks.modeling.model import convert_to_4d_attention_mask
 
 if TYPE_CHECKING:
     import torch
@@ -109,6 +112,110 @@ class Block(nn.Module):
         return x, w
 
 
+class EnhancedMaskingBlock(Block):
+    """A single transformer block.
+
+    Implements an enhanced masking transformer block which allows for custom
+    modifications of the attention mask.
+
+    Attributes:
+        layer_id (int): index position of the layer in the models' encoder stack.
+        attn (Attention): Attention module.
+        ffwd (nn.Module): Feed-forward module.
+        pre_norm_attn (nn.Module): Pre-normalization layer for attention module. Falls back to `nn.Identity` if not
+            configured.
+        pre_norm_ffwd (nn.Module): Pre-normalization layer for feed-forward module. Falls back to `nn.Identity` if not
+            configured.
+        post_norm_attn (nn.Module): Pre-normalization function for attention module. Falls back to `nn.Identity` if not
+            configured.
+        post_norm_ffwd (nn.Module): Post-normalization function for feed-forward module. Falls back to `nn.Identity` if
+            not configured.
+        attn_drop (nn.Dropout): Post-attention dropout layer. Falls back to `nn.Identity` if not configured.
+        ffwd_drop (nn.Dropout): Post-Feed-forward dropout layer. Falls back to `nn.Identity` if not configured.
+
+    Args:
+        config (BertBlocksConfig): Configuration object determining model hyperparameters. May be passed to
+            other submodules. Keys used at top level:
+
+                - `norm_kind`: Normalization layer type
+                - `attn_dropout_prob`: Dropout probability for attention layer
+                - `hidden_dropout_prob`: Dropout probability for feed-forward layers
+
+        layer_id (int): layer id indicating index in the encoder stack.
+        masking_strategy (str): Masking strategy to use.
+            Available options: "random".
+        masking_probability (float): Probability of masking tokens. Defaults to 0.5.
+
+    References:
+         - "Attention Is All You Need" (https://arxiv.org/pdf/1706.03762)
+         - "On Layer Normalization in the Transformer Architecture" (https://arxiv.org/pdf/2002.04745)
+         - Paper for enhanced masking?
+
+    """
+
+    def __init__(
+        self,
+        config: BertBlocksConfig,
+        layer_id: int,
+        masking_strategy: Literal["random"],
+        masking_probability: float = 0.5,
+    ):
+        config = deepcopy(config)
+        config.attn_implementation = "sdpa"
+        super().__init__(config, layer_id)
+        self.masking_strategy = masking_strategy
+        self.masking_probability = masking_probability
+
+    def forward(
+        self,
+        x: "torch.Tensor",
+        attention_mask: "torch.Tensor | None" = None,
+        cu_seqlens: "torch.Tensor | None" = None,
+        max_seq_len: int | None = None,
+    ) -> "tuple[torch.Tensor, torch.Tensor | None]":
+        """Forward pass of the transformer block.
+
+        Args:
+            x (torch.Tensor): Hidden state (unpadded or padded).
+            attention_mask (torch.Tensor | None): Attention mask (for padded sequences).
+            cu_seqlens (torch.Tensor | None): Cumulative sequence lengths (for unpadded sequences).
+            max_seq_len (int | None): Maximum sequence length (for unpadded sequences).
+
+        Returns:
+            tuple[torch.Tensor, torch.Tensor | None]:
+
+                - `output` (torch.Tensor): Transformed hidden state with same shape as input
+                - `attention_weights` (torch.Tensor | None): Attention weights
+
+        """
+        attention_mask = torch.ones(x.shape[:2], dtype=torch.bool) if attention_mask is None else attention_mask.bool()
+        attention_mask = convert_to_4d_attention_mask(attention_mask)
+        if attention_mask is None:
+            raise RuntimeError("Attention mask is required for an enhanced masking block.")
+        match self.masking_strategy:
+            case "random":
+                attention_mask = self._apply_random_mask(attention_mask)
+            case _:
+                raise ValueError(f"Unknown masking strategy: {self.masking_strategy}")
+        # set diagonal to 0 so that a token cannot attend to itself
+        attention_mask[..., range(attention_mask.shape[-2]), range(attention_mask.shape[-1])] = 0
+        return super().forward(x, attention_mask, cu_seqlens, max_seq_len)
+
+    def _apply_random_mask(self, attention_mask: "torch.Tensor") -> "torch.Tensor":
+        """Apply random masking to the attention mask.
+
+        Args:
+            attention_mask (torch.Tensor, shape [batch_size, seq_len]): The original attention mask.
+
+        Returns:
+            torch.Tensor: The modified attention mask with random masking applied.
+        """
+        attention_mask = attention_mask & (
+            torch.rand(attention_mask.shape, device=attention_mask.device) > self.masking_probability
+        )
+        return attention_mask
+
+
 class Encoder(nn.Module):
     """Multi-layer transformer encoder.
 
@@ -129,6 +236,12 @@ class Encoder(nn.Module):
     def __init__(self, config: "BertBlocksConfig"):
         super().__init__()
         self.blocks = nn.ModuleList([Block(config, layer_id) for layer_id in range(config.num_blocks)])
+
+        # Share rotary cache across layers
+        if config.pos_emb_kind == "rope":
+            for layer in self.blocks:
+                layer.attn.rotary_emb._cos_cached = self.blocks[0].attn.rotary_emb._cos_cached
+                layer.attn.rotary_emb._sin_cached = self.blocks[0].attn.rotary_emb._sin_cached
 
     def forward(
         self,
