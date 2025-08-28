@@ -22,25 +22,11 @@ from transformers.modeling_utils import PreTrainedModel
 
 from bertblocks.config import BertBlocksConfig
 from bertblocks.modeling.backends import ATTENTION_BACKENDS
-from bertblocks.modeling.block import Encoder, EnhancedMaskingBlock
+from bertblocks.modeling.block import Encoder, EnhancedMaskingBlock, convert_to_4d_attention_mask
 from bertblocks.modeling.embedding import TokenEmbedding
 from bertblocks.modeling.head import Pooler, get_prediction_head
 from bertblocks.modeling.loss import get_loss_function
 from bertblocks.modeling.padding import pad_output, unpad_input
-
-
-def convert_to_4d_attention_mask(attention_mask: torch.Tensor) -> torch.Tensor:
-    """Convert a 2D attention mask to 4D.
-
-    Args:
-        attention_mask (torch.Tensor, shape [batch_size, seq_length]): The input attention mask.
-
-    Returns:
-        torch.Tensor: The converted 4D attention mask.
-    """
-    attention_mask = attention_mask.unsqueeze(1) & attention_mask.unsqueeze(2)
-    attention_mask = attention_mask.unsqueeze(1)
-    return attention_mask
 
 
 class BertBlocksPreTrainedModel(PreTrainedModel):

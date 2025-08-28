@@ -1,18 +1,31 @@
 from copy import deepcopy
 from typing import TYPE_CHECKING, Literal
 
-from bertblocks.modeling.model import convert_to_4d_attention_mask
-
 if TYPE_CHECKING:
-    import torch
+    from torch import Tensor
 
     from bertblocks.config import BertBlocksConfig
 
+import torch
 from torch import nn
 
 from bertblocks.modeling.attention import Attention
 from bertblocks.modeling.mlp import get_mlp
 from bertblocks.modeling.norms import get_norm
+
+
+def convert_to_4d_attention_mask(attention_mask: "Tensor") -> "Tensor":
+    """Convert a 2D attention mask to 4D.
+
+    Args:
+        attention_mask (Tensor, shape [batch_size, seq_length]): The input attention mask.
+
+    Returns:
+        Tensor: The converted 4D attention mask.
+    """
+    attention_mask = attention_mask.unsqueeze(1) & attention_mask.unsqueeze(2)
+    attention_mask = attention_mask.unsqueeze(1)
+    return attention_mask
 
 
 class Block(nn.Module):
@@ -73,24 +86,24 @@ class Block(nn.Module):
 
     def forward(
         self,
-        x: "torch.Tensor",
-        attention_mask: "torch.Tensor | None" = None,
-        cu_seqlens: "torch.Tensor | None" = None,
+        x: "Tensor",
+        attention_mask: "Tensor | None" = None,
+        cu_seqlens: "Tensor | None" = None,
         max_seq_len: int | None = None,
-    ) -> "tuple[torch.Tensor, torch.Tensor | None]":
+    ) -> "tuple[Tensor, Tensor | None]":
         """Forward pass of the transformer block.
 
         Args:
-            x (torch.Tensor): Hidden state (unpadded or padded).
-            attention_mask (torch.Tensor | None): Attention mask (for padded sequences).
-            cu_seqlens (torch.Tensor | None): Cumulative sequence lengths (for unpadded sequences).
+            x (Tensor): Hidden state (unpadded or padded).
+            attention_mask (Tensor | None): Attention mask (for padded sequences).
+            cu_seqlens (Tensor | None): Cumulative sequence lengths (for unpadded sequences).
             max_seq_len (int | None): Maximum sequence length (for unpadded sequences).
 
         Returns:
-            tuple[torch.Tensor, torch.Tensor | None]:
+            tuple[Tensor, Tensor | None]:
 
-                - `output` (torch.Tensor): Transformed hidden state with same shape as input
-                - `attention_weights` (torch.Tensor | None): Attention weights
+                - `output` (Tensor): Transformed hidden state with same shape as input
+                - `attention_weights` (Tensor | None): Attention weights
 
         """
         # Attention component
@@ -155,7 +168,7 @@ class EnhancedMaskingBlock(Block):
 
     def __init__(
         self,
-        config: BertBlocksConfig,
+        config: "BertBlocksConfig",
         layer_id: int,
         masking_strategy: Literal["random"],
         masking_probability: float = 0.5,
@@ -168,24 +181,24 @@ class EnhancedMaskingBlock(Block):
 
     def forward(
         self,
-        x: "torch.Tensor",
-        attention_mask: "torch.Tensor | None" = None,
-        cu_seqlens: "torch.Tensor | None" = None,
+        x: "Tensor",
+        attention_mask: "Tensor | None" = None,
+        cu_seqlens: "Tensor | None" = None,
         max_seq_len: int | None = None,
-    ) -> "tuple[torch.Tensor, torch.Tensor | None]":
+    ) -> "tuple[Tensor, Tensor | None]":
         """Forward pass of the transformer block.
 
         Args:
-            x (torch.Tensor): Hidden state (unpadded or padded).
-            attention_mask (torch.Tensor | None): Attention mask (for padded sequences).
-            cu_seqlens (torch.Tensor | None): Cumulative sequence lengths (for unpadded sequences).
+            x (Tensor): Hidden state (unpadded or padded).
+            attention_mask (Tensor | None): Attention mask (for padded sequences).
+            cu_seqlens (Tensor | None): Cumulative sequence lengths (for unpadded sequences).
             max_seq_len (int | None): Maximum sequence length (for unpadded sequences).
 
         Returns:
-            tuple[torch.Tensor, torch.Tensor | None]:
+            tuple[Tensor, Tensor | None]:
 
-                - `output` (torch.Tensor): Transformed hidden state with same shape as input
-                - `attention_weights` (torch.Tensor | None): Attention weights
+                - `output` (Tensor): Transformed hidden state with same shape as input
+                - `attention_weights` (Tensor | None): Attention weights
 
         """
         attention_mask = torch.ones(x.shape[:2], dtype=torch.bool) if attention_mask is None else attention_mask.bool()
@@ -201,14 +214,14 @@ class EnhancedMaskingBlock(Block):
         attention_mask[..., range(attention_mask.shape[-2]), range(attention_mask.shape[-1])] = 0
         return super().forward(x, attention_mask, cu_seqlens, max_seq_len)
 
-    def _apply_random_mask(self, attention_mask: "torch.Tensor") -> "torch.Tensor":
+    def _apply_random_mask(self, attention_mask: "Tensor") -> "Tensor":
         """Apply random masking to the attention mask.
 
         Args:
-            attention_mask (torch.Tensor, shape [batch_size, seq_len]): The original attention mask.
+            attention_mask (Tensor, shape [batch_size, seq_len]): The original attention mask.
 
         Returns:
-            torch.Tensor: The modified attention mask with random masking applied.
+            Tensor: The modified attention mask with random masking applied.
         """
         attention_mask = attention_mask & (
             torch.rand(attention_mask.shape, device=attention_mask.device) > self.masking_probability
@@ -245,21 +258,21 @@ class Encoder(nn.Module):
 
     def forward(
         self,
-        x: "torch.Tensor",
-        attention_mask: "torch.Tensor | None",
-        cu_seqlens: "torch.Tensor | None",
+        x: "Tensor",
+        attention_mask: "Tensor | None",
+        cu_seqlens: "Tensor | None",
         max_seq_len: int | None,
         output_attentions: "bool | None" = False,
         output_hidden_states: "bool | None" = False,
-    ) -> "tuple[torch.Tensor, tuple[torch.Tensor, ...] | None, tuple[torch.Tensor, ...] | None]":
+    ) -> "tuple[Tensor, tuple[Tensor, ...] | None, tuple[Tensor, ...] | None]":
         """Forward pass of the encoder.
 
         Processes input hidden state sequentially through all transformer blocks.
 
         Args:
-            x (torch.Tensor): Hidden state (unpadded or padded).
-            attention_mask (torch.Tensor | None): Attention mask (for padded sequences).
-            cu_seqlens (torch.Tensor | None): Cumulative sequence lengths (for unpadded sequences).
+            x (Tensor): Hidden state (unpadded or padded).
+            attention_mask (Tensor | None): Attention mask (for padded sequences).
+            cu_seqlens (Tensor | None): Cumulative sequence lengths (for unpadded sequences).
             max_seq_len (int | None): Maximum sequence length (for unpadded sequences).
             output_attentions (bool | None, optional): Whether to return attention weights from
                 all layers. Defaults to False.
@@ -267,12 +280,12 @@ class Encoder(nn.Module):
                 all layers. Defaults to False.
 
         Returns:
-            tuple[torch.Tensor, tuple[torch.Tensor, ...] | None, tuple[torch.Tensor, ...] | None]:
+            tuple[Tensor, tuple[Tensor, ...] | None, tuple[Tensor, ...] | None]:
 
-                - `last_hidden_state` (torch.Tensor): Output of the final transformer layer.
-                - `all_hidden_states` (tuple[torch.Tensor, ...] | None): Hidden states from all layers
+                - `last_hidden_state` (Tensor): Output of the final transformer layer.
+                - `all_hidden_states` (tuple[Tensor, ...] | None): Hidden states from all layers
                   if output_hidden_states=True, None otherwise.
-                - `all_attentions` (tuple[torch.Tensor, ...] | None): Attention weights from all layers
+                - `all_attentions` (tuple[Tensor, ...] | None): Attention weights from all layers
                   if output_attentions=True, None otherwise.
 
         """
