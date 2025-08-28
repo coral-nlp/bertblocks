@@ -156,6 +156,7 @@ class BertBlocksModel(BertBlocksPreTrainedModel):
 
     def __init__(self, config: "BertBlocksConfig", add_pooling_layer: bool = False) -> None:
         super().__init__(config)
+        self.unpadding = config.unpadding
         self.embd = TokenEmbedding(config)
         self.encd = Encoder(config)
         self.norm = get_norm(config) if config.include_final_norm else nn.Identity()
@@ -224,8 +225,7 @@ class BertBlocksModel(BertBlocksPreTrainedModel):
         # Check if we need unpadded sequences (for FA2) or can work with padded sequences (SDPA/Native)
         backend = ATTENTION_BACKENDS[self.config.attn_implementation]
 
-        if backend.supports_unpadded:
-            # FA2 backend: Use unpadded sequences
+        if self.unpadding and backend.supports_unpadded:
             with torch.no_grad():
                 input_ids_unpadded, indices, cu_seqlens, max_seq_len = unpad_input(
                     input_ids, attention_mask, self.pad_token_id
@@ -238,19 +238,20 @@ class BertBlocksModel(BertBlocksPreTrainedModel):
             )
             x = self.norm(x)
 
-            # Pad output back to original format
             x = pad_output(x, indices, B, S)
             if output_hidden_states:
                 hidden_states = [pad_output(h, indices, B, S, self.pad_token_id) for h in hidden_states]
 
-        else:
-            # SDPA/Native backends: Work directly with padded sequences
+        elif not self.unpadding and backend.supports_unpadded:
             x = self.embd(input_ids, token_type_ids=token_type_ids)
 
             x, hidden_states, attentions = self.encd(
                 x, attention_mask, None, None, output_attentions, output_hidden_states
             )
             x = self.norm(x)
+
+        else:
+            raise ValueError("Model is loaded for unpadding mode, but attention backend does not support it.")
 
         if self.pool is not None:
             pooler_output = self.pool(x)

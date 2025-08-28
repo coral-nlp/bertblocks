@@ -1,9 +1,13 @@
-import torch
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from torch import Tensor
+
 from torch import nn
 
 from bertblocks.config import BertBlocksConfig
 from bertblocks.modeling.backends import ATTENTION_BACKENDS
-from bertblocks.modeling.position import RotaryEmbedding, get_alibi_slopes
+from bertblocks.modeling.position import PaddedRotaryEncoding, UnpaddedRotaryEncoding, get_alibi_slopes
 
 
 class Attention(nn.Module):
@@ -56,7 +60,7 @@ class Attention(nn.Module):
         self._initialize_pos_buffers(config, layer_id=layer_id)
         self.backend = ATTENTION_BACKENDS[config.attn_implementation]
 
-    def _initialize_pos_buffers(self, config: BertBlocksConfig, layer_id: int) -> None:
+    def _initialize_pos_buffers(self, config: "BertBlocksConfig", layer_id: int) -> None:
         """Initialize positional encoding buffers if needed.
 
         Args:
@@ -97,8 +101,10 @@ class Attention(nn.Module):
                             theta = (
                                 theta_local if layer_id % config.global_attention_every_n_layers != 0 else theta_global
                             )
-
-                        self.rotary_emb = RotaryEmbedding(dim=config.pos_emb_kwargs["dim"], base=theta)
+                        if config.unpadding:
+                            self.rotary_emb = UnpaddedRotaryEncoding(dim=config.pos_emb_kwargs["dim"], base=theta)
+                        else:
+                            self.rotary_emb = PaddedRotaryEncoding(dim=config.pos_emb_kwargs["dim"], base=theta)
                     case _:
                         raise NotImplementedError("Only flash attention is supported as backend for rotary encodings.")
             case _:
@@ -106,10 +112,10 @@ class Attention(nn.Module):
 
     def forward_unpadded(
         self,
-        x: torch.Tensor,
-        cu_seqlens: torch.Tensor,
+        x: "Tensor",
+        cu_seqlens: "Tensor",
         max_seq_len: int,
-    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+    ) -> "tuple[Tensor, Tensor | None]":
         """Forward pass with unpadded sequences."""
         qkv = self.proj(x)
         x, w = self.backend.forward_unpadded(
@@ -129,9 +135,9 @@ class Attention(nn.Module):
 
     def forward_padded(
         self,
-        x: torch.Tensor,
-        attention_mask: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        x: "Tensor",
+        attention_mask: "Tensor",
+    ) -> "tuple[Tensor, Tensor | None]":
         """Forward pass with padded sequences."""
         # Fused projection
         qkv = self.proj(x)
@@ -151,11 +157,11 @@ class Attention(nn.Module):
 
     def forward(
         self,
-        x: torch.Tensor,
-        attention_mask: torch.Tensor | None = None,
-        cu_seqlens: torch.Tensor | None = None,
+        x: "Tensor",
+        attention_mask: "Tensor | None" = None,
+        cu_seqlens: "Tensor | None" = None,
         max_seq_len: int | None = None,
-    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+    ) -> "tuple[Tensor, Tensor | None]":
         """Forward pass of the attention mechanism.
 
         Automatically routes to padded or unpadded implementation based on backend capabilities.

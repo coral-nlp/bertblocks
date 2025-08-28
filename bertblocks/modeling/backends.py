@@ -1,19 +1,20 @@
 """Attention backend implementations with unified interface."""
 
 from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from torch import Tensor
+
+    from bertblocks.modeling.position import PaddedRotaryEncoding, UnpaddedRotaryEncoding
 
 import torch
-from einops import einsum, rearrange
+from einops import einsum, pack, rearrange, unpack
 from transformers.modeling_attn_mask_utils import _prepare_4d_attention_mask_for_sdpa
 from transformers.modeling_utils import is_flash_attn_2_available
 
 if is_flash_attn_2_available():
-    from flash_attn import flash_attn_varlen_qkvpacked_func
-
-    # Otherwise triggers graph break?
-    torch._dynamo.config.capture_scalar_outputs = True
-
-from bertblocks.modeling.position import RotaryEmbedding
+    from flash_attn import flash_attn_qkvpacked_func, flash_attn_varlen_qkvpacked_func
 
 
 class AttentionBackend(ABC):
@@ -51,17 +52,17 @@ class AttentionBackend(ABC):
 
     def forward_unpadded(
         self,
-        qkv: torch.Tensor,
-        cu_seqlens: torch.Tensor,
+        qkv: "Tensor",
+        cu_seqlens: "Tensor",
         max_seq_len: int,
         num_heads: int,
         head_dim: int,
-        rotary_emb: RotaryEmbedding | None = None,
-        alibi_slopes: torch.Tensor | None = None,
+        rotary_emb: "UnpaddedRotaryEncoding | None" = None,
+        alibi_slopes: "Tensor | None" = None,
         local_attention: tuple[int, int] = (-1, -1),
         dropout_p: float = 0.0,
         deterministic: bool = False,
-    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+    ) -> "tuple[Tensor, Tensor | None]":
         """Forward pass with unpadded sequences."""
         if not self.supports_unpadded:
             raise NotImplementedError(f"{self.__class__.__name__} does not support unpadded sequences")
@@ -80,16 +81,16 @@ class AttentionBackend(ABC):
 
     def forward_padded(
         self,
-        qkv: torch.Tensor,
-        attention_mask: torch.Tensor,
+        qkv: "Tensor",
+        attention_mask: "Tensor",
         num_heads: int,
         head_dim: int,
-        rotary_emb: RotaryEmbedding | None = None,
-        alibi_slopes: torch.Tensor | None = None,
+        rotary_emb: "PaddedRotaryEncoding | None" = None,
+        alibi_slopes: "Tensor | None" = None,
         local_attention: tuple[int, int] = (-1, -1),
         dropout_p: float = 0.0,
         deterministic: bool = False,
-    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+    ) -> "tuple[Tensor, Tensor | None]":
         """Forward pass with padded sequences."""
         if not self.supports_padded:
             raise NotImplementedError(f"{self.__class__.__name__} does not support padded sequences")
@@ -106,12 +107,12 @@ class AttentionBackend(ABC):
         )
 
     @abstractmethod
-    def _forward_unpadded(self, *args, **kwargs) -> tuple[torch.Tensor, torch.Tensor | None]:  # type: ignore
+    def _forward_unpadded(self, *args, **kwargs) -> "tuple[Tensor, Tensor | None]":  # type: ignore
         """Implement the unpadded forward pass."""
         pass
 
     @abstractmethod
-    def _forward_padded(self, *args, **kwargs) -> tuple[torch.Tensor, torch.Tensor | None]:  # type: ignore
+    def _forward_padded(self, *args, **kwargs) -> "tuple[Tensor, Tensor | None]":  # type: ignore
         """Implement the padded forward pass."""
         pass
 
@@ -127,7 +128,7 @@ class FlashBackend(AttentionBackend):
     @property
     def supports_padded(self) -> bool:
         """Whether this backend supports padded sequences."""
-        return False
+        return True
 
     @property
     def supports_alibi(self) -> bool:
@@ -146,25 +147,27 @@ class FlashBackend(AttentionBackend):
 
     def _forward_unpadded(
         self,
-        qkv: torch.Tensor,
-        cu_seqlens: torch.Tensor,
+        qkv: "Tensor",
+        cu_seqlens: "Tensor",
         max_seq_len: int,
         num_heads: int,
         head_dim: int,
-        rotary_emb: RotaryEmbedding | None = None,
-        alibi_slopes: torch.Tensor | None = None,
+        rotary_emb: "UnpaddedRotaryEncoding | None" = None,
+        alibi_slopes: "Tensor | None" = None,
         local_attention: tuple[int, int] = (-1, -1),
         dropout_p: float = 0.0,
         deterministic: bool = False,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Flash attention forward pass."""
-        qkv = rearrange(qkv, "... (t h d) -> ... t h d", t=3, h=num_heads, d=head_dim)
-
-        if rotary_emb is not None:
-            qkv = rotary_emb(qkv, cu_seqlens, max_seq_len)
-
+    ) -> "tuple[Tensor, Tensor]":
+        """Flash attention forward pass without padding."""
+        qkv = rearrange(qkv, "s (t h d) -> s t h d", t=3, h=num_heads, d=head_dim)
         orig_dtype = qkv.dtype
         qkv = qkv.to(torch.bfloat16)
+
+        if rotary_emb is not None:
+            q, k, v = unpack(qkv, ((), (), ()), "s * h d")
+            q = rotary_emb(q, cu_seqlens, max_seq_len)
+            k = rotary_emb(k, cu_seqlens, max_seq_len)
+            qkv, _ = pack([q, k, v], "s * h d")
 
         x, _, w = flash_attn_varlen_qkvpacked_func(
             qkv,
@@ -180,13 +183,43 @@ class FlashBackend(AttentionBackend):
         )
 
         x = x.to(orig_dtype)
-        x = rearrange(x, "... h d -> ... (h d)")
+        x = rearrange(x, "s h d -> s (h d)")
         return x, w
 
-    def _forward_padded(self, *args, **kwargs) -> tuple[torch.Tensor, torch.Tensor | None]:  # type: ignore
-        """Flash attention does not support padded sequences."""
-        # TODO: this would be possible.
-        raise NotImplementedError("Flash attention only supports unpadded sequences")
+    def _forward_padded(
+        self,
+        qkv: "Tensor",
+        attention_mask: "Tensor",
+        num_heads: int,
+        head_dim: int,
+        rotary_emb: "PaddedRotaryEncoding | None" = None,
+        alibi_slopes: "Tensor | None" = None,
+        local_attention: tuple[int, int] = (-1, -1),
+        dropout_p: float = 0.0,
+        deterministic: bool = False,
+    ) -> "tuple[Tensor, Tensor | None]":  # type: ignore
+        """Forward pass for flash attention with padding."""
+        orig_dtype = qkv.dtype
+        qkv = qkv.to(torch.bfloat16)
+
+        qkv = rearrange(qkv, "b s (t h d) -> b s t h d", t=3, h=num_heads, d=head_dim)
+        if rotary_emb is not None:
+            qkv = rotary_emb(qkv)
+
+        x, _, w = flash_attn_qkvpacked_func(
+            qkv,
+            dropout_p=dropout_p,
+            causal=False,
+            softcap=0.0,
+            window_size=local_attention,
+            alibi_slopes=alibi_slopes,
+            deterministic=deterministic,
+            return_attn_probs=True,
+        )
+
+        x = x.to(orig_dtype)
+        x = rearrange(x, "b s h d -> b s (h d)")
+        return x, w
 
 
 class SDPABackend(AttentionBackend):
@@ -219,16 +252,16 @@ class SDPABackend(AttentionBackend):
 
     def _forward_padded(
         self,
-        qkv: torch.Tensor,
-        attention_mask: torch.Tensor,
+        qkv: "Tensor",
+        attention_mask: "Tensor",
         num_heads: int,
         head_dim: int,
-        rotary_emb: RotaryEmbedding | None = None,
-        alibi_slopes: torch.Tensor | None = None,
+        rotary_emb: "PaddedRotaryEncoding | None" = None,
+        alibi_slopes: "Tensor | None" = None,
         local_attention: tuple[int, int] = (-1, -1),
         dropout_p: float = 0.0,
         deterministic: bool = False,
-    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+    ) -> "tuple[Tensor, Tensor | None]":
         """SDPA forward pass with padded sequences."""
         if rotary_emb is not None:
             raise NotImplementedError("RoPE is not supported with SDPA backend")
@@ -252,7 +285,7 @@ class SDPABackend(AttentionBackend):
         output = rearrange(output, "b h s d -> b s (h d)")
         return output, None
 
-    def _forward_unpadded(self, *args, **kwargs) -> tuple[torch.Tensor, torch.Tensor | None]:  # type: ignore
+    def _forward_unpadded(self, *args, **kwargs) -> "tuple[Tensor, Tensor | None]":  # type: ignore
         """SDPA backend does not support unpadded sequences."""
         raise NotImplementedError("SDPA backend only supports padded sequences")
 
@@ -287,16 +320,16 @@ class EagerBackend(AttentionBackend):
 
     def _forward_padded(
         self,
-        qkv: torch.Tensor,
-        attention_mask: torch.Tensor,
+        qkv: "Tensor",
+        attention_mask: "Tensor",
         num_heads: int,
         head_dim: int,
-        rotary_emb: RotaryEmbedding | None = None,
-        alibi_slopes: torch.Tensor | None = None,
+        rotary_emb: "PaddedRotaryEncoding | None" = None,
+        alibi_slopes: "Tensor | None" = None,
         local_attention: tuple[int, int] = (-1, -1),
         dropout_p: float = 0.0,
         deterministic: bool = False,
-    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+    ) -> "tuple[Tensor, Tensor | None]":
         """Eager attention forward pass with padded sequences."""
         if rotary_emb is not None:
             raise NotImplementedError("Eager backedn does not support RoPE positional encoding")
@@ -328,7 +361,7 @@ class EagerBackend(AttentionBackend):
         output = rearrange(output, "b h s d -> b s (h d)")
         return output, None
 
-    def _forward_unpadded(self, *args, **kwargs) -> tuple[torch.Tensor, torch.Tensor | None]:  # type: ignore
+    def _forward_unpadded(self, *args, **kwargs) -> "tuple[Tensor, Tensor | None]":  # type: ignore
         """Eager backend does not support unpadded sequences."""
         raise NotImplementedError("Eager backend only supports padded sequences")
 

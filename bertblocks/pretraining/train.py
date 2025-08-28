@@ -221,6 +221,7 @@ class BertBlocksPretrainingModule(L.LightningModule):
         self.model = BertBlocksForMaskedLM(self.model_config)
         if self.hparams.compile_model:
             torch.set_float32_matmul_precision("high")
+            # torch._dynamo.config.capture_dynamic_output_shape_ops = True
             self.model = torch.compile(self.model, dynamic=True)
 
     def configure_optimizers(self) -> tuple[list["torch.optim.Optimizer"], list[dict[str, Any]]]:

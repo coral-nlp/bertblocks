@@ -52,6 +52,7 @@ class BertBlocksConfig(PretrainedConfig):
         attn_out_bias: Whether to include bias terms in the output projection of attention layers.
         local_attention: Whether to include local attention mechanism. Default (-1, -1) means global attention.
         global_attention_every_n_layers: The layer step size for global attention.
+        unpadding: Whether to use sequence packing for higher throughput. Only supported for flash attention backend.
         initializer_kind: The initialization method for weights. Determines the type of
             distribution random weights are sampled from for initialization.
             Defaults to a truncated normal distribution.
@@ -129,6 +130,7 @@ class BertBlocksConfig(PretrainedConfig):
         attn_out_bias: bool = True,
         local_attention: tuple[int, int] = (-1, -1),
         global_attention_every_n_layers: int = 0,
+        unpadding: bool = False,
         initializer_kind: Literal[
             "trunc_normal", "kaiming_normal", "kaiming_uniform", "xavier_normal", "xavier_uniform"
         ] = "trunc_normal",
@@ -208,6 +210,8 @@ class BertBlocksConfig(PretrainedConfig):
             raise ValueError(
                 f"If 'learned_alibi' is used, attn_implementation must be 'eager', got {attn_implementation}"
             )
+        if unpadding and not attn_implementation == "fa2":
+            raise ValueError(f"When using unpadding, `attn_implementation` must be 'fa2', got {attn_implementation}")
 
         super().__init__(**kwargs)
         # Input parameters
@@ -232,6 +236,7 @@ class BertBlocksConfig(PretrainedConfig):
         self.attn_out_bias = attn_out_bias
         self.local_attention = local_attention
         self.global_attention_every_n_layers = global_attention_every_n_layers
+        self.unpadding = unpadding
         # Initialization parameters
         self.initializer_kind = initializer_kind
         self.initializer_range = initializer_range
