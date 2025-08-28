@@ -312,6 +312,8 @@ class BertConfig(BertBlocksConfig):
             attn_dropout_prob=attn_dropout_prob or 0.0,
             hidden_dropout_prob=hidden_dropout_prob or 0.0,
             classifier_dropout_prob=classifier_dropout_prob or 0.0,
+            attn_implementation=attn_implementation,
+            unpadding=unpadding,
             # Hardcoded args for architecture compatibility
             add_token_type_emb=True,
             mlp_type="mlp",
@@ -325,8 +327,6 @@ class BertConfig(BertBlocksConfig):
             norm_kind="post",
             norm_fn="layer",
             norm_bias=True,
-            attn_implementation=attn_implementation,
-            unpadding=unpadding,
         )
 
     @classmethod
@@ -412,6 +412,8 @@ class ModernBertConfig(BertBlocksConfig):
             attn_dropout_prob=attn_dropout_prob,
             hidden_dropout_prob=hidden_dropout_prob,
             classifier_dropout_prob=classifier_dropout_prob,
+            attn_implementation=attn_implementation,
+            unpadding=unpadding,
             # Hard-coded values for architecture compatibility
             pos_emb_kind="rope",
             add_token_type_emb=False,
@@ -422,8 +424,6 @@ class ModernBertConfig(BertBlocksConfig):
             norm_kind="pre",
             norm_fn="layer",
             include_final_norm=True,
-            attn_implementation=attn_implementation,
-            unpadding=unpadding,
         )
 
     @classmethod

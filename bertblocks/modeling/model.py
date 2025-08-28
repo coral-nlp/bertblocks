@@ -156,7 +156,6 @@ class BertBlocksModel(BertBlocksPreTrainedModel):
 
     def __init__(self, config: "BertBlocksConfig", add_pooling_layer: bool = False) -> None:
         super().__init__(config)
-        self.unpadding = config.unpadding
         self.embd = TokenEmbedding(config)
         self.encd = Encoder(config)
         self.norm = get_norm(config) if config.include_final_norm else nn.Identity()
@@ -225,7 +224,7 @@ class BertBlocksModel(BertBlocksPreTrainedModel):
 
         backend = ATTENTION_BACKENDS[self.config.attn_implementation]
 
-        if self.unpadding and backend.supports_unpadded:
+        if self.config.unpadding and backend.supports_unpadded:
             with torch.no_grad():
                 input_ids_unpadded, indices, cu_seqlens, max_seq_len = unpad_input(
                     input_ids, attention_mask, self.pad_token_id
@@ -242,7 +241,7 @@ class BertBlocksModel(BertBlocksPreTrainedModel):
             if output_hidden_states:
                 hidden_states = [pad_output(h, indices, B, S, self.pad_token_id) for h in hidden_states]
 
-        elif not self.unpadding and backend.supports_unpadded:
+        elif not self.config.unpadding and backend.supports_padded:
             x = self.embd(input_ids, token_type_ids=token_type_ids)
 
             attention_mask = (
