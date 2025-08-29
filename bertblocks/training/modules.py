@@ -1,32 +1,18 @@
-"""Masked Language Modeling (MLM) pretraining implementation for BertBlocks.
+from typing import TYPE_CHECKING, Any, Literal
 
-This module provides a complete MLM pretraining setup using PyTorch Lightning,
-including data loading, model configuration, optimization, and training logic.
-It supports streaming datasets, flexible model compilation, and various
-optimization strategies.
-
-The implementation includes:
-
-    - MaskedLanguageModelingCollator for dynamic masking
-    - BertBlocksPretrainingDataModule for data loading
-    - BertBlocksPretrainingModule for training logic
-    - Support for model compilation and advanced optimization
-
-"""
+if TYPE_CHECKING:
+    from torchmetrics import MetricCollection
 
 import functools
 import os.path
-from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Literal
 
 import lightning as L
 import torch
 import torchmetrics
 from datasets import load_dataset
 from lightning.pytorch.utilities import grad_norm
-from torch.utils.data import DataLoader
-from torchmetrics import MetricCollection
+from torch.utils.data import DataLoader, Dataset
 from transformers import (
     AutoModelForQuestionAnswering,
     AutoModelForSequenceClassification,
@@ -39,11 +25,27 @@ from transformers.trainer_pt_utils import get_parameter_names
 from bertblocks.config import BertBlocksConfig
 from bertblocks.modeling.model import get_model_cls
 from bertblocks.modeling.norms import DeepNorm, DynamicTanhNorm, GroupNorm, LayerNorm, RMSNorm
-from bertblocks.training.metrics import get_metrics, get_metrics_for_task
+from bertblocks.training.metrics import get_metrics_for_task
 from bertblocks.training.objectives import get_collator_cls
 from bertblocks.training.optimizer import get_optimizer
 from bertblocks.training.scheduler import get_scheduler
 from bertblocks.training.utils import chunk_examples
+
+
+class EmptyDataset(Dataset):
+    """Empty dataset dummy to return when no data is loaded.
+
+    https://stackoverflow.com/questions/70369070/can-a-pytorch-dataloader-start-with-an-empty-dataset#70369304
+    """
+
+    def __init__(self) -> None:
+        pass
+
+    def __len__(self) -> int:
+        return 0
+
+    def __getitem__(self, index: int) -> None:
+        raise IndexError("Empty dataset cannot be indexed")
 
 
 class BertBlocksPretrainingDataModule(L.LightningDataModule):
@@ -225,7 +227,6 @@ class BertBlocksFinetuningDataModule(L.LightningDataModule):
             **(collator_kwargs or {}),
         )
 
-        # Initialize dataset placeholders
         self.train_dataset = None
         self.val_dataset = None
         self.test_dataset = None
@@ -233,12 +234,7 @@ class BertBlocksFinetuningDataModule(L.LightningDataModule):
     def prepare_data(self) -> None:
         """Download datasets if needed. Called once per node."""
         if self.hparams.dataset_name_or_path is not None:
-            # Download/cache the dataset
-            load_dataset(
-                self.hparams.dataset_name_or_path,
-                name=self.hparams.dataset_config_name,
-                cache_dir=None,  # Use default cache
-            )
+            load_dataset(self.hparams.dataset_name_or_path, name=self.hparams.dataset_config_name)
 
     def setup(self, stage: str | None = None) -> None:
         """Set up datasets for each process. Called on every process.
@@ -287,14 +283,14 @@ class BertBlocksFinetuningDataModule(L.LightningDataModule):
         if test is not None:
             self.test_dataset = test
 
-    def train_dataloader(self) -> DataLoader | None:
+    def train_dataloader(self) -> DataLoader:
         """Create the training data loader.
 
         Returns:
             DataLoader configured for training or None if no training dataset.
         """
         if self.train_dataset is None:
-            return None
+            return DataLoader(EmptyDataset(), batch_size=16, shuffle=False)
 
         return DataLoader(
             self.train_dataset,
@@ -302,43 +298,40 @@ class BertBlocksFinetuningDataModule(L.LightningDataModule):
             shuffle=self.hparams.shuffle_train,
             batch_size=self.hparams.train_batch_size,
             num_workers=self.hparams.num_workers,
-            pin_memory=True,
         )
 
-    def val_dataloader(self) -> DataLoader | None:
+    def val_dataloader(self) -> DataLoader:
         """Create the validation data loader.
 
         Returns:
             DataLoader configured for validation or None if no validation dataset.
         """
         if self.val_dataset is None:
-            return None
+            return DataLoader(EmptyDataset(), batch_size=16, shuffle=False)
 
         return DataLoader(
             self.val_dataset,
             collate_fn=self.collator,
-            shuffle=False,  # Never shuffle validation
+            shuffle=False,
             batch_size=self.hparams.val_batch_size,
             num_workers=self.hparams.num_workers,
-            pin_memory=True,
         )
 
-    def test_dataloader(self) -> DataLoader | None:
+    def test_dataloader(self) -> DataLoader:
         """Create the test data loader.
 
         Returns:
             DataLoader configured for testing or None if no test dataset.
         """
         if self.test_dataset is None:
-            return None
+            return DataLoader(EmptyDataset(), batch_size=16, shuffle=False)
 
         return DataLoader(
             self.test_dataset,
             collate_fn=self.collator,
-            shuffle=False,  # Never shuffle test
+            shuffle=False,
             batch_size=self.hparams.test_batch_size,
             num_workers=self.hparams.num_workers,
-            pin_memory=True,
         )
 
 
@@ -521,8 +514,6 @@ class BertBlocksFinetuningModule(L.LightningModule):
 
     This module handles finetuning of pretrained BertBlocks models on downstream tasks
     including classification, token classification, and question answering.
-    It supports advanced features like model compilation, learning rate scheduling,
-    and configurable metrics.
     """
 
     def __init__(
@@ -530,7 +521,6 @@ class BertBlocksFinetuningModule(L.LightningModule):
         task: Literal["classification", "token_classification", "question_answering"],
         pretrained_model_name_or_path: str,
         num_labels: int | None = None,
-        metrics: Iterable[str] | None = None,
         learning_rate: float = 1e-5,
         weight_decay: float = 0.01,
         compile_model: bool = True,
@@ -547,7 +537,6 @@ class BertBlocksFinetuningModule(L.LightningModule):
             task: The finetuning task type.
             pretrained_model_name_or_path: Path to pretrained model.
             num_labels: Number of labels for classification tasks. Auto-detected if None.
-            metrics: Custom metric names to use instead of defaults.
             learning_rate: Peak learning rate for optimization.
             weight_decay: Weight decay coefficient.
             compile_model: Whether to compile the model with torch.compile.
@@ -561,7 +550,6 @@ class BertBlocksFinetuningModule(L.LightningModule):
         super().__init__()
         self.save_hyperparameters()
 
-        # Load pretrained model using HuggingFace AutoModels
         if task == "classification":
             self.model = AutoModelForSequenceClassification.from_pretrained(
                 pretrained_model_name_or_path, num_labels=num_labels if num_labels is not None else 2
@@ -575,51 +563,18 @@ class BertBlocksFinetuningModule(L.LightningModule):
         else:
             raise ValueError(f"Unknown task: {task}")
 
-        # Set up task-specific metrics with proper configuration
-        if metrics is None:
-            metric_dict = get_metrics_for_task(task)
-            # Update metrics with correct num_classes if specified
-            if num_labels is not None and task in ["classification", "token_classification"]:
-                metric_dict = self._update_metrics_num_classes(metric_dict, num_labels)
-        else:
-            metric_dict = get_metrics(*metrics)
+        metric_dict = get_metrics_for_task(task, num_labels if num_labels is not None else 2)
+        self.val_metrics = torchmetrics.MetricCollection(metric_dict, prefix="val/")
+        self.test_metrics = self.val_metrics.clone(prefix="test/")
 
-        self.val_metrics = torchmetrics.MetricCollection(metric_dict, prefix="val_")
-        self.test_metrics = self.val_metrics.clone(prefix="test_")
-
-        # Compile if needed
         if compile_model:
             torch.set_float32_matmul_precision("high")
             torch._dynamo.config.capture_dynamic_output_shape_ops = True
             torch._dynamo.config.capture_scalar_outputs = True
             self.model = torch.compile(self.model, dynamic=True)
 
-    def _update_metrics_num_classes(self, metric_dict: dict, num_classes: int) -> dict:
-        """Update metrics with correct number of classes."""
-        updated_metrics = {}
-        for name, metric in metric_dict.items():
-            if hasattr(metric, "num_classes"):
-                # Create new metric with updated num_classes
-                metric_kwargs = metric.__dict__.copy()
-                metric_kwargs["num_classes"] = num_classes
-                metric_type = type(metric)
-                updated_metrics[name] = metric_type(
-                    **{k: v for k, v in metric_kwargs.items() if k in metric_type.__init__.__code__.co_varnames}
-                )
-            else:
-                updated_metrics[name] = metric
-        return updated_metrics
-
     def configure_optimizers(self) -> "torch.optim.Optimizer | dict[str, Any]":
-        """Configure optimizers and learning rate schedulers.
-
-        Sets up optimizer with weight decay only applied to non-bias parameters
-        and optional learning rate scheduling with warmup.
-
-        Returns:
-            Optimizer or tuple of (optimizer, scheduler) if scheduler is configured.
-        """
-        # Set up parameter groups with weight decay
+        """Configure optimizers and learning rate schedulers."""
         norm_cls = [RMSNorm, LayerNorm, GroupNorm, DeepNorm, DynamicTanhNorm]
         decay_parameters = get_parameter_names(self.model, norm_cls)
         decay_parameters = [name for name in decay_parameters if "bias" not in name]
@@ -633,17 +588,13 @@ class BertBlocksFinetuningModule(L.LightningModule):
                 "weight_decay": 0.0,
             },
         ]
-
-        # Create optimizer
         optimizer_kwargs = self.hparams.optimizer_kwargs or {}
         optimizer_kwargs.update({"lr": self.hparams.learning_rate})
         optimizer = get_optimizer(self.hparams.optimizer_class, optimizer_grouped_parameters, optimizer_kwargs)
 
-        # Return just optimizer if no scheduler
         if self.hparams.scheduler_type is None:
             return optimizer
 
-        # Calculate warmup steps
         if self.hparams.warmup_steps > 0:
             warmup_steps = self.hparams.warmup_steps
         elif self.hparams.warmup_ratio > 0:
@@ -673,37 +624,23 @@ class BertBlocksFinetuningModule(L.LightningModule):
         }
 
     def training_step(self, batch: dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
-        """Perform a single training step.
-
-        Args:
-            batch: Batch dictionary containing 'input_ids', 'attention_mask',
-                and 'labels' tensors from the MLM collator.
-            batch_idx: Index of the current batch (unused but required by Lightning).
-
-        Returns:
-            torch.Tensor: loss for backpropagation.
-
-        """
+        """Perform training step."""
         output = self.model(**batch)
-        self.log("loss/train", output.loss, prog_bar=True)
+        self.log("train/loss", output.loss, prog_bar=True)
         return output.loss
 
     def validation_step(self, batch: dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
-        """Perform a single validation step."""
+        """Perform validation step."""
         output = self.model(**batch)
-        self.log("loss/validation", output.loss, prog_bar=True)
-
-        # Update metrics based on task type
+        self.log("val/loss", output.loss, prog_bar=True)
         self._update_metrics(output, batch, self.val_metrics)
         self.log_dict(self.val_metrics, on_epoch=True)
         return output.loss
 
     def test_step(self, batch: dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
-        """Perform a single test step."""
+        """Perform test step."""
         output = self.model(**batch)
-        self.log("loss/test", output.loss)
-
-        # Update metrics based on task type
+        self.log("test/loss", output.loss)
         self._update_metrics(output, batch, self.test_metrics)
         self.log_dict(self.test_metrics, on_epoch=True)
         return output.loss
@@ -720,20 +657,15 @@ class BertBlocksFinetuningModule(L.LightningModule):
             return
 
         if isinstance(output, SequenceClassifierOutput):
-            # Classification tasks
             predictions = output.logits
-            # For classification, use logits directly (metrics handle softmax internally)
             metrics(predictions, labels)
         elif isinstance(output, TokenClassifierOutput):
-            # Token classification tasks
-            # Flatten predictions and labels, ignoring padding tokens (label = -100)
             predictions = output.logits.view(-1, output.logits.shape[-1])
             labels_flat = labels.view(-1)
             mask = labels_flat != -100
             if torch.any(mask):
                 metrics(predictions[mask], labels_flat[mask])
         elif isinstance(output, QuestionAnsweringModelOutput):
-            # Question answering - compute start/end token metrics
             start_logits = output.start_logits
             # end_logits = output.end_logits
             start_positions = batch.get("start_positions")
@@ -744,35 +676,6 @@ class BertBlocksFinetuningModule(L.LightningModule):
                 # More sophisticated QA metrics would require the actual text
                 start_preds = start_logits.argmax(dim=-1)
                 metrics(start_preds, start_positions)
-
-    def on_train_epoch_end(self) -> None:
-        """Log learning rate at the end of each epoch."""
-        if self.hparams.scheduler_type is not None:
-            self.log("lr", self.trainer.optimizers[0].param_groups[0]["lr"])
-
-    def on_save_checkpoint(self, checkpoint: dict) -> None:
-        """Save model checkpoint in HuggingFace format.
-
-        This method is called whenever Lightning saves a checkpoint and
-        additionally saves the model in HuggingFace format for easy loading
-        and deployment. Only saves on the main process in distributed training.
-        """
-        if self.trainer is not None and self.trainer.log_dir is not None:
-            if self.trainer.global_rank != 0:
-                return
-            log_dir = Path(self.trainer.log_dir)
-            save_path = log_dir / "huggingface_checkpoint"
-            save_path.mkdir(parents=True, exist_ok=True)
-
-            # Save model in HuggingFace format
-            if hasattr(self.model, "save_pretrained"):
-                self.model.save_pretrained(save_path, safe_serialization=True)
-            else:
-                # If compiled, get the original model
-                if hasattr(self.model, "_orig_mod"):
-                    self.model._orig_mod.save_pretrained(save_path, safe_serialization=True)
-                else:
-                    torch.save(self.model.state_dict(), save_path / "pytorch_model.bin")  # nosec
 
 
 __all__ = [
