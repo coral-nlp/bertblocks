@@ -250,12 +250,6 @@ class Encoder(nn.Module):
         super().__init__()
         self.blocks = nn.ModuleList([Block(config, layer_id) for layer_id in range(config.num_blocks)])
 
-        # Share rotary cache across layers
-        if config.pos_emb_kind == "rope":
-            for layer in self.blocks:
-                layer.attn.rotary_emb._cos_cached = self.blocks[0].attn.rotary_emb._cos_cached
-                layer.attn.rotary_emb._sin_cached = self.blocks[0].attn.rotary_emb._sin_cached
-
     def forward(
         self,
         x: "Tensor",

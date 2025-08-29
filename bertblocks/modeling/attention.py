@@ -57,10 +57,10 @@ class Attention(nn.Module):
         self.proj = nn.Linear(config.hidden_size, 3 * config.hidden_size, bias=config.attn_proj_bias)
         self.ffwd = nn.Linear(config.hidden_size, config.hidden_size, bias=config.attn_out_bias)
         # Private inits
-        self._initialize_rope(config, layer_id=layer_id)
+        self._rotary_enc = self._get_rope(config, layer_id=layer_id)
         self._backend = get_attention(config)
 
-    def _initialize_rope(self, config: "BertBlocksConfig", layer_id: int) -> None:
+    def _get_rope(self, config: "BertBlocksConfig", layer_id: int) -> "RotaryPositionalEncoding | None":
         """Initialize rotary positional encoding if needed.
 
         Args:
@@ -75,25 +75,19 @@ class Attention(nn.Module):
             layer_id (int): layer id indicating index in the encoder stack.
         """
         if config.pos_emb_kind == "rope":
-            if "base_global" in config.pos_emb_kwargs:
-                theta_global = config.pos_emb_kwargs["base_global"]
-            else:
-                theta_global = config.pos_emb_kwargs.get("base", 10_000)
-
-            if "base_local" in config.pos_emb_kwargs:
-                theta_local = config.pos_emb_kwargs["base_local"]
-            else:
-                theta_local = config.pos_emb_kwargs.get("base", 10_000)
-
-            theta = theta_local if layer_id % config.global_attention_every_n_layers != 0 else theta_global
-            self.rotary_emb = RotaryPositionalEncoding(
+            theta = (
+                config.pos_emb_kwargs.get("base_local") or config.pos_emb_kwargs.get("base", 10_000.0)
+                if config.global_attention_every_n_layers > 0 and layer_id % config.global_attention_every_n_layers > 0
+                else config.pos_emb_kwargs.get("base_global") or config.pos_emb_kwargs.get("base", 10_000.0)
+            )
+            return RotaryPositionalEncoding(
                 dim=config.pos_emb_kwargs["dim"],
                 base=theta,
                 interleaved=config.pos_emb_kwargs.get("interleaved", False),
-                max_seq_len=self.max_seq_len,
+                max_seq_len=config.max_sequence_length,
             )
         else:
-            self.rotary_emb = None  # type: ignore
+            return None
 
     def forward(
         self,
@@ -119,8 +113,8 @@ class Attention(nn.Module):
         # Fused projection
         qkv = self.proj(x)
         # Rotary encoding if applicable
-        if self.rotary_emb is not None:
-            qkv = self.rotary_emb(qkv, self.num_heads, self.head_dim, cu_seqlens, max_seq_len)
+        if self._rotary_enc is not None:
+            qkv = self._rotary_enc(qkv, self.num_heads, self.head_dim, cu_seqlens, max_seq_len)
 
         if cu_seqlens is not None and max_seq_len is not None:
             x, w = self._backend.forward_unpadded(

@@ -752,6 +752,33 @@ class BertBlocksForQuestionAnswering(BertBlocksForTasksBase):
         )
 
 
+def get_model_cls(
+    task: Literal["mlm", "enhanced_mlm", "classification", "token_classification", "question_answering"],
+) -> type[
+    BertBlocksForMaskedLM
+    | BertBlocksForEnhancedMaskedLM
+    | BertBlocksForSequenceClassification
+    | BertBlocksForTokenClassification
+    | BertBlocksForQuestionAnswering
+]:
+    match task:
+        case "mlm":
+            return BertBlocksForMaskedLM
+        case "enhanced_mlm":
+            return BertBlocksForEnhancedMaskedLM
+        case "sequence_classification":
+            return BertBlocksForSequenceClassification
+        case "token_classification":
+            return BertBlocksForTokenClassification
+        case "question_answering":
+            return BertBlocksForQuestionAnswering
+        case _:
+            raise ValueError(
+                f"Unknown task {task}, expected one of 'mlm', 'enhanced_mlm', 'sequence_classification', "
+                f"'token_classification', 'question_answering'"
+            )
+
+
 __all__ = [
     "BertBlocksModel",
     "BertBlocksForMaskedLM",

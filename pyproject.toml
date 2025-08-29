@@ -1,9 +1,50 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [project]
 name = "bertblocks"
 version = "0.1.0"
 description = "A comprehensive framework for exploring transformer encoders"
 requires-python = ">=3.11"
 license = "MIT"
+dependencies = [
+    "torch>=2.0.0",
+    "transformers>=4.53.2",
+    "einops>=0.8.1",
+    "pytorch_optimizer>=3.8.0",
+    "datasets>=4.0.0",
+    "jsonargparse[signatures]>=4.27.7",
+    "lightning>=2.5.2",
+    "omegaconf>=2.3.0",
+    "torchmetrics>=1.0.0",
+]
+
+[project.optional-dependencies]
+flash-attn = ["flash-attn>=2.8.2"]
+wandb = ["wandb>=0.21.1"]
+test = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "pytest-dependency>=0.6.0",
+    "pytest-subtests>=0.14.2",
+]
+dev = [
+    "black>=23.0.0",
+    "isort>=5.12.0",
+    "ruff>=0.6.0",
+    "mypy>=1.0.0",
+    "pre-commit>=3.0.0",
+    "bandit>=1.7.0",
+    "pydocstyle>=6.3.0",
+]
+docs = [
+    "furo>=2025.7.19",
+    "sphinx>=6.0.0",
+    "sphinx-autoapi>=3.0.0",
+    "sphinx-autodoc-typehints>=1.24.0",
+    "myst-parser>=1.0.0",
+]
 
 [dependency-groups]
 base = [
