@@ -255,10 +255,7 @@ class AlibiPositionalEncoding(nn.Module):
         Returns:
             torch.Tensor: The attention mask after adding alibi biases. Same shape as input.
         """
-        seqlen = attention_mask.shape[1]
-        pos = torch.arange(seqlen, device=attention_mask.device)
-        pos_diff = (pos.unsqueeze(0) - pos.unsqueeze(1)).abs()
-        alibi_bias = einsum(self.slopes, pos_diff, "h, i j -> h i j").unsqueeze(0)
+        alibi_bias = self._get_alibi_bias(self.slopes, attention_mask)
 
         if attention_mask.dtype == torch.bool:
             attention_bias = torch.zeros_like(attention_mask, device=alibi_bias.device, dtype=alibi_bias.dtype)
@@ -268,6 +265,12 @@ class AlibiPositionalEncoding(nn.Module):
 
         attention_mask = attention_bias + alibi_bias
         return attention_mask
+
+    def _get_alibi_bias(self, slopes: "torch.Tensor", attention_mask: "torch.Tensor") -> "torch.Tensor":
+        seqlen = attention_mask.shape[2]
+        pos = torch.arange(seqlen, device=attention_mask.device)
+        pos_diff = (pos.unsqueeze(0) - pos.unsqueeze(1)).abs()
+        return -einsum(slopes, pos_diff, "h, i j -> h i j").unsqueeze(0)
 
 
 class RotaryPositionalEncoding(nn.Module):
