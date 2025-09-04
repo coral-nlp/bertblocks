@@ -31,10 +31,10 @@ doc-check: ## Run documentation style checks (pydocstyle)
 	uv run pydocstyle src
 
 test: ## Run tests
-	uv run pytest
+	uv run pytest tests
 
 test-cov: ## Run tests with coverage
-	uv run pytest bertblocks --cov=bertblocks.modeling --cov-report=term-missing --cov-report=html
+	uv run pytest tests --cov=bertblocks.modeling --cov-report=term-missing --cov-report=html
 
 
 clean: ## Clean up build artifacts

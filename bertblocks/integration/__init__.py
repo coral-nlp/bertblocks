@@ -1,13 +1,12 @@
-from transformers import AutoConfig
+from typing import TYPE_CHECKING
 
-from bertblocks.modeling.model import BertBlocksModel
+if TYPE_CHECKING:
+    from bertblocks.modeling.model import BertBlocksModel
+
+from transformers import AutoConfig
 
 from .load_bert import from_bert_model
 from .load_modernbert import from_modernbert_model
-from .test_load_bert import TEST_MODELS as tested_bert_models
-from .test_load_modernbert import TEST_MODELS as tested_modernbert_models
-
-SUPPORTED_MODELS = tested_bert_models + tested_modernbert_models
 
 
 def from_huggingface(
@@ -31,7 +30,7 @@ def from_huggingface(
                 pretrained_model_name_or_path, load_weights=load_weights, add_pooling_layer=add_pooling_layer
             )
         case _:
-            raise ValueError(f"Unknown model_type {config.model_type}, supported models are: {SUPPORTED_MODELS}")
+            raise ValueError(f"Unknown model_type {config.model_type}")
 
 
 __all__ = ["from_huggingface"]

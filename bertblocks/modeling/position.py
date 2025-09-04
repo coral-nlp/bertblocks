@@ -221,9 +221,9 @@ class AlibiPositionalEncoding(nn.Module):
 
     slopes: torch.Tensor
 
-    def __init__(self, num_heads: int):
+    def __init__(self, num_heads: int, device: "torch.device | str" = "cuda", dtype: "torch.dtype" = torch.float32):
         super().__init__()
-        slopes = self.get_slopes(num_heads)
+        slopes = self.get_slopes(num_heads, device, dtype)
         self.register_buffer("slopes", slopes, persistent=False)
 
     @staticmethod
@@ -255,10 +255,10 @@ class AlibiPositionalEncoding(nn.Module):
         Returns:
             torch.Tensor: The attention mask after adding alibi biases. Same shape as input.
         """
-        seqlen = attention_mask.shape[1]
+        seqlen = attention_mask.shape[2]
         pos = torch.arange(seqlen, device=attention_mask.device)
         pos_diff = (pos.unsqueeze(0) - pos.unsqueeze(1)).abs()
-        alibi_bias = einsum(self.slopes, pos_diff, "h, i j -> h i j").unsqueeze(0)
+        alibi_bias = -1.0 * einsum(self.slopes, pos_diff, "h, i j -> h i j").unsqueeze(0)
 
         if attention_mask.dtype == torch.bool:
             attention_bias = torch.zeros_like(attention_mask, device=alibi_bias.device, dtype=alibi_bias.dtype)
