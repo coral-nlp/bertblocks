@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = ">=3.11"
 resolution-markers = [
     "python_full_version >= '3.12' and sys_platform == 'linux'",
@@ -192,15 +192,20 @@ wheels = [
 [[package]]
 name = "bertblocks"
 version = "0.1.0"
-source = { virtual = "." }
-
-[package.dev-dependencies]
-base = [
+source = { editable = "." }
+dependencies = [
+    { name = "datasets" },
     { name = "einops" },
-    { name = "flash-attn" },
+    { name = "jsonargparse", extra = ["signatures"] },
+    { name = "lightning" },
+    { name = "omegaconf" },
+    { name = "pytorch-optimizer" },
     { name = "torch" },
+    { name = "torchmetrics" },
     { name = "transformers" },
 ]
+
+[package.optional-dependencies]
 dev = [
     { name = "bandit" },
     { name = "black" },
@@ -217,13 +222,8 @@ docs = [
     { name = "sphinx-autoapi" },
     { name = "sphinx-autodoc-typehints" },
 ]
-pretraining = [
-    { name = "datasets" },
-    { name = "jsonargparse", extra = ["signatures"] },
-    { name = "lightning" },
-    { name = "omegaconf" },
-    { name = "pytorch-optimizer" },
-    { name = "wandb" },
+flash-attn = [
+    { name = "flash-attn" },
 ]
 test = [
     { name = "pytest" },
@@ -231,46 +231,41 @@ test = [
     { name = "pytest-dependency" },
     { name = "pytest-subtests" },
 ]
+wandb = [
+    { name = "wandb" },
+]
 
 [package.metadata]
-
-[package.metadata.requires-dev]
-base = [
-    { name = "einops", specifier = ">=0.8.1" },
-    { name = "flash-attn", specifier = ">=2.8.2" },
-    { name = "torch", specifier = "==2.7.1" },
-    { name = "transformers", specifier = ">=4.53.2" },
-]
-dev = [
-    { name = "bandit", specifier = ">=1.7.0" },
-    { name = "black", specifier = ">=23.0.0" },
-    { name = "isort", specifier = ">=5.12.0" },
-    { name = "mypy", specifier = ">=1.0.0" },
-    { name = "pre-commit", specifier = ">=3.0.0" },
-    { name = "pydocstyle", specifier = ">=6.3.0" },
-    { name = "ruff", specifier = ">=0.6.0" },
-]
-docs = [
-    { name = "furo", specifier = ">=2025.7.19" },
-    { name = "myst-parser", specifier = ">=1.0.0" },
-    { name = "sphinx", specifier = ">=6.0.0" },
-    { name = "sphinx-autoapi", specifier = ">=3.0.0" },
-    { name = "sphinx-autodoc-typehints", specifier = ">=1.24.0" },
-]
-pretraining = [
+requires-dist = [
+    { name = "bandit", marker = "extra == 'dev'", specifier = ">=1.7.0" },
+    { name = "black", marker = "extra == 'dev'", specifier = ">=23.0.0" },
     { name = "datasets", specifier = ">=4.0.0" },
+    { name = "einops", specifier = ">=0.8.1" },
+    { name = "flash-attn", marker = "extra == 'flash-attn'", specifier = ">=2.8.2" },
+    { name = "furo", marker = "extra == 'docs'", specifier = ">=2025.7.19" },
+    { name = "isort", marker = "extra == 'dev'", specifier = ">=5.12.0" },
     { name = "jsonargparse", extras = ["signatures"], specifier = ">=4.27.7" },
     { name = "lightning", specifier = ">=2.5.2" },
+    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.0.0" },
+    { name = "myst-parser", marker = "extra == 'docs'", specifier = ">=1.0.0" },
     { name = "omegaconf", specifier = ">=2.3.0" },
+    { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=3.0.0" },
+    { name = "pydocstyle", marker = "extra == 'dev'", specifier = ">=6.3.0" },
+    { name = "pytest", marker = "extra == 'test'", specifier = ">=7.0.0" },
+    { name = "pytest-cov", marker = "extra == 'test'", specifier = ">=4.0.0" },
+    { name = "pytest-dependency", marker = "extra == 'test'", specifier = ">=0.6.0" },
+    { name = "pytest-subtests", marker = "extra == 'test'", specifier = ">=0.14.2" },
     { name = "pytorch-optimizer", specifier = ">=3.8.0" },
-    { name = "wandb", specifier = ">=0.21.1" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6.0" },
+    { name = "sphinx", marker = "extra == 'docs'", specifier = ">=6.0.0" },
+    { name = "sphinx-autoapi", marker = "extra == 'docs'", specifier = ">=3.0.0" },
+    { name = "sphinx-autodoc-typehints", marker = "extra == 'docs'", specifier = ">=1.24.0" },
+    { name = "torch", specifier = ">=2.0.0" },
+    { name = "torchmetrics", specifier = ">=1.0.0" },
+    { name = "transformers", specifier = ">=4.53.2" },
+    { name = "wandb", marker = "extra == 'wandb'", specifier = ">=0.21.1" },
 ]
-test = [
-    { name = "pytest", specifier = ">=7.0.0" },
-    { name = "pytest-cov", specifier = ">=4.0.0" },
-    { name = "pytest-dependency", specifier = ">=0.6.0" },
-    { name = "pytest-subtests", specifier = ">=0.14.2" },
-]
+provides-extras = ["flash-attn", "wandb", "test", "dev", "docs"]
 
 [[package]]
 name = "black"

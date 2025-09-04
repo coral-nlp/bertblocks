@@ -36,7 +36,13 @@ repos:
           - types-PyYAML
           - types-requests
           - types-tqdm
-        args: [--ignore-missing-imports]
+        args:
+          [
+            --warn-return-any,
+            --warn-unused-configs,
+            --disallow-untyped-defs,
+            --ignore-missing-imports,
+          ]
         exclude: ^(tests/|docs/|examples/)
 
   # Security checks
@@ -44,7 +50,8 @@ repos:
     rev: 1.7.10
     hooks:
       - id: bandit
-        exclude: ^.*test_.*\.py$
+        args: [--skip=B101, B601]
+        exclude: ^(examples/|docs/|tests/)
 
   # YAML formatting
   - repo: https://github.com/pre-commit/mirrors-prettier
