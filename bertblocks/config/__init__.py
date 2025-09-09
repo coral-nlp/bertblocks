@@ -46,6 +46,10 @@ class BertBlocksConfig(PretrainedConfig):
         mlp_type: The type of MLP (feed-forward) layer architecture. Available options:
             "mlp" (Standard two-layer feed-forward network),
             "glu" (Gated Linear Unit with learned gating mechanism, typically better performance).
+        head_type: The type of MLP (feed-forward) layer architecture for the final head. Available options:
+            "proj" (Simple one-layer feed-forward network),
+            "mlp" (Standard two-layer feed-forward network),
+            "glu" (Gated Linear Unit with learned gating mechanism, typically better performance).
         mlp_in_bias: Whether to include bias terms in the input projection of MLP layers.
         mlp_out_bias: Whether to include bias terms in the output projection of MLP layers.
         attn_proj_bias: Whether to include bias terms in the qkv projection of attention layers.
@@ -124,6 +128,7 @@ class BertBlocksConfig(PretrainedConfig):
         add_token_type_emb: bool = False,
         type_vocab_size: int = 1,
         mlp_type: Literal["mlp", "glu"] = "mlp",
+        head_type: Literal["proj", "mlp", "glu"] = "mlp",
         mlp_in_bias: bool = True,
         mlp_out_bias: bool = True,
         attn_proj_bias: bool = True,
@@ -229,6 +234,7 @@ class BertBlocksConfig(PretrainedConfig):
         self.type_vocab_size = type_vocab_size
         # MLP parameters
         self.mlp_type = mlp_type
+        self.head_type = head_type
         self.mlp_in_bias = mlp_in_bias
         self.mlp_out_bias = mlp_out_bias
         # Attention parameters
