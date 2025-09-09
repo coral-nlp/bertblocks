@@ -20,7 +20,7 @@ class Collator(ABC):
         self,
         tokenizer: PreTrainedTokenizerBase,
         text_column: str = "text",
-        label_column: str = "label",
+        label_column: str = None,
         max_sequence_length: int | None = 256,
         pretokenized: bool | None = False,
     ) -> None:
