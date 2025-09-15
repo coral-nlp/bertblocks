@@ -1,0 +1,68 @@
+# lightning.pytorch==2.0.0
+seed_everything: 153201820 # For reproducibility
+trainer:
+  accelerator: "gpu"
+  default_root_dir: "./checkpoints"
+  #logger:
+  #  - class_path: lightning.pytorch.loggers.WandbLogger
+  #    init_args:
+  #      project: "<project_name>"
+  #      entity: "<username>"
+  #      log_model: false
+  max_epochs: 1
+  log_every_n_steps: 1
+model:
+  class_path: bertblocks.pretraining.train.BertBlocksPretrainingModule
+  init_args:
+    learning_rate: 8e-4
+    weight_decay: 1e-5
+    # From the Appendix of ModernBert paper: https://arxiv.org/pdf/2412.13663
+    # Need to convert the warmup from (tokens) in paper to steps, as excepted by our codebase.
+    # warmup_tokens: 3e9 # 3 billion
+    # conversion to steps would mean to divide 3e9 by the global_batch_size
+    warmup_steps: 1000 # (NOTE): Please see above comment.
+    warmup_decay: 0.0
+    learning_rate_decay: 1
+    pretrained_tokenizer_name_or_path: ${data.init_args.pretrained_tokenizer_name_or_path} # Uses Vocab Size = 50_368
+    compile_model: true
+    model_config_kwargs:
+      hidden_size: 768
+      num_blocks: 22
+      num_attention_heads: 12
+      intermediate_size: 1152 # Uses GLU
+      mlp_type: "glu"
+      mlp_in_bias: false
+      mlp_out_bias: false
+
+      attn_proj_bias: false
+      attn_out_bias: false
+
+      pos_emb_kind: "rope"
+      pos_emb_kwargs:
+        rope_theta: 160000
+        local_attn_rope_theta: 10000
+
+      attn_implementation: "fa2"
+      local_attention: [128, 128]
+      global_attention_every_n_layers: 3
+
+      attn_dropout_prob: 0.1
+      emb_dropout_prob: 0.0
+      hidden_dropout_prob: 0.0
+
+      actv_fn: "gelu"
+
+      norm_kind: "pre"
+      norm_fn: "layer"
+      norm_eps: 1e-5
+      norm_bias: false
+      max_sequence_length: ${data.init_args.max_sequence_length}
+data:
+  class_path: bertblocks.pretraining.train.BertBlocksPretrainingDataModule
+  init_args:
+    pretrained_tokenizer_name_or_path: "bert-base-uncased"
+    max_sequence_length: 1024
+    mlm_probability: 0.3
+    train_batch_size: 16
+    val_batch_size: 16
+    num_workers: 1
