@@ -204,15 +204,46 @@ class BertBlocksPretrainingModule(L.LightningModule):
         optimizer = get_optimizer(
             self.hparams.optimizer_class, optimizer_grouped_parameters, self.hparams.optimizer_kwargs
         )
-        scheduler = torch.optim.lr_scheduler.SequentialLR(
+        # scheduler = torch.optim.lr_scheduler.SequentialLR(
+        #     optimizer,
+        #     schedulers=[
+        #         torch.optim.lr_scheduler.LinearLR(
+        #             optimizer, start_factor=self.hparams.warmup_decay, total_iters=self.hparams.warmup_steps
+        #         ),
+        #         torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=self.hparams.learning_rate_decay),
+        #     ],
+        #     milestones=[self.hparams.warmup_steps],
+        # )
+        
+
+        # Capturing values from the hyperparams
+        total_steps = self.hparams.max_steps
+        warmup_steps = self.hparams.warmup_steps
+        decay_steps = self.hparams.decay_steps
+
+        if warmup_steps + decay_steps > total_steps:
+            print(f"(WARNING): Warmup Steps({warmup_steps}) + Decay Steps({decay_steps}) exceed the total steps ({total_steps})")
+
+        warmup_scheduler = LinearLR(
+            optimizer, start_factor=self.hparms.warmup_decay, end_factor=1.0, total_iters=warmup_steps,
+        )
+
+        stable_steps = total_steps - warmup_steps - decay_steps
+        if stable_steps < 0:
+            stable_steps = 0
+
+        stable_scheduler = LinearLR(
+            optimizer, start_factor=1.0, end_factor=1.0, total_iters=stable_steps,
+        )
+
+        decay_scheduler = LinearLR(
+            optimizer, start_factor=1.0, end_factor=self.hparams.alpha_f, total_iters=decay_steps
+        )
+
+        scheduler = SequentialLR(
             optimizer,
-            schedulers=[
-                torch.optim.lr_scheduler.LinearLR(
-                    optimizer, start_factor=self.hparams.warmup_decay, total_iters=self.hparams.warmup_steps
-                ),
-                torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=self.hparams.learning_rate_decay),
-            ],
-            milestones=[self.hparams.warmup_steps],
+            schedulers=[warmup_scheduler, stable_scheduler, decay_scheduler],
+            milestones=[warmup_steps, warmup_steps+stable_steps]
         )
         return [optimizer], [{"scheduler": scheduler, "interval": "step"}]
 
