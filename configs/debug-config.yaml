@@ -1,0 +1,37 @@
+# lightning.pytorch==2.0.0
+seed_everything: 153201820 # For reproducibility
+trainer:
+  logger: false
+  enable_checkpointing: false
+model:
+  class_path: bertblocks.training.modules.BertBlocksPretrainingModule
+  init_args:
+    learning_rate: 1e-4
+    weight_decay: 1e-5
+    scheduler_warmup_steps: 1000
+    scheduler_warmup_decay: 0.1
+    pretrained_tokenizer_name_or_path: ${data.init_args.pretrained_tokenizer_name_or_path}
+    compile_model: false
+    model_config_kwargs:
+      hidden_size: 64
+      num_blocks: 1
+      num_attention_heads: 4
+      intermediate_size: 128
+      actv_fn: "silu"
+      norm_kind: "pre"
+      norm_fn: "rms"
+      pos_emb_kind: "learned"
+      max_sequence_length: 32
+    model_kwargs:
+      masking_strategy: "window"
+    objective: ${data.init_args.objective}
+data:
+  class_path: bertblocks.training.modules.BertBlocksPretrainingDataModule
+  init_args:
+    objective: enhanced_mlm
+    dataset_name_or_path: roneneldan/TinyStories
+    pretrained_tokenizer_name_or_path: "bert-base-uncased"
+    max_sequence_length: 512
+    train_batch_size: 2
+    val_batch_size: 16
+    num_workers: 1

@@ -162,7 +162,8 @@ class EnhancedMaskingBlock(Block):
     References:
          - "Attention Is All You Need" (https://arxiv.org/pdf/1706.03762)
          - "On Layer Normalization in the Transformer Architecture" (https://arxiv.org/pdf/2002.04745)
-         - Paper for enhanced masking?
+         - Paper for enhanced masking? (https://arxiv.org/pdf/2205.12035)
+         - MAE
 
     """
 
@@ -170,7 +171,7 @@ class EnhancedMaskingBlock(Block):
         self,
         config: "BertBlocksConfig",
         layer_id: int,
-        masking_strategy: Literal["random"],
+        masking_strategy: Literal["random", "window"],
         masking_probability: float = 0.5,
     ):
         config = deepcopy(config)
@@ -208,11 +209,27 @@ class EnhancedMaskingBlock(Block):
         match self.masking_strategy:
             case "random":
                 attention_mask = self._apply_random_mask(attention_mask)
+            case "window":
+                attention_mask = self._apply_window_mask(attention_mask)
             case _:
                 raise ValueError(f"Unknown masking strategy: {self.masking_strategy}")
         # set diagonal to 0 so that a token cannot attend to itself
         attention_mask[..., range(attention_mask.shape[-2]), range(attention_mask.shape[-1])] = 0
         return super().forward(x, attention_mask, cu_seqlens, max_seq_len)
+
+    def _apply_window_mask(self, attention_mask: "Tensor") -> "Tensor":
+        """Apply windowed mask attention here
+
+        Args:
+            attention_mask (Tensor, shape [batch_size, seq_len]): The original attention mask.
+
+        Returns:
+            Tensor: The modified attention mask with random masking applied.
+        """
+        attention_mask = attention_mask & (
+            torch.rand(attention_mask.shape, device=attention_mask.device) > self.masking_probability
+        )
+        return attention_mask
 
     def _apply_random_mask(self, attention_mask: "Tensor") -> "Tensor":
         """Apply random masking to the attention mask.

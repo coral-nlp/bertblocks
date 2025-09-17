@@ -16,7 +16,7 @@ def cli(args: ArgsType = None) -> None:
                 #   batch_size_fn=lambda batch: batch["input_ids"].size(0),  # Number of sequences
                 #   window_size=50,
                 # ),
-                LearningRateMonitor(logging_interval="step", log_momentum=True, log_weight_decay=True),
+                # LearningRateMonitor(logging_interval="step", log_momentum=True, log_weight_decay=True),
                 # ModelCheckpoint(
                 #    save_top_k=1,
                 #    monitor="loss/train",

@@ -1,0 +1,96 @@
+# lightning.pytorch==2.5.2
+seed_everything: 153201820
+trainer:
+  accelerator: auto
+  strategy: auto
+  devices: auto
+  num_nodes: 1
+  precision: null
+  logger: false
+  callbacks: null
+  fast_dev_run: false
+  max_epochs: null
+  min_epochs: null
+  max_steps: -1
+  min_steps: null
+  max_time: null
+  limit_train_batches: null
+  limit_val_batches: null
+  limit_test_batches: null
+  limit_predict_batches: null
+  overfit_batches: 0.0
+  val_check_interval: null
+  check_val_every_n_epoch: 1
+  num_sanity_val_steps: null
+  log_every_n_steps: null
+  enable_checkpointing: false
+  enable_progress_bar: null
+  enable_model_summary: null
+  accumulate_grad_batches: 1
+  gradient_clip_val: null
+  gradient_clip_algorithm: null
+  deterministic: null
+  benchmark: null
+  inference_mode: true
+  use_distributed_sampler: true
+  profiler: null
+  detect_anomaly: true
+  barebones: false
+  plugins: null
+  sync_batchnorm: false
+  reload_dataloaders_every_n_epochs: 0
+  default_root_dir: null
+  model_registry: null
+model:
+  class_path: bertblocks.training.BertBlocksPretrainingModule
+  init_args:
+    learning_rate: 0.0001
+    weight_decay: 1.0e-05
+    compile_model: false
+    pretrained_tokenizer_name_or_path: bert-base-uncased
+    optimizer_class: adamw
+    optimizer_kwargs: null
+    scheduler_warmup_kind: linear
+    scheduler_warmup_steps: 1000
+    scheduler_warmup_decay: 0.1
+    scheduler_training_kind: constant
+    scheduler_training_steps: -1
+    scheduler_training_decay: 1.0
+    scheduler_cooldown_kind: linear
+    scheduler_cooldown_steps: 0
+    scheduler_cooldown_decay: 0.0
+    objective: enhanced_mlm
+    model_config_kwargs:
+      hidden_size: 64
+      num_blocks: 1
+      num_attention_heads: 4
+      intermediate_size: 128
+      actv_fn: silu
+      norm_kind: pre
+      norm_fn: rms
+      pos_emb_kind: learned
+      max_sequence_length: 32
+    model_kwargs:
+      masking_strategy: window
+data:
+  class_path: bertblocks.training.BertBlocksPretrainingDataModule
+  init_args:
+    pretrained_tokenizer_name_or_path: bert-base-uncased
+    objective: enhanced_mlm
+    max_sequence_length: 512
+    dataset_name_or_path: roneneldan/TinyStories
+    file_format: null
+    data_split: null
+    text_column: text
+    split_char: null
+    split_len: null
+    shuffle: false
+    mlm_probability: 0.3
+    train_batch_size: 2
+    val_batch_size: 16
+    pretokenized: false
+    num_workers: 1
+    collator_kwargs: null
+optimizer: null
+lr_scheduler: null
+ckpt_path: null
