@@ -34,6 +34,11 @@ class BertBlocksConfig(PretrainedConfig):
             Each head has dimension hidden_size // num_attention_heads. More heads can capture
             different types of relationships. Common values: 12 (BERT-base), 16 (BERT-large).
             Must be at least 2 and hidden_size must be divisible by this value.
+        inp_emb_kind: The type if input embedding to use. Available options:
+            "onehot" (traditional one-hot to dense embedding), "multihot" (multi-hot to dense embedding)
+        inp_emb_kwargs: Additional keyword arguments to pass to the input embedding class. Values dependent on chosen
+            inp_emb_kind. All input embeddings receive the full config automatically and thus have access to e.g.
+            vocab size and hidden size; these do not need to be specified.
         pos_emb_kind: The type of positional embedding to use. Available options:
             "alibi" (ALiBi positional encoding), "sinusoidal" (Sinusoidal positional encoding),
             "rope" (Rotary positional encoding), "relative" (Relative positional encoding),
@@ -123,6 +128,8 @@ class BertBlocksConfig(PretrainedConfig):
         intermediate_size: int = 3072,
         num_blocks: int = 12,
         num_attention_heads: int = 12,
+        inp_emb_kind: Literal["onehot", "multihot"] = "onehot",
+        inp_emb_kwargs: dict[str, Any] | None = None,
         pos_emb_kind: Literal["alibi", "sinusoidal", "rope", "relative", "learned", "learned_alibi"] = "alibi",
         pos_emb_kwargs: dict[str, Any] | None = None,
         add_token_type_emb: bool = False,
@@ -228,6 +235,8 @@ class BertBlocksConfig(PretrainedConfig):
         self.num_blocks = num_blocks
         self.intermediate_size = intermediate_size
         self.num_attention_heads = num_attention_heads
+        self.inp_emb_kind = inp_emb_kind
+        self.inp_emb_kwargs = inp_emb_kwargs or {}
         self.pos_emb_kind = pos_emb_kind
         self.pos_emb_kwargs = pos_emb_kwargs or {}
         self.add_token_type_emb = add_token_type_emb
@@ -321,6 +330,7 @@ class BertConfig(BertBlocksConfig):
             attn_implementation=attn_implementation,
             unpadding=unpadding,
             # Hardcoded args for architecture compatibility
+            inp_emb_kind="onehot",
             add_token_type_emb=True,
             mlp_type="mlp",
             mlp_in_bias=True,
@@ -421,6 +431,7 @@ class ModernBertConfig(BertBlocksConfig):
             attn_implementation=attn_implementation,
             unpadding=unpadding,
             # Hard-coded values for architecture compatibility
+            inp_emb_kind="onehot",
             pos_emb_kind="rope",
             add_token_type_emb=False,
             mlp_type="glu",

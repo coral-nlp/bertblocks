@@ -1,4 +1,9 @@
-from typing import TYPE_CHECKING
+import math
+import warnings
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
+
+from einops import rearrange
 
 from bertblocks.modeling.norms import get_norm
 
@@ -9,6 +14,56 @@ import torch
 from torch import nn
 
 from bertblocks.modeling.position import LearnedPositionalEncoding, SinusoidalPositionalEncoding
+
+
+class MultiHotEmbedding(nn.Module):
+    def __init__(self, vocab_size: int, hidden_size: int, padding_idx: int = 0, **kwargs: Any) -> None:
+        super().__init__()
+        max_power_2 = math.ceil(math.log2(vocab_size))
+        intermediate_size: int = kwargs.get("intermediate_size") or hidden_size // max_power_2
+        bit_positions = torch.arange(max_power_2).to(dtype=torch.long).unsqueeze(0)
+        self.register_buffer("bit_positions", bit_positions)
+        self.embd = nn.Linear(max_power_2, intermediate_size)
+        self.proj = nn.Linear(max_power_2 * intermediate_size, hidden_size)
+
+        self.to_multihot: Callable[[torch.LongTensor], torch.LongTensor] = self._to_binary_repr
+        match kwargs.get("encoding"):
+            case "binary":
+                self.to_multihot = self._to_binary_repr
+            case "gray":
+                self.to_multihot = self._to_gray_repr
+            case _:
+                warnings.warn(
+                    "Unknown value or no value for 'encoding' in inp_emb_kwargs, defaulting to 'binary'}", stacklevel=2
+                )
+
+    def _to_binary_repr(self, x: "torch.LongTensor") -> "torch.LongTensor":
+        return (x.to(dtype=torch.long).unsqueeze(-1) >> self.bit_positions) & 1  # [seq_len, max_power_of_2]
+
+    def _to_gray_repr(self, x: "torch.LongTensor") -> "torch.LongTensor":
+        # Convert int IDs to binary
+        x = self._to_binary_repr(x)  # [seq_len, max_power_of_2]
+        # Convert binary to Gray code: out[i] = x[i+1] XOR x[i], with out[MSB] = x[MSB]
+        x[..., :-1] = x[..., 1:] ^ x[..., :-1]
+        return x
+
+    def _to_positional_one_hot(self, x: "torch.LongTensor") -> "torch.LongTensor":
+        # Get the last dimension size for one-hot encoding
+        num_positions = x.shape[-1]
+        positions = torch.arange(num_positions, device=x.device)
+        position_onehot = torch.nn.functional.one_hot(positions, num_classes=num_positions)
+        position_onehot = position_onehot.expand(*x.shape, num_positions)
+        return torch.where(x.unsqueeze(-1) == 1, position_onehot, torch.zeros_like(position_onehot))
+
+    def forward(self, x: torch.LongTensor) -> torch.FloatTensor:
+        # Input IDs to multi hot representation
+        x = self.to_multihot(x)  # [..., max_power_of_2]
+        x = self._to_positional_one_hot(x).to(dtype=self.embd.weight.dtype)  # [..., max_power_of_2, max_power_of_2]
+        # Multi hot representation to dense
+        x = self.embd(x)  # [..., max_power_of_2, intermediate_size]
+        x = rearrange(x, "... p i -> ... (p i)")  # [..., max_power_of_2 * intermediate_size]
+        x = self.proj(x)  # [..., hidden_size]
+        return x
 
 
 class TokenTypeEmbedding(nn.Module):
@@ -85,7 +140,14 @@ class TokenEmbedding(nn.Module):
 
     def __init__(self, config: "BertBlocksConfig"):
         super().__init__()
-        self.embd = nn.Embedding(config.vocab_size, config.hidden_size, padding_idx=config.pad_token_id)
+        match config.inp_emb_kind:
+            case "onehot":
+                self.embd = nn.Embedding(config.vocab_size, config.hidden_size, padding_idx=config.pad_token_id)
+            case "multihot":
+                self.embd = MultiHotEmbedding(
+                    config.vocab_size, config.hidden_size, padding_idx=config.pad_token_id, **config.inp_emb_kwargs
+                )
+
         match config.pos_emb_kind:
             case "sinusoidal":
                 self.pose = SinusoidalPositionalEncoding(dim=config.hidden_size, max_seq_len=config.max_sequence_length)

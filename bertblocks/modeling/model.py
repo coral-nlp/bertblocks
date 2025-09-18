@@ -22,7 +22,7 @@ from transformers.modeling_utils import PreTrainedModel
 
 from bertblocks.config import BertBlocksConfig
 from bertblocks.modeling.block import Encoder, EnhancedMaskingBlock, convert_to_4d_attention_mask
-from bertblocks.modeling.embedding import TokenEmbedding
+from bertblocks.modeling.embedding import MultiHotEmbedding, TokenEmbedding
 from bertblocks.modeling.head import Pooler, get_prediction_head
 from bertblocks.modeling.loss import get_loss_function
 from bertblocks.modeling.padding import pad_output, unpad_input
@@ -176,7 +176,7 @@ class BertBlocksModel(BertBlocksPreTrainedModel):
         """Get the device of the model parameters."""
         return next(self.parameters()).device
 
-    def get_input_embeddings(self) -> "nn.Embedding":
+    def get_input_embeddings(self) -> "nn.Embedding | MultiHotEmbedding":
         """Get the input token embeddings.
 
         Returns:
@@ -185,7 +185,7 @@ class BertBlocksModel(BertBlocksPreTrainedModel):
         """
         return self.embd.embd
 
-    def set_input_embeddings(self, value: "nn.Embedding") -> None:
+    def set_input_embeddings(self, value: "nn.Embedding | MultiHotEmbedding") -> None:
         """Set the input token embeddings.
 
         Args:
@@ -340,7 +340,7 @@ class BertBlocksForMaskedLM(BertBlocksPreTrainedModel):
 
     """
 
-    _tied_weight_keys: ClassVar = ["decoder.weight"]
+    # _tied_weight_keys: ClassVar = ["decoder.weight"]
 
     def __init__(self, config: "BertBlocksConfig"):
         super().__init__(config)
@@ -352,17 +352,18 @@ class BertBlocksForMaskedLM(BertBlocksPreTrainedModel):
 
         self.post_init()
 
-    def get_input_embeddings(self) -> "nn.Module":
-        """Return the encoder input embeddings."""
-        return self.model.embd.embd
-
-    def get_output_embeddings(self) -> "nn.Module":
-        """Return the decoder embeddings."""
-        return self.decoder
-
-    def set_output_embeddings(self, new_embeddings: "nn.Linear") -> None:
-        """Replace the decoder embeddings with given one (e.g., the encoder side)."""
-        self.decoder = new_embeddings
+    ## TODO: need to figure out how to do this with multi-hot
+    # def get_input_embeddings(self) -> "nn.Module":
+    #    """Return the encoder input embeddings."""
+    #    return self.model.embd.embd
+    #
+    # def get_output_embeddings(self) -> "nn.Module":
+    #    """Return the decoder embeddings."""
+    #    return self.decoder
+    #
+    # def set_output_embeddings(self, new_embeddings: "nn.Linear") -> None:
+    #    """Replace the decoder embeddings with given one (e.g., the encoder side)."""
+    #    self.decoder = new_embeddings
 
     def forward(
         self,
