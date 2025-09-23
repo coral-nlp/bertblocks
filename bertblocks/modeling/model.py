@@ -38,7 +38,7 @@ class BertBlocksPreTrainedModel(PreTrainedModel):
     """
 
     config_class = BertBlocksConfig
-    base_model_prefix = "bertblocks"
+    base_model_prefix = "model"
     supports_gradient_checkpointing = True
     _supports_flash_attn_2 = False
     _supports_sdpa = False
