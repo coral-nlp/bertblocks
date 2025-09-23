@@ -263,7 +263,7 @@ class BertBlocksConfig(PretrainedConfig):
         self.attn_dropout_prob = attn_dropout_prob
         self.classifier_dropout = classifier_dropout_prob
         # Implementation details
-        self.attn_implementation = attn_implementation
+        self._attn_implementation = attn_implementation
         # Downstream task parameters
         self.problem_type = problem_type
         self.num_labels = num_labels
@@ -455,9 +455,11 @@ class ModernBertConfig(BertBlocksConfig):
             mlp_out_bias=orig_config.mlp_bias,
             attn_proj_bias=orig_config.attention_bias,
             attn_out_bias=orig_config.attention_bias,
-            local_attention=(orig_config.local_attention // 2, orig_config.local_attention // 2)
-            if orig_config.local_attention != -1
-            else (-1, -1),
+            local_attention=(
+                (orig_config.local_attention // 2, orig_config.local_attention // 2)
+                if orig_config.local_attention != -1
+                else (-1, -1)
+            ),
             global_attention_every_n_layers=orig_config.global_attn_every_n_layers,
             initializer_range=orig_config.initializer_range,
             actv_fn=orig_config.hidden_activation or "gelu",

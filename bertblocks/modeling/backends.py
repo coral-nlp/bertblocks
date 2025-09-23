@@ -8,7 +8,6 @@ from bertblocks import BertBlocksConfig
 if TYPE_CHECKING:
     from torch import Tensor
 
-
 import torch
 from einops import einsum, rearrange
 from transformers.modeling_utils import is_flash_attn_2_available
@@ -236,7 +235,7 @@ def get_attention(config: "BertBlocksConfig") -> "AttentionBackend":
         - `eager`: native torch attention
 
     """
-    match config.attn_implementation:
+    match config._attn_implementation:
         case "fa2":
             return FlashBackend()
         case "sdpa":
@@ -245,5 +244,5 @@ def get_attention(config: "BertBlocksConfig") -> "AttentionBackend":
             return EagerBackend()
         case _:
             raise ValueError(
-                f"Unsupported _backend: {config.attn_implementation}, expected one of 'sdpa', 'eager', 'fa2'"
+                f"Unsupported _backend: {config._attn_implementation}, expected one of 'sdpa', 'eager', 'fa2'"
             )
