@@ -1,6 +1,7 @@
 # lightning.pytorch==2.0.0
 seed_everything: 153201820 # For reproducibility
 trainer:
+  accelerator: cpu
   logger: false
   enable_checkpointing: false
 model:
@@ -21,7 +22,7 @@ model:
       norm_kind: "pre"
       norm_fn: "rms"
       pos_emb_kind: "learned"
-      max_sequence_length: 32
+      max_sequence_length: ${data.init_args.max_sequence_length}
     model_kwargs:
       masking_strategy: "window"
     objective: ${data.init_args.objective}
