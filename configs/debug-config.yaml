@@ -2,7 +2,7 @@
 seed_everything: 153201820 # For reproducibility
 trainer:
   accelerator: cpu
-  logger: false
+  logger: WandbLogger
   enable_checkpointing: false
 model:
   class_path: bertblocks.training.modules.BertBlocksPretrainingModule
