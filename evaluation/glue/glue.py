@@ -143,13 +143,12 @@ class LightningBERT(L.LightningModule):
     def forward(self, **batch):
         return self.model(**batch)
 
-    # ---- Option B naming: plain names for single-loader tasks, suffixed for MNLI
     def _suffix_for_split(self, dataloader_idx: Optional[int]):
         multi = self.cfg.task_name == "mnli"
         return f"_{dataloader_idx}" if (multi and dataloader_idx is not None) else ""
 
     def common_step(self, batch):
-        # Accept both "labels" (collator output) and "label" (dataset field)
+        # Accept both "labels" (collator output) and "label" (dataset field) <-- ToDo this is dirty >:(
         labels = batch.pop("labels", None)
         if labels is None:
             labels = batch.pop("label")
@@ -162,6 +161,7 @@ class LightningBERT(L.LightningModule):
         return loss
 
     def _compute_and_log_metrics(self, logits, labels, stage: str, dataloader_idx: Optional[int] = None):
+        #  dataloader_idx is only needed for tasks with mult. val/test sets (like MNLI)
         if self.is_regression:
             preds = logits.squeeze().detach().cpu().float()
             labels = labels.detach().cpu().float()
@@ -200,9 +200,8 @@ class LightningBERT(L.LightningModule):
         scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps, num_training_steps)
         return {"optimizer": optimizer, "lr_scheduler": {"scheduler": scheduler, "interval": "step"}}
 
-# -------------------------
+
 # Entrypoint
-# -------------------------
 def main():
     import argparse
     parser = argparse.ArgumentParser()
@@ -304,7 +303,7 @@ def main():
     # Fit & test
     trainer.fit(model, dm)
 
-    # Test with best/last if available
+    # Test with best/last if available --> ToDo does not work on cluster
     best_ckpt = None
     if not args.no_ckpt:
         for cb in callbacks:
