@@ -3,8 +3,6 @@ import warnings
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
-from einops import rearrange
-
 from bertblocks.modeling.norms import get_norm
 
 if TYPE_CHECKING:
@@ -20,11 +18,10 @@ class MultiHotEmbedding(nn.Module):
     def __init__(self, vocab_size: int, hidden_size: int, padding_idx: int = 0, **kwargs: Any) -> None:
         super().__init__()
         max_power_2 = math.ceil(math.log2(vocab_size))
-        intermediate_size: int = kwargs.get("intermediate_size") or hidden_size // max_power_2
-        bit_positions = torch.arange(max_power_2).to(dtype=torch.long).unsqueeze(0)
+        bit_positions = torch.arange(max_power_2, dtype=torch.long).unsqueeze(0)
         self.register_buffer("bit_positions", bit_positions)
-        self.embd = nn.Linear(max_power_2, intermediate_size)
-        self.proj = nn.Linear(max_power_2 * intermediate_size, hidden_size)
+        self.embd = nn.Linear(max_power_2, hidden_size)
+        self.norm = nn.RMSNorm(hidden_size)
 
         self.to_multihot: Callable[[torch.LongTensor], torch.LongTensor] = self._to_binary_repr
         match kwargs.get("encoding"):
@@ -47,22 +44,12 @@ class MultiHotEmbedding(nn.Module):
         x[..., :-1] = x[..., 1:] ^ x[..., :-1]
         return x
 
-    def _to_positional_one_hot(self, x: "torch.LongTensor") -> "torch.LongTensor":
-        # Get the last dimension size for one-hot encoding
-        num_positions = x.shape[-1]
-        positions = torch.arange(num_positions, device=x.device)
-        position_onehot = torch.nn.functional.one_hot(positions, num_classes=num_positions)
-        position_onehot = position_onehot.expand(*x.shape, num_positions)
-        return torch.where(x.unsqueeze(-1) == 1, position_onehot, torch.zeros_like(position_onehot))
-
     def forward(self, x: torch.LongTensor) -> torch.FloatTensor:
         # Input IDs to multi hot representation
-        x = self.to_multihot(x)  # [..., max_power_of_2]
-        x = self._to_positional_one_hot(x).to(dtype=self.embd.weight.dtype)  # [..., max_power_of_2, max_power_of_2]
+        x = self.to_multihot(x).to(dtype=self.embd.weight.dtype)  # [..., max_power_of_2]
         # Multi hot representation to dense
-        x = self.embd(x)  # [..., max_power_of_2, intermediate_size]
-        x = rearrange(x, "... p i -> ... (p i)")  # [..., max_power_of_2 * intermediate_size]
-        x = self.proj(x)  # [..., hidden_size]
+        x = self.embd(x)  # [..., intermediate_size]
+        x = self.norm(x)
         return x
 
 
