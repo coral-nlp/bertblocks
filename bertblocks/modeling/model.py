@@ -40,8 +40,8 @@ class BertBlocksPreTrainedModel(PreTrainedModel):
     config_class = BertBlocksConfig
     base_model_prefix = "model"
     supports_gradient_checkpointing = True
-    _supports_flash_attn_2 = False
-    _supports_sdpa = False
+    _supports_flash_attn_2 = True
+    _supports_sdpa = True
     _supports_flex_attn = True
     _no_split_modules: ClassVar[list] = ["Encoder", "Attention"]
     _keys_to_ignore_on_load_missing: ClassVar[list] = [r"position_ids"]
@@ -753,7 +753,7 @@ class BertBlocksForQuestionAnswering(BertBlocksForTasksBase):
 
 
 def get_model_cls(
-    task: Literal["mlm", "enhanced_mlm", "classification", "token_classification", "question_answering"],
+    task: Literal["mlm", "enhanced_mlm", "denoising", "classification", "token_classification", "question_answering"],
 ) -> type[
     BertBlocksForMaskedLM
     | BertBlocksForEnhancedMaskedLM
@@ -763,6 +763,8 @@ def get_model_cls(
 ]:
     match task:
         case "mlm":
+            return BertBlocksForMaskedLM
+        case "denoising":
             return BertBlocksForMaskedLM
         case "enhanced_mlm":
             return BertBlocksForEnhancedMaskedLM
