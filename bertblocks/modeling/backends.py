@@ -230,13 +230,13 @@ def get_attention(config: "BertBlocksConfig") -> "AttentionBackend":
 
     Supported backends:
 
-        - `fa2`: Flash Attention
+        - `flash_attention_2`: Flash Attention
         - `sdpa`: torch scaled dot product attention
         - `eager`: native torch attention
 
     """
     match config._attn_implementation:
-        case "fa2":
+        case "flash_attention_2":
             return FlashBackend()
         case "sdpa":
             return SDPABackend()
@@ -244,5 +244,6 @@ def get_attention(config: "BertBlocksConfig") -> "AttentionBackend":
             return EagerBackend()
         case _:
             raise ValueError(
-                f"Unsupported _backend: {config._attn_implementation}, expected one of 'sdpa', 'eager', 'fa2'"
+                f"Unsupported _backend: {config._attn_implementation}, "
+                "expected one of 'sdpa', 'eager', 'flash_attention_2'"
             )
