@@ -1,12 +1,14 @@
 # train_glue_pl.py
 # works on container: wpertsch/slurm:0.0.1 + pip install evaluate ToDo
-import os
+import os, csv, json
+from pathlib import Path
 # Avoid tokenizers/datasets fork deadlocks. Is relevant for some tasks/epoch numbers --> num workers on 0 works too!
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 os.environ.setdefault("HF_DATASETS_DISABLE_PARALLEL", "1")
 
 from dataclasses import dataclass
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, DefaultDict
+from collections import defaultdict
 
 import torch
 from torch.utils.data import DataLoader
@@ -139,6 +141,9 @@ class LightningBERT(L.LightningModule):
             trust_remote_code=cfg.trust_remote_code,
         )
         self.metric = evaluate.load("glue", cfg.task_name)
+        self._test_preds: DefaultDict[int, List[torch.Tensor]] = defaultdict(list)
+        self._test_labels: DefaultDict[int, List[torch.Tensor]] = defaultdict(list)
+        self.test_epoch_metrics: Dict[str, Dict[str, float]] = {}
 
     def forward(self, **batch):
         return self.model(**batch)
@@ -148,11 +153,9 @@ class LightningBERT(L.LightningModule):
         return f"_{dataloader_idx}" if (multi and dataloader_idx is not None) else ""
 
     def common_step(self, batch):
-        # Accept both "labels" (collator output) and "label" (dataset field) <-- ToDo this is dirty >:(
-        labels = batch.pop("labels", None)
-        if labels is None:
-            labels = batch.pop("label")
-        out = self(**batch, labels=labels)
+        labels = batch["labels"] if "labels" in batch else batch["label"]
+        fwd = {k: v for k, v in batch.items() if k not in ("label", "labels")}
+        out = self(**fwd, labels=labels)
         return out.loss, out.logits, labels
 
     def training_step(self, batch, _):
@@ -180,9 +183,34 @@ class LightningBERT(L.LightningModule):
         self.log(f"val_loss{tag}", loss, prog_bar=False, on_epoch=True, sync_dist=True)
         self._compute_and_log_metrics(logits, labels, "val", dataloader_idx)
 
+    def on_test_epoch_start(self):
+        self._test_preds.clear()
+        self._test_labels.clear()
+        self.test_epoch_metrics.clear()
+
     def test_step(self, batch, batch_idx, dataloader_idx=0):
-        _, logits, labels = self.common_step(batch)
-        self._compute_and_log_metrics(logits, labels, "test", dataloader_idx)
+        loss, logits, labels = self.common_step(batch)
+        # accumulate raw preds/labels to compute metrics on the whole set
+        if self.is_regression:
+            self._test_preds[dataloader_idx].append(logits.detach().cpu().squeeze())
+        else:
+            self._test_preds[dataloader_idx].append(torch.argmax(logits, dim=-1).detach().cpu())
+        self._test_labels[dataloader_idx].append(labels.detach().cpu())
+
+    def on_test_epoch_end(self):
+        # compute metrics per test split
+        for idx in sorted(self._test_preds.keys()):
+            preds = torch.cat(self._test_preds[idx]).numpy().tolist()
+            refs = torch.cat(self._test_labels[idx]).numpy().tolist()
+            metrics: Dict[str, float] = evaluate.load("glue", self.cfg.task_name).compute(
+                predictions=preds, references=refs
+            )
+            tag = self._suffix_for_split(idx)
+            # log nice names for single-split tasks; suffixed for MNLI
+            for k, v in metrics.items():
+                self.log(f"test{tag}_{k}", v, prog_bar=True, on_epoch=True, sync_dist=True)
+            key = f"test{tag}"
+            self.test_epoch_metrics[key] = metrics
 
     def configure_optimizers(self):
         no_decay = ["bias", "LayerNorm.weight", "layer_norm.weight"]
@@ -230,7 +258,12 @@ def main():
     parser.add_argument("--wandb_mode", type=str, default=None, choices=[None, "offline", "disabled", "online"])
 
     # I/O & callbacks
-    parser.add_argument("--no_ckpt", action="store_true", help="Disable model checkpointing (useful on slow/NFS storage)")
+    parser.add_argument("--no_ckpt", action="store_true",
+                        help="Disable model checkpointing (useful on slow/NFS storage)")
+    parser.add_argument("--results_csv", type=str, default=None,
+                        help="If set, append one row per test split with metrics.")
+    parser.add_argument("--echo_json", action="store_true",
+                        help="Print a JSON object with test metrics to stdout at the end.")
 
     # Optional trainer batch limits (handy for smoke tests)
     parser.add_argument("--limit_train_batches", type=float, default=1.0)
@@ -317,6 +350,56 @@ def main():
                 best_ckpt = last_ckpt
 
     trainer.test(model, datamodule=dm, ckpt_path=best_ckpt)
+
+    # model.test_epoch_metrics looks like {"test": {...}} or {"test_0": {...}, "test_1": {...}}
+    results = []
+    for split_name, metrics in model.test_epoch_metrics.items():
+        row = {
+            "task": args.task,
+            "model": args.model,
+            "split": split_name,  # "test" or "test_0"/"test_1" for MNLI
+            "seed": args.seed,
+            "epochs": args.epochs,
+            "batch_size": args.bsz,
+            **metrics,  # glue metrics (e.g., accuracy, f1, matthews_correlation, pearson, spearmanr)
+        }
+        results.append(row)
+
+    # append to CSV if requested
+    if args.results_csv:
+        out = Path(args.results_csv)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        # unify the header across tasks by collecting all keys
+        # if file does not exist, write header
+        write_header = not out.exists()
+        # Determine superset of keys for this write pass
+        # (For incremental consistency, read existing header if present)
+        if out.exists():
+            with out.open("r", newline="") as f:
+                reader = csv.DictReader(f)
+                existing_fields = reader.fieldnames or []
+        else:
+            existing_fields = []
+        # new fields from rows
+        new_fields = set(existing_fields) | set().union(*[row.keys() for row in results])
+        fieldnames = list(existing_fields) if existing_fields else list(sorted(new_fields))
+        # ensure all keys present
+        for row in results:
+            for k in new_fields:
+                row.setdefault(k, "")
+        # write (append mode)
+        file_exists = out.exists()
+        with out.open("a", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            if not file_exists:
+                writer.writeheader()
+            for row in results:
+                writer.writerow(row)
+
+    # echo a compact JSON line if requested (easy to parse in a runner)
+    if args.echo_json:
+        print(json.dumps({"task": args.task, "model": args.model, "results": model.test_epoch_metrics}), flush=True)
+
 
 if __name__ == "__main__":
     main()
