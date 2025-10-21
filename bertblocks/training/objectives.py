@@ -20,7 +20,7 @@ class Collator(ABC):
         self,
         tokenizer: PreTrainedTokenizerBase,
         text_column: str = "text",
-        label_column: str = None,
+        label_column: str | None = None,
         max_sequence_length: int | None = 256,
         pretokenized: bool | None = False,
     ) -> None:
@@ -432,8 +432,67 @@ class QuestionAnsweringCollator(Collator):
         return tokenized
 
 
+class DenoisingCollator(Collator):
+    """An MLM-type collator that samples a random masking probability per batch between 0 and 1.
+
+    Randomly masks tokens outside a preserved prefix length using the sampled masking probability.
+
+    Parameters
+    ----------
+    tokenizer: PreTrainedTokenizerBase
+        The tokenizer used to tokenize the batch.
+    text_column: str
+        The name of the column in `batch` that contains the texts.
+    max_sequence_length: int
+        The maximum length of the tokenized sequences.
+    pretokenized: bool
+        Whether the batch is pretokenized.
+    prefix_length: int
+        The number of tokens to preserve at the start of each sequence.
+    """
+
+    def __init__(
+        self,
+        tokenizer: "PreTrainedTokenizerBase",
+        text_column: str = "text",
+        max_sequence_length: int = 256,
+        pretokenized: bool | None = False,
+        prefix_length: int = 32,
+    ):
+        super().__init__(
+            tokenizer=tokenizer,
+            text_column=text_column,
+            max_sequence_length=max_sequence_length,
+            pretokenized=pretokenized,
+        )
+        if prefix_length >= max_sequence_length:
+            raise ValueError("prefix_length must be less than max_sequence_length")
+        self.prefix_length = prefix_length
+
+    def compute_labels(self, tokenized: dict[str, Any]) -> Any:
+        """Compute the denoising MLM labels for the given batch of tokenized inputs.
+
+        Args:
+            tokenized (dict[str, Any]): The tokenized inputs for the batch.
+
+        Returns:
+            dict[str, Any]: The computed MLM labels for the batch.
+        """
+        # Never mask the first few tokens (preserved context)
+        B, S = tokenized["input_ids"].shape
+        S = S - self.prefix_length
+        # Create random mask for the masking probability sampled for this batch
+        mask = torch.rand(B, S) < torch.rand(1).item()
+        # Apply masking, preserving original token IDs as labels
+        tokenized["labels"] = tokenized["input_ids"].clone()
+        tokenized["input_ids"][:, self.prefix_length :][mask] = self.tokenizer.mask_token_id
+        return tokenized
+
+
 def get_collator_cls(
-    objective: Literal["mlm", "enhanced_mlm", "classification", "token_classification", "question_answering"],
+    objective: Literal[
+        "mlm", "enhanced_mlm", "classification", "token_classification", "question_answering", "denoising"
+    ],
 ) -> type[Collator]:
     """Get the appropriate data collator for the given objective.
 
@@ -452,6 +511,8 @@ def get_collator_cls(
             return MaskedLanguageModelingCollator
         case "enhanced_mlm":
             return EnhancedMaskedLanguageModelingCollator
+        case "denoising":
+            return DenoisingCollator
         case "classification":
             return SequenceClassificationCollator
         case "token_classification":
