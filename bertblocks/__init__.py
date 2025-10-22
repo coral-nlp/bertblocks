@@ -60,9 +60,7 @@ __all__ = [
     "BertBlocksForQuestionAnswering",
     "from_huggingface",
     "BertBlocksFinetuningDataModule",
-    "BertBlocksDenoisingDataModule",
     "BertBlocksPretrainingDataModule",
     "BertBlocksFinetuningModule",
-    "BertBlocksDenoisingModule",
     "BertBlocksPretrainingModule",
 ]
