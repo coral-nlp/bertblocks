@@ -87,4 +87,76 @@ def top_k_top_p_filtering(
     return logits
 
 
-__all__ = ["chunk_examples", "top_k_top_p_filtering"]
+def predict_denoising(
+    model: "torch.nn.Module",
+    batch: dict[str, "torch.Tensor"],
+    num_steps: int = 10,
+    top_k: int = 0,
+    top_p: float = 1.0,
+    pad_token_id: int = 0,
+    mask_token_id: int = 0,
+    sep_token_id: int | None = None,
+) -> "torch.Tensor":
+    """Predicts text for a batch using a denoising objective.
+
+    Args:
+        model (torch.nn.Module): Model to use. Must return logits.
+        batch (dict[str, Any]): Input batch, must contain keys `input_ids`, `attention_mask`
+        num_steps (int): Number of denoising steps to perform.
+        top_k (int): Number of top-k tokens to sample per mask during denoising. Defaults to 0 (uses top_p only).
+        top_p (float): Tokens with cumulative probability >= top_p to keep per mask during denoising. Defaults to 1.0.
+        pad_token_id (int, optional): Padding token id. Defaults to 0.
+        mask_token_id (int, optional): Mask token id. Defaults to 0.
+        sep_token_id (int, optional): Separator token id. Defaults to None.
+
+    Returns:
+        torch.Tensor: Predicted text for a batch using denoising.
+    """
+    B, S = batch["input_ids"].shape
+    device = batch["input_ids"].device
+
+    for mask_prob in torch.linspace(0.001, 1.0, num_steps):
+        # Forward pass: predict masked tokens
+        with torch.no_grad():
+            predictions = model(**batch).logits  # shape: [B, S, V]
+
+        # Find all masked positions across the batch
+        prefix_length = batch["attention_mask"].sum(dim=-1) - 1
+        # Set padding to masked to allow prediction beyond prompt
+        batch["input_ids"] = torch.where(batch["input_ids"] == pad_token_id, mask_token_id, batch["input_ids"])
+        if sep_token_id is not None:
+            # If using a sep token, move it to the end of the context window.
+            batch["input_ids"] = torch.where(batch["input_ids"] == sep_token_id, mask_token_id, batch["input_ids"])
+            batch["input_ids"][:, -1] = sep_token_id
+
+        mask_positions = (batch["input_ids"] == mask_token_id) & (
+            torch.arange(S, device=device).repeat(B, 1) >= prefix_length.unsqueeze(-1)
+        )
+
+        if mask_positions.any():
+            # Get logits for all masked positions
+            masked_logits = predictions[mask_positions]  # shape: [num_masked, V]
+
+            # Apply top-k and top-p filtering
+            filtered_logits = top_k_top_p_filtering(masked_logits, top_k=top_k, top_p=top_p)
+            probs = torch.nn.functional.softmax(filtered_logits, dim=-1)
+
+            # Sample tokens for all masked positions at once
+            sampled_tokens = torch.multinomial(probs, 1).squeeze(-1)  # shape: [num_masked,]
+
+            # Update the batch with sampled tokens
+            batch["input_ids"][mask_positions] = sampled_tokens
+
+        # Re-mask a portion of non-prefix tokens for next iteration (except last step)
+        if mask_prob > 0:
+            # Create random mask for non-prefix positions
+            non_prefix_mask = torch.rand((B, S), device=device)
+            non_prefix_mask[~mask_positions] = 0
+            non_prefix_mask = non_prefix_mask >= mask_prob
+            # Apply mask
+            batch["input_ids"][non_prefix_mask.bool()] = mask_token_id
+
+    return batch["input_ids"]
+
+
+__all__ = ["chunk_examples", "top_k_top_p_filtering", "predict_denoising"]

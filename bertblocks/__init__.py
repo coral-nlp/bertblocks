@@ -20,6 +20,12 @@ from bertblocks.modeling.model import (
     BertBlocksForTokenClassification,
     BertBlocksModel,
 )
+from bertblocks.training.modules import (
+    BertBlocksFinetuningDataModule,
+    BertBlocksFinetuningModule,
+    BertBlocksPretrainingDataModule,
+    BertBlocksPretrainingModule,
+)
 
 # Register models with HuggingFace AutoModel system
 try:
@@ -53,4 +59,8 @@ __all__ = [
     "BertBlocksForTokenClassification",
     "BertBlocksForQuestionAnswering",
     "from_huggingface",
+    "BertBlocksFinetuningDataModule",
+    "BertBlocksPretrainingDataModule",
+    "BertBlocksFinetuningModule",
+    "BertBlocksPretrainingModule",
 ]

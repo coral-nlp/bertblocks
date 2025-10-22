@@ -12,7 +12,7 @@ trainer:
   max_epochs: 1
   log_every_n_steps: 1
 model:
-  class_path: bertblocks.pretraining.train.BertBlocksPretrainingModule
+  class_path: bertblocks.training.modules.BertBlocksPretrainingModule
   init_args:
     learning_rate: 1e-4
     weight_decay: 1e-5
@@ -32,7 +32,7 @@ model:
       max_sequence_length: ${data.init_args.max_sequence_length}
     objective: ${data.init_args.objective}
 data:
-  class_path: bertblocks.pretraining.train.BertBlocksPretrainingDataModule
+  class_path: bertblocks.training.modules.BertBlocksPretrainingDataModule
   init_args:
     objective: mlm
     dataset_name_or_path: roneneldan/TinyStories

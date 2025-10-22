@@ -1,7 +1,5 @@
 from typing import TYPE_CHECKING, Any, Literal
 
-from lightning.pytorch.utilities.types import EVAL_DATALOADERS
-
 if TYPE_CHECKING:
     from torchmetrics import MetricCollection
 
@@ -31,7 +29,7 @@ from bertblocks.training.metrics import get_metrics_for_task
 from bertblocks.training.objectives import get_collator_cls
 from bertblocks.training.optimizer import get_optimizer
 from bertblocks.training.scheduler import get_scheduler
-from bertblocks.training.utils import chunk_examples, top_k_top_p_filtering
+from bertblocks.training.utils import chunk_examples
 
 
 class EmptyDataset(Dataset):
@@ -67,8 +65,9 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
     def __init__(
         self,
         pretrained_tokenizer_name_or_path: str,
-        objective: Literal["mlm", "enhanced_mlm"] = "mlm",
+        objective: Literal["mlm", "enhanced_mlm", "denoising"] = "mlm",
         max_sequence_length: int | None = 512,
+        min_unmasked_count: int | None = 16,
         dataset_name_or_path: str | list[str] | None = None,
         file_format: str | None = None,
         data_split: str | None = None,
@@ -76,7 +75,6 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
         split_char: str | None = None,
         split_len: int | None = None,
         shuffle: bool | None = False,
-        mlm_probability: float | None = 0.3,
         train_batch_size: int | None = 32,
         val_batch_size: int | None = 32,
         pretokenized: bool | None = False,
@@ -163,27 +161,6 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
             batch_size=self.hparams.train_batch_size,
             num_workers=self.hparams.num_workers,
             pin_memory=True,
-        )
-
-
-class BertBlocksDenoisingDataModule(BertBlocksPretrainingDataModule):
-    """PyTorch Lightning DataModule for BertBlocks denoising pretraining."""
-
-    dataset: torch.utils.data.Dataset
-
-    def __init__(self, **kwargs: Any) -> None:
-        """Initialize the default pretraining data module, but overwrites objective with denoising specifically."""
-        kwargs.update({"objective": "denoising"})
-        super().__init__(**kwargs)
-
-    def predict_dataloader(self) -> EVAL_DATALOADERS:
-        """Create the denoising data loader."""
-        return DataLoader(
-            self.test_dataset,
-            collate_fn=self.collator,
-            shuffle=False,
-            batch_size=self.hparams.test_batch_size,
-            num_workers=self.hparams.num_workers,
         )
 
 
@@ -537,70 +514,6 @@ class BertBlocksPretrainingModule(L.LightningModule):
             log_dir = Path(self.trainer.log_dir)
             save_path = log_dir / "huggingface_checkpoint"
             self.model.save_pretrained(save_path, safe_serialization=False)
-
-
-class BertBlocksDenoisingModule(BertBlocksPretrainingModule):
-    """PyTorch Lightning module for BertBlocks denoising-based pretraining.
-
-    Wraps the MLM pretraining module internally and adds a denoising prediction function.
-    """
-
-    def __init__(
-        self,
-        prefix_length: int | None = 32,
-        num_denoising_steps: int | None = 16,
-        top_k: int = 10,
-        top_p: float = 0.95,
-        **kwargs: Any,
-    ):
-        """Initialize the BertBlocks pretraining module."""
-        kwargs.update({"objective": "mlm"})
-        super().__init__(**kwargs)
-        self.prefix_length = prefix_length
-        self.num_denoising_steps = num_denoising_steps
-        self.top_k = top_k
-        self.top_p = top_p
-
-    def predict_step(self, batch: dict[str, torch.Tensor], batch_idx: int) -> Any:
-        """Predicts text for a batch using a denoising objective."""
-        B, S = batch["input_ids"].shape
-        device = batch["input_ids"].device
-
-        for mask_prob in torch.linspace(1.0, 0.0, self.num_denoising_steps):
-            # Forward pass: predict masked tokens
-            with torch.no_grad():
-                predictions = self.model(**batch).logits  # shape: [B, S, V]
-
-            # Find all masked positions across the batch (excluding prefix)
-            mask_positions = (batch["input_ids"] == self.mask_token_id) & (
-                torch.arange(S, device=device).unsqueeze(0) >= self.prefix_length
-            )
-
-            if mask_positions.any():
-                # Get logits for all masked positions
-                masked_logits = predictions[mask_positions]  # shape: [num_masked, V]
-
-                # Apply top-k and top-p filtering
-                filtered_logits = top_k_top_p_filtering(masked_logits, top_k=self.top_k, top_p=self.top_p)
-                probs = torch.nn.functional.softmax(filtered_logits, dim=-1)
-
-                # Sample tokens for all masked positions at once
-                sampled_tokens = torch.multinomial(probs, 1).squeeze(-1)  # shape: [num_masked,]
-
-                # Update the batch with sampled tokens
-                batch["input_ids"][mask_positions] = sampled_tokens
-
-            # Re-mask a portion of non-prefix tokens for next iteration (except last step)
-            if mask_prob > 0:
-                # Create random mask for non-prefix positions
-                non_prefix_mask = torch.zeros_like(batch["input_ids"], dtype=torch.bool)
-                non_prefix_mask[:, self.prefix_length :] = (
-                    torch.rand(B, S - self.prefix_length, device=device) < mask_prob
-                )
-                # Apply mask
-                batch["input_ids"][non_prefix_mask] = self.mask_token_id
-
-        return batch["input_ids"]
 
 
 class BertBlocksFinetuningModule(L.LightningModule):
