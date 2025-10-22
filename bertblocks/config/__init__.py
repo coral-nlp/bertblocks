@@ -96,8 +96,9 @@ class BertBlocksConfig(PretrainedConfig):
         classifier_dropout_prob: Dropout probability for the classification head. Applied to the
             pooled representation before the final classification layer. Helps prevent
             overfitting in downstream tasks. Must be between 0.0 and 1.0.
-        attn_implementation: Which _backend implementation of attention to use; can be "flash_attention_2" for
-            FlashAttention2, "sdpa" torch, or "eager" for manual implementation.
+        attn_implementation: Which backend implementation of attention to use; can be "flash_attention_2" for
+            FlashAttention2, "sdpa" torch, or "eager" for manual implementation. Defaults to SDPA, unless `unpadding`
+            is specified, then defaults to `flash_attention_2`.
         problem_type: The problem type for automatic loss selection (HuggingFace standard).
             Automatically selects appropriate loss functions: "regression" (MSE loss for
             continuous targets), "single_label_classification" (CrossEntropy loss for
@@ -153,7 +154,7 @@ class BertBlocksConfig(PretrainedConfig):
         hidden_dropout_prob: float = 0.1,
         attn_dropout_prob: float = 0.1,
         classifier_dropout_prob: float = 0.1,
-        attn_implementation: Literal["flash_attention_2", "eager", "sdpa"] = "flash_attention_2",
+        attn_implementation: Literal["flash_attention_2", "eager", "sdpa"] | None = None,
         problem_type: Literal["regression", "single_label_classification", "multi_label_classification"] = "regression",
         num_labels: int = 2,
         **kwargs: Any,
@@ -215,6 +216,10 @@ class BertBlocksConfig(PretrainedConfig):
             raise ValueError(
                 f"If 'learned_alibi' is used, attn_implementation must be 'eager', got {attn_implementation}"
             )
+
+        if attn_implementation is None:
+            attn_implementation = "flash_attention_2" if unpadding else "sdpa"
+
         if unpadding and not attn_implementation == "flash_attention_2":
             raise ValueError(
                 f"When using unpadding, `attn_implementation` must be 'flash_attention_2', got {attn_implementation}"
