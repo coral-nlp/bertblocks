@@ -14,6 +14,7 @@ The models are compatible with HuggingFace transformers ecosystem.
 from bertblocks.config import BertBlocksConfig
 from bertblocks.integration import from_huggingface
 from bertblocks.modeling.model import (
+    BertBlocksForMaskedDiffusion,
     BertBlocksForMaskedLM,
     BertBlocksForQuestionAnswering,
     BertBlocksForSequenceClassification,
@@ -58,6 +59,7 @@ __all__ = [
     "BertBlocksForSequenceClassification",
     "BertBlocksForTokenClassification",
     "BertBlocksForQuestionAnswering",
+    "BertBlocksForMaskedDiffusion",
     "from_huggingface",
     "BertBlocksFinetuningDataModule",
     "BertBlocksPretrainingDataModule",

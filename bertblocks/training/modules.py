@@ -65,7 +65,7 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
     def __init__(
         self,
         pretrained_tokenizer_name_or_path: str,
-        objective: Literal["mlm", "enhanced_mlm", "denoising"] = "mlm",
+        objective: Literal["mlm", "enhanced_mlm", "diffusion"] = "mlm",
         max_sequence_length: int | None = 512,
         min_unmasked_count: int | None = 16,
         dataset_name_or_path: str | list[str] | None = None,
@@ -86,8 +86,8 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
         Args:
             pretrained_tokenizer_name_or_path (str): Path or name of HuggingFace tokenizer
                 to use for text processing.
-            objective (Literal["mlm", "enhanced_mlm", "denoising"]): The training objective. Available options:
-                "mlm", "enhanced_mlm", "denoising".
+            objective (Literal["mlm", "enhanced_mlm", "diffusion"]): The training objective. Available options:
+                "mlm", "enhanced_mlm", "diffusion".
             max_sequence_length (int | None): Maximum sequence length for tokenization.
                 Longer sequences will be truncated. Defaults to 512.
             dataset_name_or_path (str | list[str] | None): Dataset name or path. Defaults to None.
@@ -366,7 +366,7 @@ class BertBlocksPretrainingModule(L.LightningModule):
         scheduler_cooldown_kind: Literal["constant", "linear", "cosine", "exponential"] = "linear",
         scheduler_cooldown_steps: int = 0,
         scheduler_cooldown_decay: float = 0.0,
-        objective: Literal["mlm", "enhanced_mlm"] = "mlm",
+        objective: Literal["mlm", "enhanced_mlm", "diffusion"] = "mlm",
         model_config_kwargs: "dict[str, Any] | None" = None,
         model_kwargs: "dict[str, Any] | None" = None,
     ):
@@ -401,7 +401,7 @@ class BertBlocksPretrainingModule(L.LightningModule):
             scheduler_cooldown_decay (float, optional): Decay value for phase. Usage depends on scheduler kind chosen
                 for cooldown phase. Defaults to 0.0.
             objective: The training objective. Available options:
-                "mlm", "enhanced_mlm".
+                "mlm", "diffusion", "enhanced_mlm".
             model_config_kwargs (dict[str, Any], optional): Optional dictionary of model configuration options passed
                 to BertBlocksConfig for instantiation.
             model_kwargs (dict[str, Any], optional): Optional dictionary of model-specific and objective-specific

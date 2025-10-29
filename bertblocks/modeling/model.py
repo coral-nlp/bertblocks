@@ -1,14 +1,19 @@
 import functools
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
+from einops import rearrange, reduce, repeat
+from torch.distributions import Categorical
+
 from bertblocks.modeling.norms import get_norm
+from bertblocks.modeling.utils import LogLinearNoise
 
 if TYPE_CHECKING:
     pass
 
 import torch
+import torch.nn.functional as F
 from torch import nn
 from transformers.modeling_outputs import (
     BaseModelOutput,
@@ -297,7 +302,7 @@ class BertBlocksForTasksBase(BertBlocksPreTrainedModel):
         labels: "torch.Tensor",
         problem_type: "Literal['regression', 'single_label_classification', 'multi_label_classification'] | None",
     ) -> "torch.Tensor | None":
-        """Compute loss for the given logits, labels and problem type.
+        """Compute loss for the given log_probs, labels and problem type.
 
         Args:
             logits: Model predictions
@@ -390,7 +395,7 @@ class BertBlocksForMaskedLM(BertBlocksPreTrainedModel):
             MaskedLMOutput
 
                 - `loss`: Masked language modeling loss if labels provided
-                - `logits`: Prediction scores over vocabulary
+                - `log_probs`: Prediction scores over vocabulary
                 - `hidden_states`: Hidden states from all layers if requested
                 - `attentions`: Attention weights from all layers if requested
 
@@ -478,7 +483,7 @@ class BertBlocksForEnhancedMaskedLM(BertBlocksForMaskedLM):
             MaskedLMOutput
 
                 - `loss`: Masked language modeling loss if labels provided
-                - `logits`: Prediction scores over vocabulary
+                - `log_probs`: Prediction scores over vocabulary
                 - `hidden_states`: Hidden states from all layers if requested
                 - `attentions`: Attention weights from all layers if requested
 
@@ -558,7 +563,7 @@ class BertBlocksForSequenceClassification(BertBlocksForTasksBase):
             SequenceClassifierOutput
 
                 - `loss`: Classification loss if labels provided
-                - `logits`: Classification scores
+                - `log_probs`: Classification scores
                 - `hidden_states`: Hidden states from all layers if requested
                 - `attentions`: Attention weights from all layers if requested
 
@@ -635,7 +640,7 @@ class BertBlocksForTokenClassification(BertBlocksForTasksBase):
             TokenClassifierOutput
 
                 - `loss`: Token classification loss if labels provided
-                - `logits`: Classification scores for each token
+                - `log_probs`: Classification scores for each token
                 - `hidden_states`: Hidden states from all layers if requested
                 - `attentions`: Attention weights from all layers if requested
 
@@ -752,10 +757,283 @@ class BertBlocksForQuestionAnswering(BertBlocksForTasksBase):
         )
 
 
+class BertBlocksForMaskedDiffusion(BertBlocksPreTrainedModel):
+    """Implementation of a masked diffusion model.
+
+    Closely follows https://github.com/kuleshov-group/mdlm
+    """
+
+    _tied_weights_keys: ClassVar = ["decoder.weight"]
+
+    def __init__(self, config: "BertBlocksConfig"):
+        super().__init__(config)
+        self.model = BertBlocksModel(config)
+        self.head = get_prediction_head(config)
+        self.decoder = nn.Linear(config.hidden_size, config.vocab_size, bias=True)
+
+        self.max_seq_len = config.max_sequence_length
+        self.vocab_size = config.vocab_size
+        self.mask_token_id = config.mask_token_id
+
+        # Noise Schedule
+        self.noise = LogLinearNoise()
+
+    def get_input_embeddings(self) -> "nn.Module":
+        """Return the encoder input embeddings."""
+        return self.model.embd.embd
+
+    def get_output_embeddings(self) -> "nn.Module":
+        """Return the decoder embeddings."""
+        return self.decoder
+
+    def set_output_embeddings(self, new_embeddings: "nn.Linear") -> None:
+        """Replace the decoder embeddings with given one (e.g., the encoder side)."""
+        self.decoder = new_embeddings
+
+    def _forward(
+        self,
+        input_ids: "torch.Tensor",
+        attention_mask: "torch.Tensor | None" = None,
+        token_type_ids: "torch.Tensor | None" = None,
+        output_attentions: bool = False,
+        output_hidden_states: bool = False,
+    ) -> MaskedLMOutput:
+        """Wrap the forward pass to infers logits from the backbone model compatible with the diffusion process.
+
+        Args:
+            input_ids (torch.Tensor, shape [batch_size, seq_len]): Tensor of token ids. When training, should
+                be timestep-corrupted token IDs.
+            attention_mask (torch.Tensor, shape [batch_size, seq_len], optional): Tensor indicating which tokens should
+                be attended to. Defaults to None (all tokens are attended to).
+            token_type_ids (torch.Tensor, shape [batch_size, seq_len], optional): Tensor indicating type of tokens.
+                Defaults to None.
+            output_attentions (bool): Whether to return attention weights from all layers. Defaults to False.
+            output_hidden_states (bool): Whether to return hidden states from all layers. Defaults to False.
+        """
+        # Infer the token-level embeddings
+        output = self.model(
+            input_ids,
+            attention_mask=attention_mask,
+            token_type_ids=token_type_ids,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+        )
+        # Predict log probabilities over the vocabulary based on the embeddings
+        logits = self.decoder(self.head(output.last_hidden_state))
+        # Set the prediction probability of the mask token to 0 (-inf in log space)
+        logits[:, :, self.mask_token_id] = -torch.inf
+        # Re-normalize the logits such that x.exp() is a probability distribution over vocab_size.
+        logits = logits - torch.logsumexp(logits, dim=-1, keepdim=True)
+        # Clamp unmasked ground-truth tokens (p=1 for ground-truth token, p=0 for any other token at that position)
+        unmasked_indices = input_ids != self.mask_token_id
+        logits[unmasked_indices] = -torch.inf
+        logits[unmasked_indices, input_ids[unmasked_indices]] = 0
+        return MaskedLMOutput(
+            loss=None,
+            logits=logits,
+            hidden_states=output.hidden_states,
+            attentions=output.attentions,
+        )
+
+    def forward(
+        self,
+        input_ids: "torch.Tensor",
+        attention_mask: "torch.Tensor | None" = None,
+        token_type_ids: "torch.Tensor | None" = None,
+        labels: "torch.Tensor | None" = None,
+        noise_level: "torch.Tensor | None" = None,
+        noise_derivative: "torch.Tensor | None" = None,
+        output_attentions: bool = False,
+        output_hidden_states: bool = False,
+    ) -> "MaskedLMOutput":
+        """Forward pass for diffusion language modeling.
+
+        Args:
+            input_ids (torch.Tensor, shape [batch_size, seq_len]): Tensor of token ids. When training, should
+                be timestep-corrupted token IDs.
+            attention_mask (torch.Tensor, shape [batch_size, seq_len], optional): Tensor indicating which tokens should
+                be attended to. Defaults to None (all tokens are attended to).
+            token_type_ids (torch.Tensor, shape [batch_size, seq_len], optional): Tensor indicating type of tokens.
+                Defaults to None.
+            labels (torch.Tensor, shape [batch_size, seq_len], optional): Tensor indicating uncorrupted token IDs.
+            noise_level (torch.Tensor, optional): Tensor indicating noise level of each sequence for training. Defaults
+                to None.
+            noise_derivative (torch.Tensor, optional): Tensor indicating noise derivative of each sequence for training.
+                Defaults to None.
+            output_attentions (bool): Whether to return attention weights from all layers. Defaults to False.
+            output_hidden_states (bool): Whether to return hidden states from all layers. Defaults to False.
+        """
+        if attention_mask is None:
+            attention_mask = torch.ones_like(input_ids)
+        output = self._forward(input_ids, attention_mask, token_type_ids)
+        if labels is not None:
+            # Get the per-token log-likelihood of ground-truth tokens
+            token_nll = torch.gather(input=output.logits, dim=-1, index=labels[:, :, None]).squeeze(-1)
+            # Negate loss to optimize in correct direction
+            loss = -1 * token_nll
+            # Weigh each sequence according to its noise level for loss contribution, down-weights easy (low noise)
+            # and emphasizes harder (high noise) denoising steps
+            loss = loss * (noise_derivative / torch.expm1(noise_level))[:, None]
+            # Average weighted NLL over valid token positions
+            loss = (loss * attention_mask).sum() / attention_mask.sum()
+        else:
+            loss = None
+
+        return MaskedLMOutput(
+            loss=loss,
+            logits=output.logits,
+            hidden_states=output.hidden_states,
+            attentions=output.attentions,
+        )
+
+    def _prior(self, *batch_dims: Sequence[int]) -> torch.Tensor:
+        """Calculate the prior distribution, i.e., a fully masked tensor.
+
+        Args:
+            batch_dims (Sequence[int]): Sequence of batch dimensions.
+
+        Returns:
+            torch.Tensor, shape [*batch_dims]: Fully masked tensor.
+        """
+        return self.mask_token_id * torch.ones(*batch_dims, dtype=torch.int64)
+
+    @torch.no_grad()
+    def sample(
+        self, num_samples: int = 1, num_steps: int = 100, max_seq_len: int | None = None, eps: float = 1e-5
+    ) -> "torch.Tensor":
+        """Generate samples using iterative denoising from noise to data.
+
+        Args:
+            num_samples (int, optional): Number of sequences to generate. Defaults to 1.
+            num_steps (int, optional): Number of denoising steps (more = higher quality, slower). Defaults to 100.
+            eps (float, optional): Final noise level. Defaults to 1e-5.
+
+        Returns:
+            x: Generated token sequences [num_samples, seq_len]
+        """
+        # Initialize from prior: all tokens are MASK
+        x = self._prior((num_samples, max(max_seq_len or self.max_seq_len, self.max_seq_len)))
+
+        # Create schedule: [1.0, ..., eps]
+        timesteps = torch.linspace(1, eps, num_steps + 1, device=self.device)
+        step_size = (1 - eps) / num_steps
+
+        # Iterative denoising loop
+        for t in timesteps[:-1]:  # All except last
+            time = repeat(t, "-> b 1", b=x.shape[0])
+            x = self._reverse_step(x, time, step_size)
+
+        # Final cleanup at t=eps
+        time = repeat(timesteps[-1], "-> b 1", b=x.shape[0])
+        x = self._final_denoise(x, time)
+        return x
+
+    def _compute_score(self, input_ids: "torch.Tensor", noise_level: "torch.Tensor") -> "torch.Tensor":
+        """Score function for discrete diffusion reverse process.
+
+        Score represents transition probability ratios:
+            score(x_t, y) = P(y -> x_t) / P(x_t -> x_t)
+
+        Two cases:
+        1. x_t = MASK: Use model predictions scaled by noise schedule
+        2. x_t = token: Only allow staying same or coming from MASK
+        """
+        logits = self._forward(input_ids).logits
+        batch, seq, vocab = logits.shape
+        # Normalization: k = exp(-noise_level) / (1 - exp(-noise_level))
+        log_k = -torch.log(torch.expm1(noise_level))  # [batch, 1]
+        log_k = rearrange(log_k, "b 1 -> b")
+
+        # Masked positions: use model predictions
+        masked_log_score = logits + repeat(log_k, "b -> b 1 1")
+        masked_log_score[:, :, self.mask_token_id] = 0  # MASK stays MASK
+        # Unmasked positions: deterministic (stay same or from MASK)
+        unmasked_log_score = torch.full_like(logits, -torch.inf)
+
+        # Can stay in current state (score = 1)
+        current_token_indices = repeat(input_ids, "b s -> b s 1")
+        unmasked_log_score.scatter_(dim=-1, index=current_token_indices, value=0.0)
+        # Can come from MASK (score = 1/k)
+        unmasked_log_score[:, :, self.mask_token_id] = -repeat(log_k, "b -> b s", s=seq)
+
+        # Combine based on whether position is masked
+        is_masked = repeat((input_ids == self.mask_token_id).float(), "b s -> b s v", v=vocab)
+        log_score = is_masked * masked_log_score + (1 - is_masked) * unmasked_log_score
+        return log_score.exp()
+
+    def _staggered_score(self, score: "torch.Tensor", noise_derivative: "torch.Tensor") -> "torch.Tensor":
+        """Apply staggered score correction for absorbing state diffusion."""
+        score = score.clone()
+        # Compute probability mass flowing to absorbing state
+        flow_to_absorb = 1 - torch.exp(noise_derivative)
+        # Scale non-absorbing scores
+        score = score * torch.exp(repeat(noise_derivative, "... -> ... 1"))
+        # Redirect flow to mask token to maintain probability conservation
+        total_score_mass = reduce(score, "... vocab -> ...", "sum")
+        score[..., self.mask_token_id] += flow_to_absorb.squeeze(-1) * total_score_mass
+        return score
+
+    def _reverse_step(self, input_ids: "torch.Tensor", timestep: "torch.Tensor", step_size: float) -> "torch.Tensor":
+        """Perform a single reverse diffusion step."""
+        curr_sigma, _ = self.noise(timestep)
+        next_sigma, _ = self.noise(timestep - step_size)
+        dsigma = curr_sigma - next_sigma
+        # Get score and apply corrections
+        score = self._compute_score(input_ids, curr_sigma)
+        stag_score = self._staggered_score(score, dsigma)
+        # Compute posterior
+        posterior_distribution = stag_score * self._transp_transition(input_ids, dsigma)
+        # Sample and return
+        return Categorical(logits=posterior_distribution).sample()
+
+    def _final_denoise(self, input_ids: "torch.Tensor", timestep: "torch.Tensor") -> "torch.Tensor":
+        """Perform final denoising step at near-zero noise to clean output."""
+        sigma, _ = self.noise(timestep)
+        # Get score and apply corrections
+        score = self._compute_score(input_ids, sigma)
+        stag_score = self._staggered_score(score, sigma)
+        # Compute posterior
+        posterior_distribution = stag_score * self._transp_transition(input_ids, sigma)
+        # Force clean output - no MASK tokens!
+        posterior_distribution[..., self.mask_token_id] = 0
+        # Sample and return
+        return Categorical(logits=posterior_distribution).sample()
+
+    def _transp_transition(self, state: torch.Tensor, noise_level: torch.Tensor) -> torch.Tensor:
+        """Compute the transpose transition kernel.
+
+        Indicates the probability of tokens at a position at prior time given the observed token at current time.
+
+        Args:
+            state (torch.Tensor, shape [batch_size, seq_len, vocab_size]): observed tokens at current time.
+            noise_level (torch.Tensor, shape [batch_size, 1]): Tensor indicating noise level of each sequence.
+
+        Returns:
+            torch.Tensor, shape [batch_size, seq_len, vocab_size]: transition probabilities for tokens into prior time.
+        """
+        sigma = repeat(noise_level, "... -> ... 1")
+        stay_prob = torch.exp(-sigma)
+
+        # P(was token i | observe token i) = exp(-sigma)
+        transition_prob = stay_prob * F.one_hot(state, num_classes=self.vocab_size)
+
+        # P(was MASK | observe MASK) = 1.0 (absorbing state)
+        is_mask = state == self.mask_token_id
+        transition_prob[..., self.mask_token_id] = torch.where(
+            is_mask,
+            torch.ones_like(stay_prob.squeeze(-1)),  # Token is mask => P = 1
+            transition_prob[..., self.mask_token_id],  # Token is not mask => 0
+        )
+        return transition_prob
+
+
 def get_model_cls(
-    task: Literal["mlm", "enhanced_mlm", "denoising", "classification", "token_classification", "question_answering"],
+    task: Literal[
+        "mlm", "diffusion", "enhanced_mlm", "denoising", "classification", "token_classification", "question_answering"
+    ],
 ) -> type[
     BertBlocksForMaskedLM
+    | BertBlocksForMaskedDiffusion
     | BertBlocksForEnhancedMaskedLM
     | BertBlocksForSequenceClassification
     | BertBlocksForTokenClassification
@@ -764,8 +1042,8 @@ def get_model_cls(
     match task:
         case "mlm":
             return BertBlocksForMaskedLM
-        case "denoising":
-            return BertBlocksForMaskedLM
+        case "diffusion":
+            return BertBlocksForMaskedDiffusion
         case "enhanced_mlm":
             return BertBlocksForEnhancedMaskedLM
         case "sequence_classification":
@@ -776,7 +1054,7 @@ def get_model_cls(
             return BertBlocksForQuestionAnswering
         case _:
             raise ValueError(
-                f"Unknown task {task}, expected one of 'mlm', 'enhanced_mlm', 'sequence_classification', "
+                f"Unknown task {task}, expected one of 'mlm', 'diffusion', 'enhanced_mlm', 'sequence_classification', "
                 f"'token_classification', 'question_answering'"
             )
 
@@ -787,4 +1065,5 @@ __all__ = [
     "BertBlocksForTokenClassification",
     "BertBlocksForQuestionAnswering",
     "BertBlocksForSequenceClassification",
+    "BertBlocksForMaskedDiffusion",
 ]
