@@ -168,7 +168,7 @@ class BertBlocksModel(BertBlocksPreTrainedModel):
         self.post_init()
         self.local_attention = config.local_attention
         if config.pos_emb_kind == "alibi":
-            self.alibi = AlibiPositionalEncoding(config.num_attention_heads, device="cpu")
+            self.alibi = AlibiPositionalEncoding(config.num_attention_heads)
 
     @property
     def dtype(self) -> "torch.dtype":
@@ -301,7 +301,7 @@ class BertBlocksForTasksBase(BertBlocksPreTrainedModel):
         labels: "torch.Tensor",
         problem_type: "Literal['regression', 'single_label_classification', 'multi_label_classification'] | None",
     ) -> "torch.Tensor | None":
-        """Compute loss for the given log_probs, labels and problem type.
+        """Compute loss for the given logits, labels and problem type.
 
         Args:
             logits: Model predictions
@@ -394,7 +394,7 @@ class BertBlocksForMaskedLM(BertBlocksPreTrainedModel):
             MaskedLMOutput
 
                 - `loss`: Masked language modeling loss if labels provided
-                - `log_probs`: Prediction scores over vocabulary
+                - `logits`: Prediction scores over vocabulary
                 - `hidden_states`: Hidden states from all layers if requested
                 - `attentions`: Attention weights from all layers if requested
 
@@ -482,7 +482,7 @@ class BertBlocksForEnhancedMaskedLM(BertBlocksForMaskedLM):
             MaskedLMOutput
 
                 - `loss`: Masked language modeling loss if labels provided
-                - `log_probs`: Prediction scores over vocabulary
+                - `logits`: Prediction scores over vocabulary
                 - `hidden_states`: Hidden states from all layers if requested
                 - `attentions`: Attention weights from all layers if requested
 
@@ -562,7 +562,7 @@ class BertBlocksForSequenceClassification(BertBlocksForTasksBase):
             SequenceClassifierOutput
 
                 - `loss`: Classification loss if labels provided
-                - `log_probs`: Classification scores
+                - `logits`: Classification scores
                 - `hidden_states`: Hidden states from all layers if requested
                 - `attentions`: Attention weights from all layers if requested
 
@@ -639,7 +639,7 @@ class BertBlocksForTokenClassification(BertBlocksForTasksBase):
             TokenClassifierOutput
 
                 - `loss`: Token classification loss if labels provided
-                - `log_probs`: Classification scores for each token
+                - `logits`: Classification scores for each token
                 - `hidden_states`: Hidden states from all layers if requested
                 - `attentions`: Attention weights from all layers if requested
 
