@@ -865,7 +865,7 @@ class BertBlocksForMaskedDiffusion(BertBlocksPreTrainedModel):
         """
         if attention_mask is None:
             attention_mask = torch.ones_like(input_ids)
-        output = self._forward(input_ids, attention_mask, token_type_ids)
+        output = self._forward(input_ids, attention_mask, token_type_ids, output_attentions, output_hidden_states)
         if labels is not None:
             # Get the per-token log-likelihood of ground-truth tokens
             token_nll = torch.gather(input=output.logits, dim=-1, index=labels[:, :, None]).squeeze(-1)
@@ -928,15 +928,22 @@ class BertBlocksForMaskedDiffusion(BertBlocksPreTrainedModel):
         x = self._final_denoise(x, time)
         return x
 
-    def _compute_score(self, input_ids: "torch.Tensor", noise_level: "torch.Tensor") -> "torch.Tensor":
-        """Score function for discrete diffusion reverse process.
+    def _compute_transition_probs(self, input_ids: "torch.Tensor", noise_level: "torch.Tensor") -> "torch.Tensor":
+        """Compute token-wise transition probabilities for discrete diffusion reverse process.
 
         Score represents transition probability ratios:
-            score(x_t, y) = P(y -> x_t) / P(x_t -> x_t)
+            P(x_t, y) = P(y -> x_t) / P(x_t -> x_t)
 
         Two cases:
         1. x_t = MASK: Use model predictions scaled by noise schedule
         2. x_t = token: Only allow staying same or coming from MASK
+
+        Args:
+            input_ids (torch.Tensor, shape [batch_size, seq_len]): Input sequences.
+            noise_level (torch.Tensor, shape [batch_size, 1]): Tensor indicating noise level of each sequence.
+
+        Returns:
+            torch.Tensor (shape [batch_size, seq_len, vocab_size]): Tensor of transition probabilities for each token.
         """
         logits = self._forward(input_ids).logits
         batch, seq, vocab = logits.shape
@@ -961,39 +968,66 @@ class BertBlocksForMaskedDiffusion(BertBlocksPreTrainedModel):
         log_score = is_masked * masked_log_score + (1 - is_masked) * unmasked_log_score
         return log_score.exp()
 
-    def _staggered_score(self, score: "torch.Tensor", noise_derivative: "torch.Tensor") -> "torch.Tensor":
-        """Apply staggered score correction for absorbing state diffusion."""
-        score = score.clone()
+    def _staggered_correction(
+        self, transition_probs: "torch.Tensor", noise_derivative: "torch.Tensor"
+    ) -> "torch.Tensor":
+        """Apply staggered probability correction for absorbing state diffusion.
+
+        Args:
+            transition_probs (torch.Tensor, shape [batch_size, seq_len, vocab]): Transition probabilities.
+            noise_derivative (torch.Tensor, shape [batch_size, 1]): Rate of change of noise for sequences.
+
+        Returns:
+            torch.Tensor (shape [batch_size, seq_len, vocab]): Corrected transition probabilities.
+        """
+        transition_probs = transition_probs.clone()
         # Compute probability mass flowing to absorbing state
         flow_to_absorb = 1 - torch.exp(noise_derivative)
         # Scale non-absorbing scores
-        score = score * torch.exp(repeat(noise_derivative, "... -> ... 1"))
+        transition_probs = transition_probs * torch.exp(repeat(noise_derivative, "... -> ... 1"))
         # Redirect flow to mask token to maintain probability conservation
-        total_score_mass = reduce(score, "... vocab -> ...", "sum")
-        score[..., self.mask_token_id] += flow_to_absorb.squeeze(-1) * total_score_mass
-        return score
+        total_score_mass = reduce(transition_probs, "... vocab -> ...", "sum")
+        transition_probs[..., self.mask_token_id] += flow_to_absorb.squeeze(-1) * total_score_mass
+        return transition_probs
 
     def _reverse_step(self, input_ids: "torch.Tensor", timestep: "torch.Tensor", step_size: float) -> "torch.Tensor":
-        """Perform a single reverse diffusion step."""
+        """Perform a single reverse diffusion step.
+
+        Args:
+            input_ids (torch.Tensor, shape [batch_size, seq_len]): Input sequences.
+            timestep (torch.Tensor, shape [batch_size, 1]): Time step for each sequence.
+            step_size (float): Step size to move in time.
+
+        Returns:
+            torch.Tensor (shape [batch_size, seq_len]): Partially step-wise denoised sequences.
+        """
         curr_sigma, _ = self.noise(timestep)
         next_sigma, _ = self.noise(timestep - step_size)
         dsigma = curr_sigma - next_sigma
         # Get score and apply corrections
-        score = self._compute_score(input_ids, curr_sigma)
-        stag_score = self._staggered_score(score, dsigma)
+        score = self._compute_transition_probs(input_ids, curr_sigma)
+        stag_score = self._staggered_correction(score, dsigma)
         # Compute posterior
         posterior_distribution = stag_score * self._transp_transition(input_ids, dsigma)
         # Sample and return
         return Categorical(logits=posterior_distribution).sample()
 
     def _final_denoise(self, input_ids: "torch.Tensor", timestep: "torch.Tensor") -> "torch.Tensor":
-        """Perform final denoising step at near-zero noise to clean output."""
+        """Perform final denoising step at near-zero noise to clean output.
+
+        Args:
+            input_ids (torch.Tensor, shape [batch_size, seq_len]): Input sequences.
+            timestep (torch.Tensor, shape [batch_size, 1]): Time step for each sequence.
+
+        Returns:
+            torch.Tensor (shape [batch_size, seq_len]): Final denoised sequences.
+        """
         sigma, _ = self.noise(timestep)
-        # Get score and apply corrections
-        score = self._compute_score(input_ids, sigma)
-        stag_score = self._staggered_score(score, sigma)
+        # Get transition probabilities and apply corrections
+        transition_probs = self._compute_transition_probs(input_ids, sigma)
+        stag_transition_probs = self._staggered_correction(transition_probs, sigma)
         # Compute posterior
-        posterior_distribution = stag_score * self._transp_transition(input_ids, sigma)
+        posterior_distribution = stag_transition_probs * self._transp_transition(input_ids, sigma)
         # Force clean output - no MASK tokens!
         posterior_distribution[..., self.mask_token_id] = 0
         # Sample and return
@@ -1009,7 +1043,7 @@ class BertBlocksForMaskedDiffusion(BertBlocksPreTrainedModel):
             noise_level (torch.Tensor, shape [batch_size, 1]): Tensor indicating noise level of each sequence.
 
         Returns:
-            torch.Tensor, shape [batch_size, seq_len, vocab_size]: transition probabilities for tokens into prior time.
+            torch.Tensor (shape [batch_size, seq_len, vocab_size]): transition probabilities for tokens into prior time.
         """
         sigma = repeat(noise_level, "... -> ... 1")
         stay_prob = torch.exp(-sigma)
