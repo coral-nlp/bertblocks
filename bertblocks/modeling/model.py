@@ -168,7 +168,7 @@ class BertBlocksModel(BertBlocksPreTrainedModel):
         self.post_init()
         self.local_attention = config.local_attention
         if config.pos_emb_kind == "alibi":
-            self.alibi = AlibiPositionalEncoding(config.num_attention_heads)
+            self.alibi = AlibiPositionalEncoding(config.num_attention_heads, device="cpu")
 
     @property
     def dtype(self) -> "torch.dtype":
