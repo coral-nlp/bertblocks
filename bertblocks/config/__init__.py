@@ -1,5 +1,6 @@
 from typing import Any, Literal
 
+from transformers import AutoTokenizer
 from transformers.modeling_utils import PretrainedConfig
 
 
@@ -354,15 +355,27 @@ class BertConfig(BertBlocksConfig):
         )
 
     @classmethod
-    def from_huggingface(cls, pretrained_model_name_or_path: str) -> "BertConfig":
+    def from_huggingface(
+        cls,
+        pretrained_model_name_or_path: str,
+        attn_implementation: Literal["flash_attention_2", "sdpa", "eager"] = "sdpa",
+    ) -> "BertConfig":
         """Instantiate an equivalent BertBlocks BertConfig from a pretrained HuggingFace config."""
         from transformers import BertConfig
 
         orig_config = BertConfig.from_pretrained(pretrained_model_name_or_path)
+
+        if not hasattr(orig_config, "mask_token_id"):
+            tok = AutoTokenizer.from_pretrained(pretrained_model_name_or_path)
+            mask_token_id = tok.mask_token_id
+        else:
+            mask_token_id = orig_config.mask_token_id
+
         return cls(
             vocab_size=orig_config.vocab_size,
             max_sequence_length=orig_config.max_position_embeddings,
             pad_token_id=orig_config.pad_token_id,
+            mask_token_id=mask_token_id,
             hidden_size=orig_config.hidden_size,
             num_blocks=orig_config.num_hidden_layers,
             intermediate_size=orig_config.intermediate_size,
@@ -377,7 +390,7 @@ class BertConfig(BertBlocksConfig):
             hidden_dropout_prob=orig_config.hidden_dropout_prob or 0.0,
             classifier_dropout_prob=orig_config.classifier_dropout or 0.0,
             unpadding=False,
-            attn_implementation="sdpa",
+            attn_implementation=attn_implementation,
         )
 
 
@@ -453,16 +466,26 @@ class ModernBertConfig(BertBlocksConfig):
         )
 
     @classmethod
-    def from_huggingface(cls, pretrained_model_name_or_path: str) -> "ModernBertConfig":
+    def from_huggingface(
+        cls,
+        pretrained_model_name_or_path: str,
+        attn_implementation: Literal["flash_attention_2", "sdpa", "eager"] = "flash_attention_2",
+    ) -> "ModernBertConfig":
         """Instantiate an equivalent BertBlocks ModernBertConfig from a pretrained HuggingFace config."""
         from transformers import ModernBertConfig
 
         orig_config = ModernBertConfig.from_pretrained(pretrained_model_name_or_path)
+        if not hasattr(orig_config, "mask_token_id"):
+            tok = AutoTokenizer.from_pretrained(pretrained_model_name_or_path)
+            mask_token_id = tok.mask_token_id
+        else:
+            mask_token_id = orig_config.mask_token_id
+
         return cls(
             vocab_size=orig_config.vocab_size,
             max_sequence_length=orig_config.max_position_embeddings,
             pad_token_id=orig_config.pad_token_id,
-            mask_token_id=orig_config.mask_token_id,
+            mask_token_id=mask_token_id,
             hidden_size=orig_config.hidden_size,
             num_blocks=orig_config.num_hidden_layers,
             intermediate_size=orig_config.intermediate_size,
@@ -490,8 +513,8 @@ class ModernBertConfig(BertBlocksConfig):
             attn_dropout_prob=orig_config.attention_dropout or 0.0,
             hidden_dropout_prob=orig_config.mlp_dropout or 0.0,
             classifier_dropout_prob=orig_config.classifier_dropout or 0.0,
-            unpadding=True,
-            attn_implementation="flash_attention_2",
+            unpadding=attn_implementation == "flash_attention_2",
+            attn_implementation=attn_implementation,
         )
 
 
