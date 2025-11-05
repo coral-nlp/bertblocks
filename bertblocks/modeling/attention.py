@@ -1,4 +1,3 @@
-import torch
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -124,7 +123,7 @@ class Attention(nn.Module):
                 max_seq_len,
                 self.num_heads,
                 self.head_dim,
-                alibi_slopes=AlibiPositionalEncoding.get_slopes(self.num_heads, device=qkv.device, dtype=torch.float32),
+                alibi_slopes=AlibiPositionalEncoding.get_slopes(self.num_heads, device=qkv.device, dtype=qkv.dtype),
                 local_attention=self.local_attention,
                 dropout_p=self.dropout_p if self.training else 0.0,
                 deterministic=self.deterministic,

@@ -49,9 +49,7 @@ class TokenTypeEmbedding(nn.Module):
 
         """
         shape = x.shape[:2] if len(x.shape) == 3 else x.shape[:1]
-        token_type_ids = (
-            token_type_ids if token_type_ids is not None else torch.zeros(shape, dtype=torch.long, device=x.device)
-        )
+        token_type_ids = token_type_ids if token_type_ids is not None else torch.zeros(shape, device=x.device)
         return x + self.embd(token_type_ids)
 
 

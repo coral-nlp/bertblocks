@@ -354,6 +354,7 @@ class BertBlocksPretrainingModule(L.LightningModule):
         compile_model: bool | None = True,
         pretrained_tokenizer_name_or_path: str | None = None,
         optimizer_class: str | None = "adamw",
+        optimizer_quantized: bool = False,
         optimizer_kwargs: dict[str, Any] | None = None,
         scheduler_warmup_kind: Literal["constant", "linear", "cosine", "exponential"] | None = "linear",
         scheduler_warmup_steps: int | None = 1000,
@@ -378,6 +379,7 @@ class BertBlocksPretrainingModule(L.LightningModule):
             pretrained_tokenizer_name_or_path (str, optional): Path to pretrained tokenizer; if provided, will
                 overwrite the model vocab size using the given tokenizer. Defaults to None.
             optimizer_class (str, optional): Optimizer class name. Defaults to "adamw".
+            optimizer_quantized (bool, optional): Whether to use quantized optimization. Defaults to False.
             optimizer_kwargs (dict[str, Any], optional): Optional arguments to pass to torch.optim.optimizer.
             scheduler_warmup_kind (Literal["constant", "linear", "exponential", "cosine"], optional): scheduler kind
                 for warmup phase. Defaults to "linear".
@@ -452,7 +454,12 @@ class BertBlocksPretrainingModule(L.LightningModule):
         ]
         optimizer_kwargs = self.hparams.optimizer_kwargs or {}
         optimizer_kwargs.update({"lr": self.hparams.learning_rate})
-        optimizer = get_optimizer(self.hparams.optimizer_class, optimizer_grouped_parameters, optimizer_kwargs)
+        optimizer = get_optimizer(
+            self.hparams.optimizer_class,
+            optimizer_grouped_parameters,
+            optimizer_kwargs,
+            quantized=self.hparams.optimizer_quantized,
+        )
         scheduler = get_scheduler(
             optimizer,
             self.hparams.scheduler_warmup_kind,

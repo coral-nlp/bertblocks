@@ -146,10 +146,12 @@ class SinusoidalPositionalEncoding(nn.Module):
         if cu_seqlens is not None:
             # Unpadded sequence format - create position IDs for each sequence
             total_seq_len = cu_seqlens[-1].item()
-            seq_ids = torch.zeros(total_seq_len, device=cu_seqlens.device, dtype=torch.long)
+            seq_ids = torch.zeros(total_seq_len, device=cu_seqlens.device, dtype=cu_seqlens.dtype)
             seq_ids[cu_seqlens[1:-1]] = 1
             seq_ids = seq_ids.cumsum(dim=0)
-            pos_ids = torch.arange(total_seq_len, device=cu_seqlens.device, dtype=torch.long) - cu_seqlens[seq_ids]
+            pos_ids = (
+                torch.arange(total_seq_len, device=cu_seqlens.device, dtype=cu_seqlens.dtype) - cu_seqlens[seq_ids]
+            )
             return x + self.sin[0, pos_ids, :]
         else:
             # Padded sequence format
@@ -176,11 +178,11 @@ class LearnedPositionalEncoding(nn.Module):
     def _get_position_ids_from_cu_seqlens(cu_seqlens: "torch.Tensor") -> "torch.Tensor":
         total_seq_len = cu_seqlens[-1].item()
         # Tensor with sequence ids for each position
-        seq_ids = torch.zeros(total_seq_len, device=cu_seqlens.device, dtype=torch.long)
+        seq_ids = torch.zeros(total_seq_len, device=cu_seqlens.device, dtype=cu_seqlens.dtype)
         seq_ids[cu_seqlens[1:-1]] = 1
         seq_ids = seq_ids.cumsum(dim=0)
         # Create position indices and subtract by corresponding sequence length to get per-sequence runs
-        pos_ids = torch.arange(total_seq_len, device=cu_seqlens.device, dtype=torch.long) - cu_seqlens[seq_ids]
+        pos_ids = torch.arange(total_seq_len, device=cu_seqlens.device, dtype=cu_seqlens.dtype) - cu_seqlens[seq_ids]
         return pos_ids
 
     def forward(self, x: "torch.Tensor", cu_seqlens: "torch.Tensor | None" = None) -> "torch.Tensor":
@@ -203,7 +205,7 @@ class LearnedPositionalEncoding(nn.Module):
         else:
             # Padded sequence format - create standard position IDs
             batch_size, seq_len = x.shape[:2]
-            pos_ids = torch.arange(seq_len, device=x.device, dtype=torch.long).unsqueeze(0).expand(batch_size, -1)
+            pos_ids = torch.arange(seq_len, device=x.device).unsqueeze(0).expand(batch_size, -1)
 
         return x + self.embd(pos_ids)
 
@@ -295,7 +297,7 @@ class RotaryPositionalEncoding(nn.Module):
     ):
         super().__init__()
         self.interleaved = interleaved
-        inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2, device=device, dtype=torch.float32) / dim))
+        inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2, device=device) / dim))
         self.register_buffer("_inv_freq", inv_freq, persistent=False)
 
         self._seq_len_cached = max_seq_len
@@ -321,7 +323,7 @@ class RotaryPositionalEncoding(nn.Module):
             or (self.training and self._cos_cached.is_inference())
         ):
             self._seq_len_cached = seqlen
-            t = torch.arange(seqlen, device=device, dtype=torch.float32)
+            t = torch.arange(seqlen, device=device)
             freqs = torch.outer(t, self._inv_freq)
             self._cos_cached = torch.cos(freqs).to(dtype)
             self._sin_cached = torch.sin(freqs).to(dtype)
