@@ -56,7 +56,7 @@ class BertBlocksConfig(PretrainedConfig):
         attn_out_bias: Whether to include bias terms in the output projection of attention layers.
         local_attention: Whether to include local attention mechanism. Default (-1, -1) means global attention.
         global_attention_every_n_layers: The layer step size for global attention.
-        unpadding: Whether to use sequence packing for higher throughput. Only supported for flash attention _backend.
+        unpadding: Whether to use sequence packing for higher throughput. Only supported for flash attention backend.
         initializer_kind: The initialization method for weights. Determines the type of
             distribution random weights are sampled from for initialization.
             Defaults to a truncated normal distribution.

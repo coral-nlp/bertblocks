@@ -122,7 +122,7 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
         if os.path.isdir(self.hparams.dataset_name_or_path):
             # If local path, load from disk
             self.dataset = load_dataset(
-                self.hparams.data_format or "json",
+                self.hparams.file_format or "json",
                 data_dir=self.hparams.dataset_name_or_path,
                 split=self.hparams.data_split or "train",
                 streaming=not self.hparams.shuffle,  # We can't stream if we're shuffling
@@ -352,8 +352,10 @@ class BertBlocksPretrainingModule(L.LightningModule):
         learning_rate: float | None = 1e-5,
         weight_decay: float | None = 0.001,
         compile_model: bool | None = True,
+        debug_compile: bool | None = False,
         pretrained_tokenizer_name_or_path: str | None = None,
         optimizer_class: str | None = "adamw",
+        optimizer_quantized: bool = False,
         optimizer_kwargs: dict[str, Any] | None = None,
         scheduler_warmup_kind: Literal["constant", "linear", "cosine", "exponential"] | None = "linear",
         scheduler_warmup_steps: int | None = 1000,
@@ -375,9 +377,12 @@ class BertBlocksPretrainingModule(L.LightningModule):
             weight_decay (float, optional): Weight decay coefficient for AdamW. Defaults to 1e-6.
             compile_model (bool, optional): Whether to compile the model with torch.compile.
                 Defaults to True for better performance.
+            debug_compile (bool, optional): Enable verbose debugging for torch.compile.
+                Prints dtype information and enables detailed error traces. Defaults to False.
             pretrained_tokenizer_name_or_path (str, optional): Path to pretrained tokenizer; if provided, will
                 overwrite the model vocab size using the given tokenizer. Defaults to None.
             optimizer_class (str, optional): Optimizer class name. Defaults to "adamw".
+            optimizer_quantized (bool, optional): Whether to use quantized optimization. Defaults to False.
             optimizer_kwargs (dict[str, Any], optional): Optional arguments to pass to torch.optim.optimizer.
             scheduler_warmup_kind (Literal["constant", "linear", "exponential", "cosine"], optional): scheduler kind
                 for warmup phase. Defaults to "linear".
@@ -452,7 +457,12 @@ class BertBlocksPretrainingModule(L.LightningModule):
         ]
         optimizer_kwargs = self.hparams.optimizer_kwargs or {}
         optimizer_kwargs.update({"lr": self.hparams.learning_rate})
-        optimizer = get_optimizer(self.hparams.optimizer_class, optimizer_grouped_parameters, optimizer_kwargs)
+        optimizer = get_optimizer(
+            self.hparams.optimizer_class,
+            optimizer_grouped_parameters,
+            optimizer_kwargs,
+            quantized=self.hparams.optimizer_quantized,
+        )
         scheduler = get_scheduler(
             optimizer,
             self.hparams.scheduler_warmup_kind,
@@ -531,6 +541,7 @@ class BertBlocksFinetuningModule(L.LightningModule):
         learning_rate: float = 1e-5,
         weight_decay: float = 0.01,
         compile_model: bool = True,
+        debug_compile: bool = False,
         optimizer_class: str = "adamw",
         optimizer_kwargs: dict[str, Any] | None = None,
         scheduler_type: Literal["linear", "cosine", "constant", "polynomial"] | None = None,
@@ -547,6 +558,7 @@ class BertBlocksFinetuningModule(L.LightningModule):
             learning_rate: Peak learning rate for optimization.
             weight_decay: Weight decay coefficient.
             compile_model: Whether to compile the model with torch.compile.
+            debug_compile: Enable verbose debugging for torch.compile.
             optimizer_class: Optimizer class name.
             optimizer_kwargs: Additional optimizer arguments.
             scheduler_type: Type of learning rate scheduler.
@@ -578,6 +590,13 @@ class BertBlocksFinetuningModule(L.LightningModule):
             torch.set_float32_matmul_precision("high")
             torch._dynamo.config.capture_dynamic_output_shape_ops = True
             torch._dynamo.config.capture_scalar_outputs = True
+
+            # Enable debug mode if requested
+            if debug_compile:
+                from bertblocks.utils.debug import enable_compile_debugging
+
+                enable_compile_debugging(verbose=True, full_stack=True)
+
             self.model = torch.compile(self.model, dynamic=True)
 
     def configure_optimizers(self) -> "torch.optim.Optimizer | dict[str, Any]":

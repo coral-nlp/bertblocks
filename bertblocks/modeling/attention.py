@@ -1,4 +1,3 @@
-import torch
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -23,7 +22,6 @@ class Attention(nn.Module):
         deterministic (bool): Whether to use deterministic attention.
         proj (nn.Linear): Fused QKV projection layer.
         ffwd (nn.Linear): Feed-forward layer to combine heads after attention.
-
 
     Args:
         config (BertBlocksConfig): Configuration object determining model hyperparameters. May be passed to
@@ -99,7 +97,7 @@ class Attention(nn.Module):
     ) -> "tuple[Tensor, Tensor | None]":
         """Forward pass of the attention mechanism.
 
-        Automatically routes to padded or unpadded implementation based on _backend capabilities.
+        Automatically routes to padded or unpadded implementation based on backend capabilities.
 
         Args:
             x (torch.Tensor): Input hidden state
@@ -124,7 +122,7 @@ class Attention(nn.Module):
                 max_seq_len,
                 self.num_heads,
                 self.head_dim,
-                alibi_slopes=AlibiPositionalEncoding.get_slopes(self.num_heads, device=qkv.device, dtype=torch.float32),
+                alibi_slopes=AlibiPositionalEncoding.get_slopes(self.num_heads, device=qkv.device),
                 local_attention=self.local_attention,
                 dropout_p=self.dropout_p if self.training else 0.0,
                 deterministic=self.deterministic,

@@ -27,10 +27,10 @@ def unpad_input(
         else:
             attention_mask = torch.ones(inputs.shape, device=inputs.device)
 
-    seqlens_in_batch = attention_mask.sum(dim=-1, dtype=torch.int32)
+    seqlens_in_batch = attention_mask.sum(dim=-1)
     indices = torch.nonzero(attention_mask.flatten(), as_tuple=False).flatten()
     max_seqlen_in_batch = int(seqlens_in_batch.max().item())
-    cu_seqlens = torch.nn.functional.pad(torch.cumsum(seqlens_in_batch, dim=0, dtype=torch.int32), (1, 0))
+    cu_seqlens = torch.nn.functional.pad(torch.cumsum(seqlens_in_batch, dim=0), (1, 0))
 
     if inputs.dim() == 2:
         unpadded_inputs = inputs.flatten()[indices]

@@ -2,6 +2,7 @@
 seed_everything: 153201820 # For reproducibility
 trainer:
   accelerator: "gpu"
+  precision: "transformer-engine"
   default_root_dir: "./checkpoints"
   #logger:
   #  - class_path: lightning.pytorch.loggers.WandbLogger
@@ -14,6 +15,8 @@ trainer:
 model:
   class_path: bertblocks.training.modules.BertBlocksPretrainingModule
   init_args:
+    optimizer_class: "adamw"
+    optimizer_quantized: true
     learning_rate: 1e-4
     weight_decay: 1e-5
     scheduler_warmup_steps: 1000
