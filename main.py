@@ -11,6 +11,7 @@ def cli(args: ArgsType = None) -> None:
         save_config_kwargs={"overwrite": True},
         parser_kwargs={"parser_mode": "omegaconf"},
         trainer_defaults={
+            "detect_anomaly": False,
             "callbacks": [
                 ThroughputMonitor(
                     batch_size_fn=lambda batch: batch["input_ids"].size(0),
@@ -27,7 +28,6 @@ def cli(args: ArgsType = None) -> None:
                 #    filename="neobert-de-fineweb-{epoch:02d}-{loss/train:.2f}",
                 # ),
             ],
-            "detect_anomaly": True,
         },
     )
 

@@ -121,7 +121,8 @@ class Block(nn.Module):
         x = self.pre_norm_ffwd(x)
         x = self.ffwd(x)
         x = self.ffwd_drop(x)
-        x = self.post_norm_ffwd(x + residual)
+        # Without explicit cast, torch.compile breaks with AMP for some reason?
+        x = self.post_norm_ffwd(x + residual.to(dtype=x.dtype))
         return x, w
 
 

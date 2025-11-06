@@ -1,4 +1,4 @@
-"""Attention _backend implementations with unified interface."""
+"""Attention backend implementations with unified interface."""
 
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING
@@ -94,7 +94,7 @@ class AttentionBackend(ABC):
 
 
 class FlashBackend(AttentionBackend):
-    """Flash Attention 2 _backend."""
+    """Flash Attention 2 backend."""
 
     def _forward_unpadded(
         self,
@@ -111,9 +111,9 @@ class FlashBackend(AttentionBackend):
         """Flash attention forward pass without padding."""
         qkv = rearrange(qkv, "s (t h d) -> s t h d", t=3, h=num_heads, d=head_dim)
         orig_dtype = qkv.dtype
-        qkv = qkv.to(torch.bfloat16)
+        alibi_slopes = alibi_slopes.to(torch.float32) if alibi_slopes is not None else None
         x, _, w = flash_attn_varlen_qkvpacked_func(
-            qkv,
+            qkv.to(torch.bfloat16),
             cu_seqlens.to(torch.int32),
             max_seq_len,
             dropout_p=dropout_p,
@@ -125,6 +125,7 @@ class FlashBackend(AttentionBackend):
             return_attn_probs=True,
         )
         x = x.to(orig_dtype)
+        w = w.to(orig_dtype)
         x = rearrange(x, "s h d -> s (h d)")
         return x, w
 
@@ -137,12 +138,12 @@ class FlashBackend(AttentionBackend):
         dropout_p: float = 0.0,
         deterministic: bool = False,
     ) -> "tuple[Tensor, Tensor | None]":  # type: ignore
-        """FlashAttention _backend does not support unpadded sequences."""
+        """FlashAttention backend does not support unpadded sequences."""
         raise NotImplementedError
 
 
 class SDPABackend(AttentionBackend):
-    """PyTorch SDPA _backend - works efficiently with padded sequences."""
+    """PyTorch SDPA backend - works efficiently with padded sequences."""
 
     def _forward_padded(
         self,
@@ -169,12 +170,12 @@ class SDPABackend(AttentionBackend):
         return output, None
 
     def _forward_unpadded(self, *args, **kwargs):  # type: ignore
-        """SDPA _backend does not support unpadded sequences."""
+        """SDPA backend does not support unpadded sequences."""
         raise NotImplementedError
 
 
 class EagerBackend(AttentionBackend):
-    """Native PyTorch _backend."""
+    """Native PyTorch backend."""
 
     def _forward_padded(
         self,
@@ -209,7 +210,7 @@ class EagerBackend(AttentionBackend):
         return output, None
 
     def _forward_unpadded(self, *args, **kwargs):  # type: ignore
-        """Eager _backend does not support unpadded sequences."""
+        """Eager backend does not support unpadded sequences."""
         raise NotImplementedError
 
 

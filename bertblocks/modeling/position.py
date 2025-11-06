@@ -223,15 +223,13 @@ class AlibiPositionalEncoding(nn.Module):
 
     slopes: torch.Tensor
 
-    def __init__(self, num_heads: int, device: "torch.device | str" = "cuda", dtype: "torch.dtype" = torch.float32):
+    def __init__(self, num_heads: int, device: "torch.device | str" = "cuda"):
         super().__init__()
-        slopes = self.get_slopes(num_heads, device, dtype)
+        slopes = self.get_slopes(num_heads, device)
         self.register_buffer("slopes", slopes, persistent=False)
 
     @staticmethod
-    def get_slopes(
-        num_heads: int, device: "torch.device | str" = "cuda", dtype: "torch.dtype" = torch.float32
-    ) -> "torch.Tensor":
+    def get_slopes(num_heads: int, device: "torch.device | str" = "cuda") -> "torch.Tensor":
         """Construct ALiBi slopes."""
 
         def __inner__(num_heads: int) -> list:
@@ -246,7 +244,7 @@ class AlibiPositionalEncoding(nn.Module):
             # Fill remaining to actual head size with doubled base value and step size
             out = __inner__(po2) + __inner__(2 * po2)[0::2][: num_heads - po2]
 
-        return torch.Tensor(out).to(device=device, dtype=dtype)
+        return torch.Tensor(out).to(device=device)
 
     def forward(self, attention_mask: "torch.Tensor") -> "torch.Tensor":
         """Add AliBi biases to a given attention mask.
