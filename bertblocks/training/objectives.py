@@ -4,6 +4,8 @@ from typing import Any, Literal
 import torch
 from transformers import DataCollatorForLanguageModeling, PreTrainedTokenizerBase
 
+from bertblocks.modeling.utils import LogLinearNoise
+
 
 class Collator(ABC):
     """Abstract data collator class for pretraining tasks.
@@ -40,6 +42,7 @@ class Collator(ABC):
         self.max_sequence_length = max_sequence_length
         self.pretokenized = pretokenized
         self.special_tokens = torch.tensor(self.tokenizer.all_special_ids)
+        self.batch_keys = ["input_ids", "attention_mask", "labels"]
 
     def __call__(self, batch: list[dict[str, Any]]) -> dict[str, Any]:
         """Process a batch of examples.
@@ -69,9 +72,7 @@ class Collator(ABC):
         if self.label_column:
             tokenized.update({"labels": [item[self.label_column] for item in batch]})
         tokenized_with_labels = self.compute_labels(tokenized)
-        tokenized_with_labels = {
-            k: v for k, v in tokenized_with_labels.items() if k in ["input_ids", "attention_mask", "labels"]
-        }
+        tokenized_with_labels = {k: v for k, v in tokenized_with_labels.items() if k in self.batch_keys}
         return tokenized_with_labels
 
     @abstractmethod
@@ -432,7 +433,7 @@ class QuestionAnsweringCollator(Collator):
         return tokenized
 
 
-class DenoisingCollator(Collator):
+class MaskedDiffusionCollator(Collator):
     """An MLM-type collator that samples a random masking probability per batch between 0 and 1.
 
     Randomly masks tokens outside a preserved prefix length using the sampled masking probability.
@@ -455,9 +456,11 @@ class DenoisingCollator(Collator):
         self,
         tokenizer: "PreTrainedTokenizerBase",
         text_column: str = "text",
+        mask_token_id: int = 0,
         max_sequence_length: int = 256,
         pretokenized: bool | None = False,
-        prefix_length: int = 32,
+        num_steps: int = 1000,
+        sampling_eps: float = 1e-3,
     ):
         super().__init__(
             tokenizer=tokenizer,
@@ -465,9 +468,43 @@ class DenoisingCollator(Collator):
             max_sequence_length=max_sequence_length,
             pretokenized=pretokenized,
         )
-        if prefix_length >= max_sequence_length:
-            raise ValueError("prefix_length must be less than max_sequence_length")
-        self.prefix_length = prefix_length
+        self.batch_keys = [*self.batch_keys, "noise_level", "noise_derivative", "sigma"]
+        self.vocab_size = tokenizer.vocab_size
+        self.mask_token_id = mask_token_id
+        self.noise = LogLinearNoise()
+        self.num_steps = num_steps
+        self.sampling_eps = sampling_eps
+
+    def _sample_t(self, batch_size: int, sampling_eps: float = 1e-3) -> torch.FloatTensor:
+        """Sample timesteps for diffusion training with antithetic sampling.
+
+        Args:
+            batch_size: Number of timesteps to sample for this batch
+
+        Returns:
+            timesteps: Sampled timesteps in [sampling_eps, 1] with shape [batch_size]
+        """
+        # Antithetic sampling: stratify [0,1] into n equal bins, sample one point per bin
+        random_offsets = torch.rand(batch_size)
+        grid_positions = torch.arange(batch_size) / batch_size
+        uniform_samples = (random_offsets / batch_size + grid_positions) % 1
+        # Scale to timestep range
+        timesteps = (1 - sampling_eps) * uniform_samples + sampling_eps
+        return timesteps
+
+    def _apply_noise(self, input_ids: "torch.Tensor", noise_prob: "torch.Tensor") -> "torch.Tensor":
+        """Apply noise to a given input ID tensor.
+
+        Args:
+          input_ids (torch.Tensor, shape [batch_size, seq_len]): input IDs to apply noise to.
+          noise_prob (torch.Tensor, shape [batch_size, 1]): Level of noise to apply to each sequence.
+
+        Returns:
+            torch.Tensor, shape [batch_size, seq_len]: Input IDs changed to mask tokens at random positions with
+                probability given by noise_level.
+        """
+        noise_idx = torch.rand(*input_ids.shape, device=input_ids.device) < noise_prob
+        return torch.where(noise_idx, self.mask_token_id, input_ids)
 
     def compute_labels(self, tokenized: dict[str, Any]) -> Any:
         """Compute the denoising MLM labels for the given batch of tokenized inputs.
@@ -478,27 +515,28 @@ class DenoisingCollator(Collator):
         Returns:
             dict[str, Any]: The computed MLM labels for the batch.
         """
-        # Never mask the first few tokens (preserved context)
-        B, S = tokenized["input_ids"].shape
-        S = S - self.prefix_length
-        # Create random mask for the masking probability sampled for this batch
-        mask = torch.rand(B, S) < torch.rand(1).item()
-        # Apply masking, preserving original token IDs as labels
         tokenized["labels"] = tokenized["input_ids"].clone()
-        tokenized["input_ids"][:, self.prefix_length :][mask] = self.tokenizer.mask_token_id
+        # At training time, we apply random timestep modification
+        t = self._sample_t(tokenized["input_ids"].shape[0], sampling_eps=self.sampling_eps)
+        sigma, dsigma = self.noise(t)
+        noise_prob = 1 - torch.exp(-sigma[:, None])
+        noised_input_ids = self._apply_noise(tokenized["input_ids"], noise_prob)
+        tokenized["input_ids"] = noised_input_ids
+        tokenized["noise_level"] = sigma
+        tokenized["noise_derivative"] = dsigma
         return tokenized
 
 
 def get_collator_cls(
     objective: Literal[
-        "mlm", "enhanced_mlm", "classification", "token_classification", "question_answering", "denoising"
+        "mlm", "enhanced_mlm", "classification", "token_classification", "question_answering", "diffusion"
     ],
 ) -> type[Collator]:
     """Get the appropriate data collator for the given objective.
 
     Args:
         objective (str): The training objective. Available options:
-            "mlm", "enhanced_mlm", "classification", "token_classification", "question_answering".
+            "mlm", "enhanced_mlm", "classification", "token_classification", "question_answering", "diffusion".
 
     Raises:
         ValueError: If the objective is unknown.
@@ -511,8 +549,8 @@ def get_collator_cls(
             return MaskedLanguageModelingCollator
         case "enhanced_mlm":
             return EnhancedMaskedLanguageModelingCollator
-        case "denoising":
-            return DenoisingCollator
+        case "diffusion":
+            return MaskedDiffusionCollator
         case "classification":
             return SequenceClassificationCollator
         case "token_classification":

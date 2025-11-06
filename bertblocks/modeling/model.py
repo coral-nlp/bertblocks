@@ -1,14 +1,18 @@
 import functools
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
+from einops import rearrange, reduce, repeat
+
 from bertblocks.modeling.norms import get_norm
+from bertblocks.modeling.utils import LogLinearNoise
 
 if TYPE_CHECKING:
     pass
 
 import torch
+import torch.nn.functional as F
 from torch import nn
 from transformers.modeling_outputs import (
     BaseModelOutput,
@@ -164,7 +168,7 @@ class BertBlocksModel(BertBlocksPreTrainedModel):
         self.post_init()
         self.local_attention = config.local_attention
         if config.pos_emb_kind == "alibi":
-            self.alibi = AlibiPositionalEncoding(config.num_attention_heads)
+            self.alibi = AlibiPositionalEncoding(config.num_attention_heads, device="cpu")
 
     @property
     def dtype(self) -> "torch.dtype":
@@ -752,10 +756,420 @@ class BertBlocksForQuestionAnswering(BertBlocksForTasksBase):
         )
 
 
+class BertBlocksForMaskedDiffusion(BertBlocksPreTrainedModel):
+    """Implementation of a masked diffusion model.
+
+    Closely follows https://github.com/kuleshov-group/mdlm
+    """
+
+    _tied_weights_keys: ClassVar = ["decoder.weight"]
+
+    def __init__(self, config: "BertBlocksConfig"):
+        super().__init__(config)
+        self.model = BertBlocksModel(config)
+        self.head = get_prediction_head(config)
+        self.decoder = nn.Linear(config.hidden_size, config.vocab_size, bias=True)
+
+        self.max_seq_len = config.max_sequence_length
+        self.vocab_size = config.vocab_size
+        self.mask_token_id = config.mask_token_id
+
+        # Noise Schedule
+        self.noise = LogLinearNoise()
+
+    def get_input_embeddings(self) -> "nn.Module":
+        """Return the encoder input embeddings."""
+        return self.model.embd.embd
+
+    def get_output_embeddings(self) -> "nn.Module":
+        """Return the decoder embeddings."""
+        return self.decoder
+
+    def set_output_embeddings(self, new_embeddings: "nn.Linear") -> None:
+        """Replace the decoder embeddings with given one (e.g., the encoder side)."""
+        self.decoder = new_embeddings
+
+    def _forward(
+        self,
+        input_ids: "torch.Tensor",
+        attention_mask: "torch.Tensor | None" = None,
+        token_type_ids: "torch.Tensor | None" = None,
+        output_attentions: bool = False,
+        output_hidden_states: bool = False,
+    ) -> MaskedLMOutput:
+        """Wrap the forward pass to infers logits from the backbone model compatible with the diffusion process.
+
+        Args:
+            input_ids (torch.Tensor, shape [batch_size, seq_len]): Tensor of token ids. When training, should
+                be timestep-corrupted token IDs.
+            attention_mask (torch.Tensor, shape [batch_size, seq_len], optional): Tensor indicating which tokens should
+                be attended to. Defaults to None (all tokens are attended to).
+            token_type_ids (torch.Tensor, shape [batch_size, seq_len], optional): Tensor indicating type of tokens.
+                Defaults to None.
+            output_attentions (bool): Whether to return attention weights from all layers. Defaults to False.
+            output_hidden_states (bool): Whether to return hidden states from all layers. Defaults to False.
+        """
+        # Infer the token-level embeddings
+        output = self.model(
+            input_ids,
+            attention_mask=attention_mask,
+            token_type_ids=token_type_ids,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+        )
+        # Predict log probabilities over the vocabulary based on the embeddings
+        logits = self.decoder(self.head(output.last_hidden_state))
+        # Set the prediction probability of the mask token to 0 (-inf in log space)
+        logits[:, :, self.mask_token_id] = -torch.inf
+        # Re-normalize the logits such that x.exp() is a probability distribution over vocab_size.
+        logits = logits - torch.logsumexp(logits, dim=-1, keepdim=True)
+        # Clamp unmasked ground-truth tokens (p=1 for ground-truth token, p=0 for any other token at that position)
+        unmasked_indices = input_ids != self.mask_token_id
+        logits[unmasked_indices] = -torch.inf
+        logits[unmasked_indices, input_ids[unmasked_indices]] = 0
+        return MaskedLMOutput(
+            loss=None,
+            logits=logits,
+            hidden_states=output.hidden_states,
+            attentions=output.attentions,
+        )
+
+    def forward(
+        self,
+        input_ids: "torch.Tensor",
+        attention_mask: "torch.Tensor | None" = None,
+        token_type_ids: "torch.Tensor | None" = None,
+        labels: "torch.Tensor | None" = None,
+        noise_level: "torch.Tensor | None" = None,
+        noise_derivative: "torch.Tensor | None" = None,
+        output_attentions: bool = False,
+        output_hidden_states: bool = False,
+    ) -> "MaskedLMOutput":
+        """Forward pass for diffusion language modeling.
+
+        Args:
+            input_ids (torch.Tensor, shape [batch_size, seq_len]): Tensor of token ids. When training, should
+                be timestep-corrupted token IDs.
+            attention_mask (torch.Tensor, shape [batch_size, seq_len], optional): Tensor indicating which tokens should
+                be attended to. Defaults to None (all tokens are attended to).
+            token_type_ids (torch.Tensor, shape [batch_size, seq_len], optional): Tensor indicating type of tokens.
+                Defaults to None.
+            labels (torch.Tensor, shape [batch_size, seq_len], optional): Tensor indicating uncorrupted token IDs.
+            noise_level (torch.Tensor, optional): Tensor indicating noise level of each sequence for training. Defaults
+                to None.
+            noise_derivative (torch.Tensor, optional): Tensor indicating noise derivative of each sequence for training.
+                Defaults to None.
+            output_attentions (bool): Whether to return attention weights from all layers. Defaults to False.
+            output_hidden_states (bool): Whether to return hidden states from all layers. Defaults to False.
+        """
+        if attention_mask is None:
+            attention_mask = torch.ones_like(input_ids)
+        output = self._forward(input_ids, attention_mask, token_type_ids, output_attentions, output_hidden_states)
+        if labels is not None:
+            # Get the per-token log-likelihood of ground-truth tokens
+            token_nll = torch.gather(input=output.logits, dim=-1, index=labels[:, :, None]).squeeze(-1)
+            # Negate loss to optimize in correct direction
+            loss = -1 * token_nll
+            # Weigh each sequence according to its noise level for loss contribution, down-weights easy (low noise)
+            # and emphasizes harder (high noise) denoising steps
+            loss = loss * (noise_derivative / torch.expm1(noise_level))[:, None]
+            # Average weighted NLL over valid token positions
+            loss = (loss * attention_mask).sum() / attention_mask.sum()
+        else:
+            loss = None
+
+        return MaskedLMOutput(
+            loss=loss,
+            logits=output.logits,
+            hidden_states=output.hidden_states,
+            attentions=output.attentions,
+        )
+
+    def _prior(self, *batch_dims: Sequence[int]) -> torch.Tensor:
+        """Calculate the prior distribution, i.e., a fully masked tensor.
+
+        Args:
+            batch_dims (Sequence[int]): Sequence of batch dimensions.
+
+        Returns:
+            torch.Tensor, shape [*batch_dims]: Fully masked tensor.
+        """
+        return self.mask_token_id * torch.ones(*batch_dims, dtype=torch.int64)
+
+    def _sample_categorical(self, categorical_probs: torch.Tensor) -> torch.Tensor:
+        """Sample from categorical distribution using Gumbel-max trick.
+
+        Works with unnormalized probabilities/weights. The Gumbel-max trick samples
+        by adding Gumbel noise and taking the argmax, which is equivalent to sampling
+        from the categorical distribution but more numerically stable and efficient.
+
+        Args:
+            categorical_probs (torch.Tensor, shape [batch, seq_len, vocab_size]):
+                Unnormalized probabilities or weights.
+
+        Returns:
+            torch.Tensor (shape [batch, seq_len]): Sampled token indices.
+        """
+        gumbel_norm = 1e-10 - (torch.rand_like(categorical_probs) + 1e-10).log()
+        return (categorical_probs / gumbel_norm).argmax(dim=-1)
+
+    @torch.no_grad()
+    def sample(
+        self,
+        input_ids: "torch.Tensor | None" = None,
+        attention_mask: "torch.Tensor | None" = None,
+        max_length: int | None = None,
+        num_samples: int = 1,
+        num_steps: int = 100,
+        eps: float = 1e-5,
+    ) -> "torch.Tensor":
+        """Generate samples using iterative denoising from noise to data.
+
+        Supports both unconditional generation and prefix-conditioned generation.
+        Compatible with HuggingFace tokenizer output.
+
+        Args:
+            input_ids (torch.Tensor, shape [batch_size, seq_len], optional): Input token IDs to condition on.
+                If provided, tokens where attention_mask=1 will be preserved during sampling.
+                If None, generates unconditionally from scratch.
+            attention_mask (torch.Tensor, shape [batch_size, seq_len], optional): Mask indicating which
+                input_ids positions to preserve (1) vs denoise (0). If None and input_ids is provided,
+                all input positions are preserved.
+            max_length (int, optional): Maximum sequence length to generate. If None, uses self.max_seq_len.
+                If input_ids is shorter than max_length, extends with MASK tokens.
+            num_samples (int, optional): Number of sequences to generate when input_ids is None. Defaults to 1.
+            num_steps (int, optional): Number of denoising steps (more = higher quality, slower). Defaults to 100.
+            eps (float, optional): Final noise level. Defaults to 1e-5.
+
+        Returns:
+            torch.Tensor (shape [batch_size, max_length] or [num_samples, max_length]): Generated token sequences.
+
+        Examples:
+            # Unconditional generation
+            >>> sequences = model.sample(num_samples=4, max_length=128)
+
+            # Prefix-conditioned generation (with tokenizer)
+            >>> inputs = tokenizer("The cat sat on", return_tensors="pt")
+            >>> sequences = model.sample(**inputs, max_length=128)
+        """
+        # Determine target length
+        target_length = max_length or self.max_seq_len
+
+        # Initialize sequence
+        if input_ids is None:
+            # Unconditional generation: start from all MASK tokens
+            x = self._prior((num_samples, target_length)).to(self.device)
+            prefix_mask = None
+        else:
+            # Conditional generation: use provided prefix
+            batch_size, seq_len = input_ids.shape
+            input_ids = input_ids.to(self.device)
+
+            # Create prefix mask (which positions to preserve)
+            if attention_mask is None:
+                # If no mask provided, preserve all input tokens
+                prefix_mask = torch.ones(batch_size, seq_len, dtype=torch.bool, device=self.device)
+            else:
+                prefix_mask = attention_mask.bool().to(self.device)
+                # Ensure attention_mask matches input_ids length
+                assert (
+                    prefix_mask.shape[1] == seq_len
+                ), f"attention_mask length {prefix_mask.shape[1]} doesn't match input_ids length {seq_len}"
+
+            # Extend to target length if needed
+            if seq_len < target_length:
+                # Pad input_ids with MASK tokens
+                padding = self._prior((batch_size, target_length - seq_len)).to(self.device)
+                x = torch.cat([input_ids, padding], dim=1)
+                # Extend prefix_mask with False (denoise padded positions)
+                mask_padding = torch.zeros(batch_size, target_length - seq_len, dtype=torch.bool, device=self.device)
+                prefix_mask = torch.cat([prefix_mask, mask_padding], dim=1)
+            elif seq_len > target_length:
+                # Truncate if input is longer than target
+                x = input_ids[:, :target_length]
+                prefix_mask = prefix_mask[:, :target_length]
+            else:
+                x = input_ids.clone()
+                # prefix_mask already has correct shape (seq_len == target_length)
+
+            # Ensure prefix_mask matches x's shape (defensive check)
+            assert prefix_mask.shape == x.shape, f"Shape mismatch: prefix_mask {prefix_mask.shape} vs x {x.shape}"
+
+            # Set non-prefix positions to MASK
+            x[~prefix_mask] = self.mask_token_id
+
+        # Create schedule: [1.0, ..., eps]
+        timesteps = torch.linspace(1, eps, num_steps + 1, device=self.device)
+        step_size = (1 - eps) / num_steps
+
+        # Store original prefix for restoration
+        if prefix_mask is not None:
+            original_prefix = x.clone()
+
+        # Iterative denoising loop
+        for t in timesteps[:-1]:  # All except last
+            time = repeat(t, "-> b 1", b=x.shape[0])
+            x = self._reverse_step(x, time, step_size)
+
+            # Restore prefix tokens after each step
+            if prefix_mask is not None:
+                x[prefix_mask] = original_prefix[prefix_mask]
+
+        # Final cleanup (greedy sample any remaining mask tokens)
+        x = self._final_denoise(x)
+
+        # Restore prefix one last time
+        if prefix_mask is not None:
+            x[prefix_mask] = original_prefix[prefix_mask]
+
+        return x
+
+    def _compute_transition_probs(self, input_ids: "torch.Tensor", noise_level: "torch.Tensor") -> "torch.Tensor":
+        """Compute token-wise transition probabilities for discrete diffusion reverse process.
+
+        Score represents transition probability ratios:
+            P(x_t, y) = P(y -> x_t) / P(x_t -> x_t)
+
+        Two cases:
+        1. x_t = MASK: Use model predictions scaled by noise schedule
+        2. x_t = token: Only allow staying same or coming from MASK
+
+        Args:
+            input_ids (torch.Tensor, shape [batch_size, seq_len]): Input sequences.
+            noise_level (torch.Tensor, shape [batch_size, 1]): Tensor indicating noise level of each sequence.
+
+        Returns:
+            torch.Tensor (shape [batch_size, seq_len, vocab_size]): Tensor of transition probabilities for each token.
+        """
+        logits = self._forward(input_ids).logits
+        batch, seq, vocab = logits.shape
+        # Normalization: k = exp(-noise_level) / (1 - exp(-noise_level))
+        log_k = -torch.log(torch.expm1(noise_level))  # [batch, 1]
+        log_k = rearrange(log_k, "b 1 -> b")
+
+        # Masked positions: use model predictions
+        masked_log_score = logits + repeat(log_k, "b -> b 1 1")
+        masked_log_score[:, :, self.mask_token_id] = 0  # MASK stays MASK
+        # Unmasked positions: deterministic (stay same or from MASK)
+        unmasked_log_score = torch.full_like(logits, -torch.inf)
+
+        # Can stay in current state (score = 1)
+        current_token_indices = repeat(input_ids, "b s -> b s 1")
+        unmasked_log_score.scatter_(dim=-1, index=current_token_indices, value=0.0)
+        # Can come from MASK (score = 1/k)
+        unmasked_log_score[:, :, self.mask_token_id] = -repeat(log_k, "b -> b s", s=seq)
+
+        # Combine based on whether position is masked
+        is_masked = repeat((input_ids == self.mask_token_id), "b s -> b s v", v=vocab)
+        log_score = torch.where(is_masked, masked_log_score, unmasked_log_score)
+        return log_score.exp()
+
+    def _staggered_correction(self, transition_probs: "torch.Tensor", dsigma: "torch.Tensor") -> "torch.Tensor":
+        """Apply staggered probability correction for absorbing state diffusion.
+
+        Args:
+            transition_probs (torch.Tensor, shape [batch_size, seq_len, vocab]): Transition probabilities.
+            dsigma (torch.Tensor, shape [batch_size, 1]): Noise level change (positive when denoising).
+
+        Returns:
+            torch.Tensor (shape [batch_size, seq_len, vocab]): Corrected transition probabilities.
+        """
+        transition_probs = transition_probs.clone()
+        # Compute probability mass flowing to absorbing state
+        flow_to_absorb = 1 - torch.exp(-dsigma)
+        # Scale non-absorbing scores
+        transition_probs = transition_probs * torch.exp(-repeat(dsigma, "... -> ... 1"))
+        # Redirect flow to mask token to maintain probability conservation
+        total_score_mass = reduce(transition_probs, "... vocab -> ...", "sum")
+        transition_probs[..., self.mask_token_id] += flow_to_absorb.squeeze(-1) * total_score_mass
+        return transition_probs
+
+    def _reverse_step(self, input_ids: "torch.Tensor", timestep: "torch.Tensor", step_size: float) -> "torch.Tensor":
+        """Perform a single reverse diffusion step.
+
+        Args:
+            input_ids (torch.Tensor, shape [batch_size, seq_len]): Input sequences.
+            timestep (torch.Tensor, shape [batch_size, 1]): Time step for each sequence.
+            step_size (float): Step size to move in time.
+
+        Returns:
+            torch.Tensor (shape [batch_size, seq_len]): Partially step-wise denoised sequences.
+        """
+        curr_sigma, _ = self.noise(timestep)
+        next_sigma, _ = self.noise(timestep - step_size)
+        dsigma = curr_sigma - next_sigma
+        # Get transition_probs and apply corrections
+        transition_probs = self._compute_transition_probs(input_ids, curr_sigma)
+        transition_probs = self._staggered_correction(transition_probs, dsigma)
+        # Compute posterior
+        posterior_distribution = transition_probs * self._transp_transition(input_ids, dsigma)
+        # Sample using Gumbel-max trick (works with unnormalized probabilities)
+        return self._sample_categorical(posterior_distribution)
+
+    def _final_denoise(self, input_ids: "torch.Tensor") -> "torch.Tensor":
+        """Perform final greedy denoising step at near-zero noise to clean output.
+
+        Args:
+            input_ids (torch.Tensor, shape [batch_size, seq_len]): Input sequences.
+            timestep (torch.Tensor, shape [batch_size, 1]): Time step for each sequence.
+
+        Returns:
+            torch.Tensor (shape [batch_size, seq_len]): Final denoised sequences.
+        """
+        # Infer final logits
+        logits = self._forward(input_ids).logits
+
+        # For MASK positions, use model predictions, for non-MASK positions, keep current token
+        is_mask = input_ids == self.mask_token_id
+        posterior_distribution = logits.exp()  # Convert log probs to probs
+
+        # For non-mask positions, create one-hot distribution at current token
+        non_mask_dist = torch.zeros_like(posterior_distribution)
+        non_mask_dist.scatter_(dim=-1, index=input_ids.unsqueeze(-1), value=1.0)
+
+        # Combine: use model predictions for MASK, keep current for non-MASK
+        posterior_distribution = torch.where(
+            is_mask.unsqueeze(-1).expand_as(posterior_distribution), posterior_distribution, non_mask_dist
+        )
+
+        # Sample using Gumbel-max trick
+        return self._sample_categorical(posterior_distribution)
+
+    def _transp_transition(self, state: torch.Tensor, noise_level: torch.Tensor) -> torch.Tensor:
+        """Compute the transpose transition kernel.
+
+        Indicates the probability of tokens at a position at prior time given the observed token at current time.
+
+        Args:
+            state (torch.Tensor, shape [batch_size, seq_len, vocab_size]): observed tokens at current time.
+            noise_level (torch.Tensor, shape [batch_size, 1]): Tensor indicating noise level of each sequence.
+
+        Returns:
+            torch.Tensor (shape [batch_size, seq_len, vocab_size]): transition probabilities for tokens into prior time.
+        """
+        sigma = repeat(noise_level, "... -> ... 1")
+        stay_prob = torch.exp(-sigma)
+
+        # P(was token i | observe token i) = exp(-sigma)
+        transition_prob = stay_prob * F.one_hot(state, num_classes=self.vocab_size)
+
+        # P(was MASK | observe MASK) = 1.0 (absorbing state)
+        is_mask = state == self.mask_token_id
+        transition_prob[..., self.mask_token_id] = torch.where(
+            is_mask,
+            torch.ones_like(stay_prob.squeeze(-1)),  # Token is mask => P = 1
+            transition_prob[..., self.mask_token_id],  # Token is not mask => 0
+        )
+        return transition_prob
+
+
 def get_model_cls(
-    task: Literal["mlm", "enhanced_mlm", "denoising", "classification", "token_classification", "question_answering"],
+    task: Literal[
+        "mlm", "diffusion", "enhanced_mlm", "denoising", "classification", "token_classification", "question_answering"
+    ],
 ) -> type[
     BertBlocksForMaskedLM
+    | BertBlocksForMaskedDiffusion
     | BertBlocksForEnhancedMaskedLM
     | BertBlocksForSequenceClassification
     | BertBlocksForTokenClassification
@@ -764,8 +1178,8 @@ def get_model_cls(
     match task:
         case "mlm":
             return BertBlocksForMaskedLM
-        case "denoising":
-            return BertBlocksForMaskedLM
+        case "diffusion":
+            return BertBlocksForMaskedDiffusion
         case "enhanced_mlm":
             return BertBlocksForEnhancedMaskedLM
         case "sequence_classification":
@@ -776,7 +1190,7 @@ def get_model_cls(
             return BertBlocksForQuestionAnswering
         case _:
             raise ValueError(
-                f"Unknown task {task}, expected one of 'mlm', 'enhanced_mlm', 'sequence_classification', "
+                f"Unknown task {task}, expected one of 'mlm', 'diffusion', 'enhanced_mlm', 'sequence_classification', "
                 f"'token_classification', 'question_answering'"
             )
 
@@ -787,4 +1201,5 @@ __all__ = [
     "BertBlocksForTokenClassification",
     "BertBlocksForQuestionAnswering",
     "BertBlocksForSequenceClassification",
+    "BertBlocksForMaskedDiffusion",
 ]

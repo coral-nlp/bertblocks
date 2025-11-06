@@ -1,18 +1,25 @@
+from typing import Literal
+
 from bertblocks.config import ModernBertConfig
 from bertblocks.modeling.model import BertBlocksModel
 
 
 def from_modernbert_model(
-    pretrained_model_name_or_path: str, load_weights: bool = True, add_pooling_layer: bool = False
+    pretrained_model_name_or_path: str,
+    load_weights: bool = True,
+    add_pooling_layer: bool = False,
+    attn_implementation: Literal["flash_attention_2", "sdpa", "eager"] = "flash_attention_2",
 ) -> "BertBlocksModel":
     """Instantiate an equivalent BertBlocks model from ModernBERT weights and config."""
     from transformers import ModernBertModel
 
-    bertblocks_config = ModernBertConfig.from_huggingface(pretrained_model_name_or_path)
+    bertblocks_config = ModernBertConfig.from_huggingface(
+        pretrained_model_name_or_path, attn_implementation=attn_implementation
+    )
     bertblocks_model = BertBlocksModel(bertblocks_config, add_pooling_layer=add_pooling_layer)
 
     if load_weights:
-        orig_model = ModernBertModel.from_pretrained(pretrained_model_name_or_path)
+        orig_model = ModernBertModel.from_pretrained(pretrained_model_name_or_path, attn_backend=attn_implementation)
         # Embedding layer
         bertblocks_model.embd.embd.weight.data.copy_(orig_model.embeddings.tok_embeddings.weight.data)
 

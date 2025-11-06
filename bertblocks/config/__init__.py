@@ -1,5 +1,6 @@
 from typing import Any, Literal
 
+from transformers import AutoTokenizer
 from transformers.modeling_utils import PretrainedConfig
 
 
@@ -21,6 +22,7 @@ class BertBlocksConfig(PretrainedConfig):
         pad_token_id: The token ID used for padding sequences to the same length.
             This token is ignored during attention computation. Common values: 0 (BERT),
             1 (RoBERTa). Must be non-negative and within the vocabulary range.
+        mask_token_id: The token ID used for masking tokens. Must be non-negative and within the vocabulary range.
         hidden_size: The dimensionality of the hidden layers. This is the primary dimension
             of the model and affects memory usage and computational requirements.
             Common values: 768 (BERT-base), 1024 (BERT-large). Must be divisible by
@@ -120,6 +122,7 @@ class BertBlocksConfig(PretrainedConfig):
         vocab_size: int = 30522,
         max_sequence_length: int = 512,
         pad_token_id: int = 0,
+        mask_token_id: int = 1,
         hidden_size: int = 768,
         intermediate_size: int = 3072,
         num_blocks: int = 12,
@@ -194,6 +197,12 @@ class BertBlocksConfig(PretrainedConfig):
         if pad_token_id >= vocab_size:
             raise ValueError(f"pad_token_id ({pad_token_id}) must be within vocabulary range (0 to {vocab_size - 1})")
 
+        if mask_token_id < 0:
+            raise ValueError(f"mask_token_id must be non-negative, got {mask_token_id}")
+
+        if mask_token_id >= vocab_size:
+            raise ValueError(f"mask_token_id ({mask_token_id}) must be within vocabulary range (0 to {vocab_size - 1})")
+
         if not 0.0 <= emb_dropout_prob <= 1.0:
             raise ValueError(f"emb_dropout_prob must be between 0.0 and 1.0, got {emb_dropout_prob}")
 
@@ -230,6 +239,7 @@ class BertBlocksConfig(PretrainedConfig):
         self.vocab_size = vocab_size
         self.max_sequence_length = max_sequence_length
         self.pad_token_id = pad_token_id
+        self.mask_token_id = mask_token_id
         # General architecture parameters
         self.hidden_size = hidden_size
         self.num_blocks = num_blocks
@@ -291,6 +301,7 @@ class BertConfig(BertBlocksConfig):
         vocab_size: int = 28996,
         max_sequence_length: int = 512,
         pad_token_id: int = 0,
+        mask_token_id: int = 103,
         hidden_size: int = 768,
         num_blocks: int = 12,
         intermediate_size: int = 3072,
@@ -312,6 +323,7 @@ class BertConfig(BertBlocksConfig):
             vocab_size=vocab_size,
             max_sequence_length=max_sequence_length,
             pad_token_id=pad_token_id,
+            mask_token_id=mask_token_id,
             hidden_size=hidden_size,
             num_blocks=num_blocks,
             intermediate_size=intermediate_size,
@@ -343,15 +355,27 @@ class BertConfig(BertBlocksConfig):
         )
 
     @classmethod
-    def from_huggingface(cls, pretrained_model_name_or_path: str) -> "BertConfig":
+    def from_huggingface(
+        cls,
+        pretrained_model_name_or_path: str,
+        attn_implementation: Literal["flash_attention_2", "sdpa", "eager"] = "sdpa",
+    ) -> "BertConfig":
         """Instantiate an equivalent BertBlocks BertConfig from a pretrained HuggingFace config."""
         from transformers import BertConfig
 
         orig_config = BertConfig.from_pretrained(pretrained_model_name_or_path)
+
+        if not hasattr(orig_config, "mask_token_id"):
+            tok = AutoTokenizer.from_pretrained(pretrained_model_name_or_path)
+            mask_token_id = tok.mask_token_id
+        else:
+            mask_token_id = orig_config.mask_token_id
+
         return cls(
             vocab_size=orig_config.vocab_size,
             max_sequence_length=orig_config.max_position_embeddings,
             pad_token_id=orig_config.pad_token_id,
+            mask_token_id=mask_token_id,
             hidden_size=orig_config.hidden_size,
             num_blocks=orig_config.num_hidden_layers,
             intermediate_size=orig_config.intermediate_size,
@@ -366,7 +390,7 @@ class BertConfig(BertBlocksConfig):
             hidden_dropout_prob=orig_config.hidden_dropout_prob or 0.0,
             classifier_dropout_prob=orig_config.classifier_dropout or 0.0,
             unpadding=False,
-            attn_implementation="sdpa",
+            attn_implementation=attn_implementation,
         )
 
 
@@ -380,6 +404,7 @@ class ModernBertConfig(BertBlocksConfig):
         vocab_size: int,
         max_sequence_length: int,
         pad_token_id: int,
+        mask_token_id: int,
         hidden_size: int,
         num_blocks: int,
         intermediate_size: int,
@@ -406,6 +431,7 @@ class ModernBertConfig(BertBlocksConfig):
             vocab_size=vocab_size,
             max_sequence_length=max_sequence_length,
             pad_token_id=pad_token_id,
+            mask_token_id=mask_token_id,
             hidden_size=hidden_size,
             num_blocks=num_blocks,
             intermediate_size=intermediate_size,
@@ -440,15 +466,26 @@ class ModernBertConfig(BertBlocksConfig):
         )
 
     @classmethod
-    def from_huggingface(cls, pretrained_model_name_or_path: str) -> "ModernBertConfig":
+    def from_huggingface(
+        cls,
+        pretrained_model_name_or_path: str,
+        attn_implementation: Literal["flash_attention_2", "sdpa", "eager"] = "flash_attention_2",
+    ) -> "ModernBertConfig":
         """Instantiate an equivalent BertBlocks ModernBertConfig from a pretrained HuggingFace config."""
         from transformers import ModernBertConfig
 
         orig_config = ModernBertConfig.from_pretrained(pretrained_model_name_or_path)
+        if not hasattr(orig_config, "mask_token_id"):
+            tok = AutoTokenizer.from_pretrained(pretrained_model_name_or_path)
+            mask_token_id = tok.mask_token_id
+        else:
+            mask_token_id = orig_config.mask_token_id
+
         return cls(
             vocab_size=orig_config.vocab_size,
             max_sequence_length=orig_config.max_position_embeddings,
             pad_token_id=orig_config.pad_token_id,
+            mask_token_id=mask_token_id,
             hidden_size=orig_config.hidden_size,
             num_blocks=orig_config.num_hidden_layers,
             intermediate_size=orig_config.intermediate_size,
@@ -476,8 +513,8 @@ class ModernBertConfig(BertBlocksConfig):
             attn_dropout_prob=orig_config.attention_dropout or 0.0,
             hidden_dropout_prob=orig_config.mlp_dropout or 0.0,
             classifier_dropout_prob=orig_config.classifier_dropout or 0.0,
-            unpadding=True,
-            attn_implementation="flash_attention_2",
+            unpadding=attn_implementation == "flash_attention_2",
+            attn_implementation=attn_implementation,
         )
 
 

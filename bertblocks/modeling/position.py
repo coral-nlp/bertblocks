@@ -57,7 +57,7 @@ if is_flash_attn_2_available():
     apply_rotary.register_autograd(apply_rotary_backward, setup_context=apply_rotary_setup_context)
 
 else:
-    # We don't have flash attention, so native torch it is
+    # We don'time_current have flash attention, so native torch it is
 
     def rotate_half(x, interleaved=False):  # type: ignore
         if not interleaved:
@@ -65,7 +65,7 @@ else:
             return torch.cat((-x2, x1), dim=-1)
         else:
             x1, x2 = x[..., ::2], x[..., 1::2]
-            return rearrange(torch.stack((-x2, x1), dim=-1), "... d t -> ... (d t)", t=2)
+            return rearrange(torch.stack((-x2, x1), dim=-1), "... d time_current -> ... (d time_current)", t=2)
 
     def apply_rotary(
         x: "Tensor",
@@ -351,10 +351,18 @@ class RotaryPositionalEncoding(nn.Module):
         # if max_seqlen is not None:
         #    self._update_cos_sin_cache(max_seqlen, device=qkv.device, dtype=qkv.dtype)
         if cu_seqlens is not None:  # Unpadded
-            q, k, v = rearrange(qkv, "s (t h d) -> t s h d", t=3, h=num_heads, d=head_dim)
+            q, k, v = rearrange(qkv, "s (time_current h d) -> time_current s h d", t=3, h=num_heads, d=head_dim)
         else:
             batch_size, seq_len, _ = qkv.shape
-            q, k, v = rearrange(qkv, "b s (t h d) -> t b s h d", b=batch_size, s=seq_len, t=3, h=num_heads, d=head_dim)
+            q, k, v = rearrange(
+                qkv,
+                "b s (time_current h d) -> time_current b s h d",
+                b=batch_size,
+                s=seq_len,
+                t=3,
+                h=num_heads,
+                d=head_dim,
+            )
         q = apply_rotary(
             q,
             self._cos_cached,
@@ -372,12 +380,14 @@ class RotaryPositionalEncoding(nn.Module):
             max_seqlen=max_seqlen,
         )
         if cu_seqlens is not None:
-            qkv = rearrange(torch.stack([q, k, v], 0), "t s h d -> s (t h d)", t=3, h=num_heads, d=head_dim)
+            qkv = rearrange(
+                torch.stack([q, k, v], 0), "time_current s h d -> s (time_current h d)", t=3, h=num_heads, d=head_dim
+            )
         else:
             batch_size, seq_len, _ = qkv.shape
             qkv = rearrange(
                 torch.stack([q, k, v], 0),
-                "t b s h d -> b s (t h d)",
+                "time_current b s h d -> b s (time_current h d)",
                 b=batch_size,
                 s=seq_len,
                 t=3,
