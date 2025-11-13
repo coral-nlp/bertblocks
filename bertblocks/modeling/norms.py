@@ -161,7 +161,7 @@ def get_norm(config: "BertBlocksConfig") -> "nn.Module":
 
 
 def _get_norm_module(config: "BertBlocksConfig",
-                     norm_kind: Literal["pre", "post"],
+                     norm_kind: Literal["pre", "post", "both"],
                      layer_id: int) -> nn.Module:
     """
     Get the appropriate normalization module for pre or post normalization based on the given config.

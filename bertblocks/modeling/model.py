@@ -162,7 +162,7 @@ class BertBlocksModel(BertBlocksPreTrainedModel):
         super().__init__(config)
         self.embd = TokenEmbedding(config)
         self.encd = Encoder(config)
-        self.norm = _get_norm_module(config, config.num_blocks) if config.include_final_norm else nn.Identity()
+        self.norm = _get_norm_module(config, "both", config.num_blocks) if config.include_final_norm else nn.Identity()
         self.pool = Pooler(config) if add_pooling_layer else None
         self.pad_token_id = config.pad_token_id or 0
         self.post_init()
