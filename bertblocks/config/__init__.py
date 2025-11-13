@@ -88,6 +88,7 @@ class BertBlocksConfig(PretrainedConfig):
             passing custom parameters to normalization layers that require them. For example,
             for DeepNorm: {"alpha": 0.81} where alpha is the scaling factor.
         norm_bias: Whether to include bias terms in the output projection of normalization layers.
+        norm_scaling: Whether norm scaling should be enabled. Available options: Same as `norm_kind`.
         include_final_norm: Whether to apply a final normalization of the last hidden state.
         emb_dropout_prob: Dropout probability applied to the embedding layer output.
             Common values: 0.1 (default), 0.0 (no dropout). Must be between 0.0 and 1.0.
@@ -151,6 +152,7 @@ class BertBlocksConfig(PretrainedConfig):
         norm_fn: Literal["group", "layer", "rms", "deep", "dynamictanh"] = "rms",
         norm_eps: float = 1e-12,
         norm_bias: bool = True,
+        norm_scaling: Literal["pre", "post", "both", "none"] = "none",
         norm_params: dict | None = None,
         include_final_norm: bool = True,
         emb_dropout_prob: float = 0.1,
@@ -273,6 +275,7 @@ class BertBlocksConfig(PretrainedConfig):
         self.norm_eps = norm_eps
         self.norm_params = norm_params or {}
         self.norm_bias = norm_bias
+        self.norm_scaling = norm_scaling
         self.include_final_norm = include_final_norm
         # Dropout parameters
         self.emb_dropout_prob = emb_dropout_prob

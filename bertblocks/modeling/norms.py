@@ -77,6 +77,39 @@ class DeepNorm(nn.Module):
         return self.layer_norm(x + self.alpha * gx)
 
 
+class LayerNormScaler(nn.Module):
+    """Scales the output of the layer normalization inversely to the layer depth.
+
+    Attributes:
+        layer_id(int): zero-indexed layer id indicating index in the encoder stack.
+        norm (nn.Module): Normalization layer or `nn.Identity` if not configured.
+        scaling_factor(torch.Tensor): scaling factor.
+
+    References:
+    - The Curse of Depth in Large Language Models (https://arxiv.org/pdf/2502.05795)
+    """
+    def __init__(self, config: "BertBlocksConfig", layer_id: int):
+        super().__init__()
+
+        self.layer_id = layer_id
+        self.norm = get_norm(config)
+        self.scaling_factor = 1. / torch.sqrt(torch.tensor(self.layer_id + 1))
+
+    def forward(self, x: "torch.Tensor") -> "torch.Tensor":
+        """Apply layer norm scaling.
+
+        Args:
+            x (torch.Tensor): Input tensor to scale.
+
+        Returns:
+            torch.Tensor: Scaled tensor.
+
+        """
+        x = self.norm(x)
+        self.scaling_factor = self.scaling_factor.to(x.device)
+        return x * self.scaling_factor
+
+
 def get_norm(config: "BertBlocksConfig") -> "nn.Module":
     """Get the normalization layer specified in the configuration.
 
