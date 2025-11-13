@@ -11,7 +11,7 @@ from torch import nn
 
 from bertblocks.modeling.attention import Attention
 from bertblocks.modeling.mlp import get_mlp
-from bertblocks.modeling.norms import get_norm, LayerNormScaler
+from bertblocks.modeling.norms import _get_norm_module
 
 
 def convert_to_4d_attention_mask(attention_mask: "Tensor") -> "Tensor":
@@ -26,33 +26,6 @@ def convert_to_4d_attention_mask(attention_mask: "Tensor") -> "Tensor":
     attention_mask = attention_mask.unsqueeze(1) & attention_mask.unsqueeze(2)
     attention_mask = attention_mask.unsqueeze(1)
     return attention_mask
-
-
-def _get_norm_module(config: "BertBlocksConfig",
-                     norm_kind: Literal["pre", "post"],
-                     layer_id: int) -> nn.Module:
-    """
-    Get the appropriate normalization module for pre or post normalization based on the given config.
-
-    If norm scaling is enabled, the normalization is wrapped in a LayerNormScaler.
-
-    Args:
-        config (BertBlocksConfig): Configuration object determining model hyperparameters.
-        norm_kind: Position of normalization ("pre" or "post").
-        layer_id: Zero-indexed layer id indicating index in the encoder stack.
-
-    Returns:
-        LayerNormScaler | nn.Module | nn.Identity: The normalization module, which can be
-            a LayerNormScaler (if scaling is enabled), a standard normalization layer (if only normalization
-            is enabled), or an Identity module (if no normalization is configured).
-    """
-
-    if config.norm_scaling in (norm_kind, "both"):
-        return LayerNormScaler(config, layer_id)
-    elif config.norm_kind in (norm_kind, "both"):
-        return get_norm(config)
-
-    return nn.Identity()
 
 
 class Block(nn.Module):

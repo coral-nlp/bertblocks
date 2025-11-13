@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Literal
 
 import torch
 from torch import nn
@@ -158,6 +158,33 @@ def get_norm(config: "BertBlocksConfig") -> "nn.Module":
         case _:
             supported_norm_types = ["group", "layer", "rms", "deep", "dynamictanh"]
             raise ValueError(f"Unknown norm type {config.norm_fn}", f"Supported norm types: {supported_norm_types}")
+
+
+def _get_norm_module(config: "BertBlocksConfig",
+                     norm_kind: Literal["pre", "post"],
+                     layer_id: int) -> nn.Module:
+    """
+    Get the appropriate normalization module for pre or post normalization based on the given config.
+
+    If norm scaling is enabled, the normalization is wrapped in a LayerNormScaler.
+
+    Args:
+        config (BertBlocksConfig): Configuration object determining model hyperparameters.
+        norm_kind: Position of normalization ("pre" or "post").
+        layer_id: Zero-indexed layer id indicating index in the encoder stack.
+
+    Returns:
+        LayerNormScaler | nn.Module | nn.Identity: The normalization module, which can be
+            a LayerNormScaler (if scaling is enabled), a standard normalization layer (if only normalization
+            is enabled), or an Identity module (if no normalization is configured).
+    """
+
+    if config.norm_scaling in (norm_kind, "both"):
+        return LayerNormScaler(config, layer_id)
+    elif config.norm_kind in (norm_kind, "both"):
+        return get_norm(config)
+
+    return nn.Identity()
 
 
 __all__ = ["get_norm"]
