@@ -163,7 +163,7 @@ class BertBlocksConfig(PretrainedConfig):
         norm_fn: NormalizationFunction = "rms",
         norm_eps: float = 1e-12,
         norm_bias: bool = True,
-        norm_scaling: bool = False
+        norm_scaling: bool = False,
         norm_qk: bool = True,
         norm_params: KeywordArgs | None = None,
         hidden_dropout_prob: float = 0.1,

@@ -71,7 +71,7 @@ class Block(nn.Module):
     References:
          - "Attention Is All You Need" (https://arxiv.org/pdf/1706.03762)
          - "On Layer Normalization in the Transformer Architecture" (https://arxiv.org/pdf/2002.04745)
-
+         - "The Curse of Depth in Large Language Models" (https://arxiv.org/pdf/2502.05795)
     """
 
     def __init__(self, config: "BertBlocksConfig", layer_id: int):
@@ -79,11 +79,17 @@ class Block(nn.Module):
         self.layer_id = layer_id
         self.attn = Attention(config, layer_id=layer_id)
         self.ffwd = get_mlp(config)
-        self.pre_norm_attn = get_norm(config)
-        self.pre_norm_ffwd = get_norm(config)
-        self.post_norm_attn = get_norm(config)
-        self.post_norm_ffwd = get_norm(config)
-        self.scaler = LayerScaler(layer_id) if config.norm_scaling else nn.Identity()
+        self.norm_kind = config.norm_kind
+        self.pre_norm_attn = get_norm(config) if config.norm_kind in ("pre", "both") else nn.Identity()
+        self.pre_norm_ffwd = get_norm(config) if config.norm_kind in ("pre", "both") else nn.Identity()
+        self.post_norm_attn = get_norm(config) if config.norm_kind in ("post", "both") else nn.Identity()
+        self.post_norm_ffwd = get_norm(config) if config.norm_kind in ("post", "both") else nn.Identity()
+        self.pre_scaler = (
+            LayerScaler(layer_id) if config.norm_scaling and config.norm_kind in ("pre", "both") else nn.Identity()
+        )
+        self.post_scaler = (
+            LayerScaler(layer_id) if config.norm_scaling and config.norm_kind in ("post", "both") else nn.Identity()
+        )
         self.attn_drop = nn.Dropout(config.attn_dropout_prob) if config.attn_dropout_prob > 0 else nn.Identity()
         self.ffwd_drop = nn.Dropout(config.hidden_dropout_prob) if config.hidden_dropout_prob > 0 else nn.Identity()
         self.residual_first_layer = config.residual_first_layer
@@ -113,25 +119,25 @@ class Block(nn.Module):
         # Attention component
         if self.layer_id == 0 and self.residual_first_layer:
             x = self.pre_norm_attn(x)
-            x = self.scaler(x)
+            x = self.pre_scaler(x)
             residual = x
         else:
             residual = x
             x = self.pre_norm_attn(x)
-            x = self.scaler(x)
+            x = self.pre_scaler(x)
         x, w = self.attn(x, attention_mask, cu_seqlens, max_seq_len)
         x = self.attn_drop(x)
         x = self.post_norm_attn(x + residual)
-        x = self.scaler(x)
+        x = self.post_scaler(x)
         # Feed-forward component
         residual = x
         x = self.pre_norm_ffwd(x)
-        x = self.scaler(x)
+        x = self.pre_scaler(x)
         x = self.ffwd(x)
         x = self.ffwd_drop(x)
         # Without explicit cast, torch.compile breaks with AMP for some reason?
         x = self.post_norm_ffwd(x + residual.to(dtype=x.dtype))
-        x = self.scaler(x)
+        x = self.post_scaler(x)
         return x, w
 
 
