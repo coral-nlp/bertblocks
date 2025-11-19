@@ -5,7 +5,8 @@ from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
 from einops import rearrange, reduce, repeat
 
-from bertblocks.modeling.block import _get_norm_module
+from bertblocks.modeling.norms import get_norm
+from bertblocks.modeling.scale import LayerScaler
 from bertblocks.modeling.utils import LogLinearNoise
 
 if TYPE_CHECKING:
@@ -162,7 +163,8 @@ class BertBlocksModel(BertBlocksPreTrainedModel):
         super().__init__(config)
         self.embd = TokenEmbedding(config)
         self.encd = Encoder(config)
-        self.norm = _get_norm_module(config, "both", config.num_blocks) if config.include_final_norm else nn.Identity()
+        self.norm = get_norm(config) if config.include_final_norm else nn.Identity()
+        self.scaler = LayerScaler(config.num_blocks) if config.norm_scaling else nn.Identity()
         self.pool = Pooler(config) if add_pooling_layer else None
         self.pad_token_id = config.pad_token_id or 0
         self.post_init()
@@ -270,6 +272,7 @@ class BertBlocksModel(BertBlocksPreTrainedModel):
             x, attention_mask, cu_seqlens, max_seq_len, output_attentions, output_hidden_states
         )
         x = self.norm(x)
+        x = self.scaler(x)
 
         if self.config._unpadding:
             x = pad_output(x, indices, B, S)

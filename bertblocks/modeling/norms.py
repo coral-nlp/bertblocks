@@ -1,4 +1,4 @@
-from typing import Any, Literal
+from typing import Any
 
 import torch
 from torch import nn
@@ -77,39 +77,6 @@ class DeepNorm(nn.Module):
         return self.layer_norm(x + self.alpha * gx)
 
 
-class LayerNormScaler(nn.Module):
-    """Scales the output of the layer normalization inversely to the layer depth.
-
-    Attributes:
-        layer_id(int): zero-indexed layer id indicating index in the encoder stack.
-        norm (nn.Module): Normalization layer or `nn.Identity` if not configured.
-        scaling_factor(torch.Tensor): scaling factor.
-
-    References:
-    - The Curse of Depth in Large Language Models (https://arxiv.org/pdf/2502.05795)
-    """
-    def __init__(self, config: "BertBlocksConfig", layer_id: int):
-        super().__init__()
-
-        self.layer_id = layer_id
-        self.norm = get_norm(config)
-        self.scaling_factor = 1. / torch.sqrt(torch.tensor(self.layer_id + 1))
-
-    def forward(self, x: "torch.Tensor") -> "torch.Tensor":
-        """Apply layer norm scaling.
-
-        Args:
-            x (torch.Tensor): Input tensor to scale.
-
-        Returns:
-            torch.Tensor: Scaled tensor.
-
-        """
-        x = self.norm(x)
-        self.scaling_factor = self.scaling_factor.to(x.device)
-        return x * self.scaling_factor
-
-
 def get_norm(config: "BertBlocksConfig") -> "nn.Module":
     """Get the normalization layer specified in the configuration.
 
@@ -162,33 +129,6 @@ def get_norm(config: "BertBlocksConfig") -> "nn.Module":
         case _:
             supported_norm_types = ["group", "layer", "rms", "deep", "dynamictanh"]
             raise ValueError(f"Unknown norm type {config.norm_fn}", f"Supported norm types: {supported_norm_types}")
-
-
-def _get_norm_module(config: "BertBlocksConfig",
-                     norm_kind: Literal["pre", "post", "both"],
-                     layer_id: int) -> nn.Module:
-    """
-    Get the appropriate normalization module for pre or post normalization based on the given config.
-
-    If norm scaling is enabled, the normalization is wrapped in a LayerNormScaler.
-
-    Args:
-        config (BertBlocksConfig): Configuration object determining model hyperparameters.
-        norm_kind: Position of normalization ("pre" or "post").
-        layer_id: Zero-indexed layer id indicating index in the encoder stack.
-
-    Returns:
-        LayerNormScaler | nn.Module | nn.Identity: The normalization module, which can be
-            a LayerNormScaler (if scaling is enabled), a standard normalization layer (if only normalization
-            is enabled), or an Identity module (if no normalization is configured).
-    """
-
-    if config.norm_scaling in (norm_kind, "both"):
-        return LayerNormScaler(config, layer_id)
-    elif config.norm_kind in (norm_kind, "both"):
-        return get_norm(config)
-
-    return nn.Identity()
 
 
 __all__ = ["get_norm"]
