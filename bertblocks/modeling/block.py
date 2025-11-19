@@ -1,6 +1,9 @@
 from copy import deepcopy
 from typing import TYPE_CHECKING, Literal
 
+from bertblocks.modeling.norms import get_norm
+from bertblocks.modeling.scale import LayerScaler
+
 if TYPE_CHECKING:
     from torch import Tensor
 
@@ -11,7 +14,6 @@ from torch import nn
 
 from bertblocks.modeling.attention import Attention
 from bertblocks.modeling.mlp import get_mlp
-from bertblocks.modeling.norms import get_norm
 
 
 def convert_to_4d_attention_mask(attention_mask: "Tensor") -> "Tensor":
@@ -63,7 +65,7 @@ class Block(nn.Module):
                 - `attn_dropout_prob`: Dropout probability for attention layer
                 - `hidden_dropout_prob`: Dropout probability for feed-forward layers
 
-        layer_id (int): layer id indicating index in the encoder stack.
+        layer_id (int): zero-indexed layer id indicating index in the encoder stack.
 
 
     References:
@@ -77,10 +79,11 @@ class Block(nn.Module):
         self.layer_id = layer_id
         self.attn = Attention(config, layer_id=layer_id)
         self.ffwd = get_mlp(config)
-        self.pre_norm_attn = get_norm(config) if config.norm_kind in ("pre", "both") else nn.Identity()
-        self.pre_norm_ffwd = get_norm(config) if config.norm_kind in ("pre", "both") else nn.Identity()
-        self.post_norm_attn = get_norm(config) if config.norm_kind in ("post", "both") else nn.Identity()
-        self.post_norm_ffwd = get_norm(config) if config.norm_kind in ("post", "both") else nn.Identity()
+        self.pre_norm_attn = get_norm(config)
+        self.pre_norm_ffwd = get_norm(config)
+        self.post_norm_attn = get_norm(config)
+        self.post_norm_ffwd = get_norm(config)
+        self.scaler = LayerScaler(layer_id) if config.norm_scaling else nn.Identity()
         self.attn_drop = nn.Dropout(config.attn_dropout_prob) if config.attn_dropout_prob > 0 else nn.Identity()
         self.ffwd_drop = nn.Dropout(config.hidden_dropout_prob) if config.hidden_dropout_prob > 0 else nn.Identity()
         self.residual_first_layer = config.residual_first_layer
@@ -110,20 +113,25 @@ class Block(nn.Module):
         # Attention component
         if self.layer_id == 0 and self.residual_first_layer:
             x = self.pre_norm_attn(x)
+            x = self.scaler(x)
             residual = x
         else:
             residual = x
             x = self.pre_norm_attn(x)
+            x = self.scaler(x)
         x, w = self.attn(x, attention_mask, cu_seqlens, max_seq_len)
         x = self.attn_drop(x)
         x = self.post_norm_attn(x + residual)
+        x = self.scaler(x)
         # Feed-forward component
         residual = x
         x = self.pre_norm_ffwd(x)
+        x = self.scaler(x)
         x = self.ffwd(x)
         x = self.ffwd_drop(x)
         # Without explicit cast, torch.compile breaks with AMP for some reason?
         x = self.post_norm_ffwd(x + residual.to(dtype=x.dtype))
+        x = self.scaler(x)
         return x, w
 
 
