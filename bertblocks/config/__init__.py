@@ -98,7 +98,7 @@ class BertBlocksConfig(PretrainedConfig):
             passing custom parameters to normalization layers that require them. For example,
             for DeepNorm: {"alpha": 0.81} where alpha is the scaling factor.
         norm_bias: Whether to include bias terms in the output projection of normalization layers.
-        norm_scaling: Whether norm scaling should be enabled. Available options: Same as `norm_kind`.
+        norm_scaling: Whether norm scaling should be enabled. Defaults to False.
         norm_qk: Whether to apply query-key normalization.
         include_final_norm: Whether to apply a final normalization of the last hidden state.
         emb_dropout_prob: Dropout probability applied to the embedding layer output.
@@ -163,7 +163,7 @@ class BertBlocksConfig(PretrainedConfig):
         norm_fn: NormalizationFunction = "rms",
         norm_eps: float = 1e-12,
         norm_bias: bool = True,
-        norm_scaling: Literal["pre", "post", "both", "none"] = "none",
+        norm_scaling: bool = False
         norm_qk: bool = True,
         norm_params: KeywordArgs | None = None,
         hidden_dropout_prob: float = 0.1,
