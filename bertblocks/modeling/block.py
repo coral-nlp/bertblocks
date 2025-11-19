@@ -83,6 +83,7 @@ class Block(nn.Module):
         self.post_norm_ffwd = get_norm(config) if config.norm_kind in ("post", "both") else nn.Identity()
         self.attn_drop = nn.Dropout(config.attn_dropout_prob) if config.attn_dropout_prob > 0 else nn.Identity()
         self.ffwd_drop = nn.Dropout(config.hidden_dropout_prob) if config.hidden_dropout_prob > 0 else nn.Identity()
+        self.residual_first_layer = config.residual_first_layer
 
     def forward(
         self,
@@ -107,7 +108,7 @@ class Block(nn.Module):
 
         """
         # Attention component
-        if self.layer_id == 0:
+        if self.layer_id == 0 and self.residual_first_layer:
             x = self.pre_norm_attn(x)
             residual = x
         else:
@@ -302,4 +303,4 @@ class Encoder(nn.Module):
         )
 
 
-__all__ = ["Encoder", "Block"]
+__all__ = ["Block", "Encoder"]

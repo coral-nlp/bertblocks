@@ -1,8 +1,12 @@
 from typing import TYPE_CHECKING
 
+import torch
+from einops import rearrange
+
 if TYPE_CHECKING:
     from torch import Tensor
 
+import torch.nn.functional as F
 from torch import nn
 
 from bertblocks.config import BertBlocksConfig
@@ -22,6 +26,7 @@ class Attention(nn.Module):
         deterministic (bool): Whether to use deterministic attention.
         proj (nn.Linear): Fused QKV projection layer.
         ffwd (nn.Linear): Feed-forward layer to combine heads after attention.
+        qk_norm (bool): Whether to apply query-key-normalization.
 
     Args:
         config (BertBlocksConfig): Configuration object determining model hyperparameters. May be passed to
@@ -42,7 +47,8 @@ class Attention(nn.Module):
         super().__init__()
         # General hyperparameters
         self.num_heads = config.num_attention_heads
-        self.head_dim = config.hidden_size // config.num_attention_heads
+        self.hidden_size = config.hidden_size
+        self.head_dim = self.hidden_size // self.num_heads
         self.max_seq_len = config.max_sequence_length
         self.dropout_p = config.attn_dropout_prob
         if config.global_attention_every_n_layers != 0:
@@ -53,8 +59,9 @@ class Attention(nn.Module):
             self.local_attention = (-1, -1)
         self.deterministic = True
         # Layers
-        self.proj = nn.Linear(config.hidden_size, 3 * config.hidden_size, bias=config.attn_proj_bias)
-        self.ffwd = nn.Linear(config.hidden_size, config.hidden_size, bias=config.attn_out_bias)
+        self.norm_qk = config.norm_qk
+        self.proj = nn.Linear(self.hidden_size, 3 * self.hidden_size, bias=config.attn_proj_bias)
+        self.ffwd = nn.Linear(self.hidden_size, self.hidden_size, bias=config.attn_out_bias)
         # Private inits
         self._rotary_enc = self._get_rope(config, layer_id=layer_id)
         self._backend = get_attention(config)
@@ -88,6 +95,51 @@ class Attention(nn.Module):
         else:
             return None
 
+    def _apply_qknorm(self, qkv: torch.Tensor) -> torch.Tensor:
+        """Apply the given norm selectively to the q & k part of the combined input.
+
+        Args:
+            qkv (torch.Tensor, shape [total_seq_len, (3 * num_heads * head_dim)] or [batch_size, seq_len,
+                (3 * num_heads * head_dim)]): projected combined QKV tensor.
+
+        Returns:
+            torch.Tensor, same shape as input: combined QKV tensor after selectively applying norm to QK part.
+
+        References:
+            - https://arxiv.org/abs/2010.04245
+        """
+        if qkv.dim() == 2:  # Unpadded
+            q, k, v = rearrange(qkv, "s (t h d) -> t s h d", t=3, h=self.num_heads, d=self.head_dim)
+        else:  # Padded
+            batch_size, seq_len, _ = qkv.shape
+            q, k, v = rearrange(
+                qkv,
+                "b s (t h d) -> t b s h d",
+                b=batch_size,
+                s=seq_len,
+                t=3,
+                h=self.num_heads,
+                d=self.head_dim,
+            )
+
+        q = F.normalize(q, p=2, dim=-1)
+        k = F.normalize(k, p=2, dim=-1)
+
+        if qkv.dim() == 2:  # Unpadded
+            qkv = rearrange(torch.stack([q, k, v], 0), "t s h d -> s (t h d)", t=3, h=self.num_heads, d=self.head_dim)
+        else:  # Padded
+            batch_size, seq_len, _ = qkv.shape
+            qkv = rearrange(
+                torch.stack([q, k, v], 0),
+                "t b s h d -> b s (t h d)",
+                b=batch_size,
+                s=seq_len,
+                t=3,
+                h=self.num_heads,
+                d=self.head_dim,
+            )
+        return qkv
+
     def forward(
         self,
         x: "Tensor",
@@ -114,6 +166,9 @@ class Attention(nn.Module):
         # Rotary encoding if applicable
         if self._rotary_enc is not None:
             qkv = self._rotary_enc(qkv, self.num_heads, self.head_dim, cu_seqlens, max_seq_len)
+        # QK-Norm if applicable
+        if self.norm_qk:
+            qkv = self._apply_qknorm(qkv)
 
         if cu_seqlens is not None and max_seq_len is not None:
             x, w = self._backend.forward_unpadded(

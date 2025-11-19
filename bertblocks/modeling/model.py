@@ -26,7 +26,7 @@ from transformers.modeling_utils import PreTrainedModel
 
 from bertblocks.config import BertBlocksConfig
 from bertblocks.modeling.block import Encoder, EnhancedMaskingBlock, convert_to_4d_attention_mask
-from bertblocks.modeling.embedding import TokenEmbedding
+from bertblocks.modeling.embedding import TimestepEmbedding, TokenEmbedding
 from bertblocks.modeling.head import Pooler, get_prediction_head
 from bertblocks.modeling.loss import get_loss_function
 from bertblocks.modeling.padding import pad_output, unpad_input
@@ -167,8 +167,12 @@ class BertBlocksModel(BertBlocksPreTrainedModel):
         self.pad_token_id = config.pad_token_id or 0
         self.post_init()
         self.local_attention = config.local_attention
-        if config.pos_emb_kind == "alibi":
-            self.alibi = AlibiPositionalEncoding(config.num_attention_heads, device="cpu")
+        self.alibi = (
+            AlibiPositionalEncoding(config.num_attention_heads, device="cpu")
+            if config.pos_emb_kind == "alibi"
+            else None
+        )
+        self.tembd = TimestepEmbedding(config) if config.add_timestep_emb else None
 
     @property
     def dtype(self) -> "torch.dtype":
@@ -203,6 +207,7 @@ class BertBlocksModel(BertBlocksPreTrainedModel):
         input_ids: "torch.Tensor",
         attention_mask: "torch.Tensor | None" = None,
         token_type_ids: "torch.Tensor | None" = None,
+        timestep: "torch.Tensor | None" = None,
         output_attentions: "bool" = False,
         output_hidden_states: "bool" = False,
     ) -> "BaseModelOutput | BaseModelOutputWithPooling":
@@ -228,7 +233,7 @@ class BertBlocksModel(BertBlocksPreTrainedModel):
         """
         B, S = input_ids.shape
 
-        if self.config.unpadding:
+        if self.config._unpadding:
             with torch.no_grad():
                 input_ids, indices, cu_seqlens, max_seq_len = unpad_input(input_ids, attention_mask, self.pad_token_id)
             attention_mask = None
@@ -239,7 +244,7 @@ class BertBlocksModel(BertBlocksPreTrainedModel):
             )
             attention_mask = convert_to_4d_attention_mask(attention_mask)
 
-            if self.config.pos_emb_kind == "alibi":
+            if self.config.pos_emb_kind == "alibi" and self.alibi is not None:
                 attention_mask = self.alibi(attention_mask)
 
             if self.local_attention != (-1, -1) and self.local_attention[0] > 0:
@@ -251,13 +256,22 @@ class BertBlocksModel(BertBlocksPreTrainedModel):
                 else:
                     attention_mask = attention_mask.masked_fill(~local_mask, -float("inf"))
 
+        # Input embeddings
         x = self.embd(input_ids, token_type_ids=token_type_ids, cu_seqlens=cu_seqlens)
+
+        # Timestep embeddings
+        if self.tembd is not None:
+            if timestep is None:
+                timestep = torch.ones(input_ids.shape[0], device=input_ids.device)
+            timestep = self.tembd(timestep)
+            x += timestep.unsqueeze(1)
+
         x, hidden_states, attentions = self.encd(
             x, attention_mask, cu_seqlens, max_seq_len, output_attentions, output_hidden_states
         )
         x = self.norm(x)
 
-        if self.config.unpadding:
+        if self.config._unpadding:
             x = pad_output(x, indices, B, S)
             if output_hidden_states:
                 hidden_states = [pad_output(h, indices, B, S, self.pad_token_id) for h in hidden_states]
@@ -316,12 +330,12 @@ class BertBlocksForTasksBase(BertBlocksPreTrainedModel):
             return None
 
         if problem_type == "regression":
-            if self.num_labels == 1:
+            if self.num_classes == 1:
                 return self.loss_fn(logits.squeeze(), labels.squeeze())
             else:
                 return self.loss_fn(logits, labels)
         elif problem_type == "single_label_classification":
-            return self.loss_fn(logits.view(-1, self.num_labels), labels.view(-1))
+            return self.loss_fn(logits.view(-1, self.num_classes), labels.view(-1))
         elif problem_type == "multi_label_classification":
             return self.loss_fn(logits, labels.float())
         else:
@@ -523,15 +537,15 @@ class BertBlocksForSequenceClassification(BertBlocksForTasksBase):
             other submodules. Keys used at top level:
 
             - `hidden_size`: Dimensionality of hidden layers
-            - `num_labels`: Number of output labels for classification tasks
+            - `num_classes`: Number of output labels for classification tasks
             - `problem_type`: Problem type for automatic loss selection
 
     """
 
     def __init__(self, config: "BertBlocksConfig"):
         super().__init__(config=config)
-        self.classifier = torch.nn.Linear(config.hidden_size, config.num_labels)
-        self.num_labels = config.num_labels
+        self.classifier = torch.nn.Linear(config.hidden_size, config.num_classes)
+        self.num_classes = config.num_classes
         self.problem_type = config.problem_type
         self.loss_fn = get_loss_function(self.problem_type)
         self.post_init()
@@ -553,8 +567,8 @@ class BertBlocksForSequenceClassification(BertBlocksForTasksBase):
                 be attended to. Defaults to None.
             token_type_ids (torch.Tensor, shape [batch_size, seq_len], optional): Tensor indicating type of tokens.
                 Defaults to None.
-            labels (torch.Tensor, shape [batch_size,] or [batch_size, num_labels], optional) : Tensor of target labels
-                for computing loss.Defaults to None.
+            labels (torch.Tensor, shape [batch_size,] or [batch_size, num_classes], optional) : Tensor of target labels
+                for computing loss. Defaults to None.
             output_attentions (bool): Whether to return attention weights from all layers. Defaults to None.
             output_hidden_states (bool): Whether to return hidden states from all layers. Defaults to False.
 
@@ -600,14 +614,14 @@ class BertBlocksForTokenClassification(BertBlocksForTasksBase):
             other submodules. Keys used at top level:
 
             - `hidden_size`: Dimensionality of hidden layers
-            - `num_labels`: Number of output labels for classification tasks
+            - `num_classes`: Number of output labels for classification tasks
 
     """
 
     def __init__(self, config: "BertBlocksConfig"):
         super().__init__(config=config)
-        self.num_labels = config.num_labels
-        self.classifier = torch.nn.Linear(config.hidden_size, self.num_labels)
+        self.num_classes = config.num_classes
+        self.classifier = torch.nn.Linear(config.hidden_size, self.num_classes)
         # Token classification is always single-label classification; explicit literal cast is needed for mypy
         self.problem_type: Literal["single_label_classification"] = "single_label_classification"
         self.loss_fn = get_loss_function(self.problem_type)
@@ -794,6 +808,7 @@ class BertBlocksForMaskedDiffusion(BertBlocksPreTrainedModel):
         input_ids: "torch.Tensor",
         attention_mask: "torch.Tensor | None" = None,
         token_type_ids: "torch.Tensor | None" = None,
+        timestep: "torch.Tensor | None" = None,
         output_attentions: bool = False,
         output_hidden_states: bool = False,
     ) -> MaskedLMOutput:
@@ -806,6 +821,8 @@ class BertBlocksForMaskedDiffusion(BertBlocksPreTrainedModel):
                 be attended to. Defaults to None (all tokens are attended to).
             token_type_ids (torch.Tensor, shape [batch_size, seq_len], optional): Tensor indicating type of tokens.
                 Defaults to None.
+            timestep (torch.Tensor, shape [batch_size,], optional): Tensor indicating the timestep of each batch
+                sequence.
             output_attentions (bool): Whether to return attention weights from all layers. Defaults to False.
             output_hidden_states (bool): Whether to return hidden states from all layers. Defaults to False.
         """
@@ -814,6 +831,7 @@ class BertBlocksForMaskedDiffusion(BertBlocksPreTrainedModel):
             input_ids,
             attention_mask=attention_mask,
             token_type_ids=token_type_ids,
+            timestep=timestep,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
         )
@@ -839,8 +857,8 @@ class BertBlocksForMaskedDiffusion(BertBlocksPreTrainedModel):
         input_ids: "torch.Tensor",
         attention_mask: "torch.Tensor | None" = None,
         token_type_ids: "torch.Tensor | None" = None,
+        timestep: "torch.Tensor | None" = None,
         labels: "torch.Tensor | None" = None,
-        noise_level: "torch.Tensor | None" = None,
         noise_derivative: "torch.Tensor | None" = None,
         output_attentions: bool = False,
         output_hidden_states: bool = False,
@@ -854,9 +872,9 @@ class BertBlocksForMaskedDiffusion(BertBlocksPreTrainedModel):
                 be attended to. Defaults to None (all tokens are attended to).
             token_type_ids (torch.Tensor, shape [batch_size, seq_len], optional): Tensor indicating type of tokens.
                 Defaults to None.
-            labels (torch.Tensor, shape [batch_size, seq_len], optional): Tensor indicating uncorrupted token IDs.
-            noise_level (torch.Tensor, optional): Tensor indicating noise level of each sequence for training. Defaults
+            timestep (torch.Tensor, optional): Tensor indicating noise level of each sequence for training. Defaults
                 to None.
+            labels (torch.Tensor, shape [batch_size, seq_len], optional): Tensor indicating uncorrupted token IDs.
             noise_derivative (torch.Tensor, optional): Tensor indicating noise derivative of each sequence for training.
                 Defaults to None.
             output_attentions (bool): Whether to return attention weights from all layers. Defaults to False.
@@ -864,7 +882,14 @@ class BertBlocksForMaskedDiffusion(BertBlocksPreTrainedModel):
         """
         if attention_mask is None:
             attention_mask = torch.ones_like(input_ids)
-        output = self._forward(input_ids, attention_mask, token_type_ids, output_attentions, output_hidden_states)
+        output = self._forward(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            token_type_ids=token_type_ids,
+            timestep=timestep,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+        )
         if labels is not None:
             # Get the per-token log-likelihood of ground-truth tokens
             token_nll = torch.gather(input=output.logits, dim=-1, index=labels[:, :, None]).squeeze(-1)
@@ -872,7 +897,7 @@ class BertBlocksForMaskedDiffusion(BertBlocksPreTrainedModel):
             loss = -1 * token_nll
             # Weigh each sequence according to its noise level for loss contribution, down-weights easy (low noise)
             # and emphasizes harder (high noise) denoising steps
-            loss = loss * (noise_derivative / torch.expm1(noise_level))[:, None]
+            loss = loss * (noise_derivative / torch.expm1(timestep))[:, None]
             # Average weighted NLL over valid token positions
             loss = (loss * attention_mask).sum() / attention_mask.sum()
         else:
@@ -948,7 +973,7 @@ class BertBlocksForMaskedDiffusion(BertBlocksPreTrainedModel):
             # Unconditional generation
             >>> sequences = model.sample(num_samples=4, max_length=128)
 
-            # Prefix-conditioned generation (with tokenizer)
+            # Prefix-conditioned generation
             >>> inputs = tokenizer("The cat sat on", return_tensors="pt")
             >>> sequences = model.sample(**inputs, max_length=128)
         """
@@ -1016,7 +1041,7 @@ class BertBlocksForMaskedDiffusion(BertBlocksPreTrainedModel):
                 x[prefix_mask] = original_prefix[prefix_mask]
 
         # Final cleanup (greedy sample any remaining mask tokens)
-        x = self._final_denoise(x)
+        x = self._final_denoise(x, timesteps[-1])
 
         # Restore prefix one last time
         if prefix_mask is not None:
@@ -1024,7 +1049,7 @@ class BertBlocksForMaskedDiffusion(BertBlocksPreTrainedModel):
 
         return x
 
-    def _compute_transition_probs(self, input_ids: "torch.Tensor", noise_level: "torch.Tensor") -> "torch.Tensor":
+    def _compute_transition_probs(self, input_ids: "torch.Tensor", timestep: "torch.Tensor") -> "torch.Tensor":
         """Compute token-wise transition probabilities for discrete diffusion reverse process.
 
         Score represents transition probability ratios:
@@ -1036,15 +1061,15 @@ class BertBlocksForMaskedDiffusion(BertBlocksPreTrainedModel):
 
         Args:
             input_ids (torch.Tensor, shape [batch_size, seq_len]): Input sequences.
-            noise_level (torch.Tensor, shape [batch_size, 1]): Tensor indicating noise level of each sequence.
+            timestep (torch.Tensor, shape [batch_size, 1]): Tensor indicating timestep of each sequence.
 
         Returns:
             torch.Tensor (shape [batch_size, seq_len, vocab_size]): Tensor of transition probabilities for each token.
         """
-        logits = self._forward(input_ids).logits
+        logits = self._forward(input_ids=input_ids, timestep=timestep).logits
         batch, seq, vocab = logits.shape
         # Normalization: k = exp(-noise_level) / (1 - exp(-noise_level))
-        log_k = -torch.log(torch.expm1(noise_level))  # [batch, 1]
+        log_k = -torch.log(torch.expm1(timestep))  # [batch, 1]
         log_k = rearrange(log_k, "b 1 -> b")
 
         # Masked positions: use model predictions
@@ -1106,7 +1131,7 @@ class BertBlocksForMaskedDiffusion(BertBlocksPreTrainedModel):
         # Sample using Gumbel-max trick (works with unnormalized probabilities)
         return self._sample_categorical(posterior_distribution)
 
-    def _final_denoise(self, input_ids: "torch.Tensor") -> "torch.Tensor":
+    def _final_denoise(self, input_ids: "torch.Tensor", timestep: "torch.Tensor") -> "torch.Tensor":
         """Perform final greedy denoising step at near-zero noise to clean output.
 
         Args:
@@ -1117,7 +1142,7 @@ class BertBlocksForMaskedDiffusion(BertBlocksPreTrainedModel):
             torch.Tensor (shape [batch_size, seq_len]): Final denoised sequences.
         """
         # Infer final logits
-        logits = self._forward(input_ids).logits
+        logits = self._forward(input_ids, timestep=timestep).logits
 
         # For MASK positions, use model predictions, for non-MASK positions, keep current token
         is_mask = input_ids == self.mask_token_id
@@ -1196,10 +1221,10 @@ def get_model_cls(
 
 
 __all__ = [
-    "BertBlocksModel",
+    "BertBlocksForMaskedDiffusion",
     "BertBlocksForMaskedLM",
-    "BertBlocksForTokenClassification",
     "BertBlocksForQuestionAnswering",
     "BertBlocksForSequenceClassification",
-    "BertBlocksForMaskedDiffusion",
+    "BertBlocksForTokenClassification",
+    "BertBlocksModel",
 ]

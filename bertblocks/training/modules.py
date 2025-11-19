@@ -68,6 +68,7 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
         objective: Literal["mlm", "enhanced_mlm", "diffusion"] = "mlm",
         max_sequence_length: int | None = 512,
         min_unmasked_count: int | None = 16,
+        dataset: "torch.utils.data.Dataset" = None,
         dataset_name_or_path: str | list[str] | None = None,
         file_format: str | None = None,
         data_split: str | None = None,
@@ -90,8 +91,14 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
                 "mlm", "enhanced_mlm", "diffusion".
             max_sequence_length (int | None): Maximum sequence length for tokenization.
                 Longer sequences will be truncated. Defaults to 512.
-            dataset_name_or_path (str | list[str] | None): Dataset name or path. Defaults to None.
-            data_split (str, optional): Dataset split to use for pretraining. Defaults to 'train'.
+            dataset (torch.utils.data.Dataset, optional): Instantiated dataset to use. For train only, does not support
+                splits. Defaults to None. Either `dataset` or `dataset_name_or_path` must be provided, but only one
+                of them.
+            dataset_name_or_path (str | list[str] | None): Dataset name or path to load via huggingface datasets.
+                Defaults to None. Either `dataset` or `dataset_name_or_path` must be provided, but only one
+                of them.
+            data_split (str, optional): Dataset split to use for pretraining. Defaults to 'train'. Only used if data is
+                specifie via `dataset_name_or_path`.
             text_column (str, optional): Text column name pretrain with. Defaults to 'text'.
             split_char (str, optional): Character to split examples at. Only one of `split_char` and `split_len`
                 should be specified. Defaults to None.
@@ -705,8 +712,8 @@ class BertBlocksFinetuningModule(L.LightningModule):
 
 
 __all__ = [
-    "BertBlocksPretrainingDataModule",
-    "BertBlocksPretrainingModule",
     "BertBlocksFinetuningDataModule",
     "BertBlocksFinetuningModule",
+    "BertBlocksPretrainingDataModule",
+    "BertBlocksPretrainingModule",
 ]

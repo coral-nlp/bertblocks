@@ -468,7 +468,7 @@ class MaskedDiffusionCollator(Collator):
             max_sequence_length=max_sequence_length,
             pretokenized=pretokenized,
         )
-        self.batch_keys = [*self.batch_keys, "noise_level", "noise_derivative", "sigma"]
+        self.batch_keys = [*self.batch_keys, "timestep", "noise_derivative", "sigma"]
         self.vocab_size = tokenizer.vocab_size
         self.mask_token_id = mask_token_id
         self.noise = LogLinearNoise()
@@ -522,7 +522,7 @@ class MaskedDiffusionCollator(Collator):
         noise_prob = 1 - torch.exp(-sigma[:, None])
         noised_input_ids = self._apply_noise(tokenized["input_ids"], noise_prob)
         tokenized["input_ids"] = noised_input_ids
-        tokenized["noise_level"] = sigma
+        tokenized["timestep"] = sigma
         tokenized["noise_derivative"] = dsigma
         return tokenized
 

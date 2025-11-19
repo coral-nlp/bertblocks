@@ -54,15 +54,15 @@ except ImportError:
 
 __all__ = [
     "BertBlocksConfig",
-    "BertBlocksModel",
+    "BertBlocksFinetuningDataModule",
+    "BertBlocksFinetuningModule",
+    "BertBlocksForMaskedDiffusion",
     "BertBlocksForMaskedLM",
+    "BertBlocksForQuestionAnswering",
     "BertBlocksForSequenceClassification",
     "BertBlocksForTokenClassification",
-    "BertBlocksForQuestionAnswering",
-    "BertBlocksForMaskedDiffusion",
-    "from_huggingface",
-    "BertBlocksFinetuningDataModule",
+    "BertBlocksModel",
     "BertBlocksPretrainingDataModule",
-    "BertBlocksFinetuningModule",
     "BertBlocksPretrainingModule",
+    "from_huggingface",
 ]
