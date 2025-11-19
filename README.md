@@ -23,7 +23,7 @@ It is highly configurable and allows for easy experimentation with various archi
 Train a model with the default configuration:
 
 ```bash
-uv run main.py fit --config configs/pretraining.yaml
+uv run -m bertblocks fit --config configs/pretraining.yaml
 ```
 
 ### Configuration

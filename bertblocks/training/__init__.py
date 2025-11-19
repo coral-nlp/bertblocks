@@ -17,6 +17,6 @@ for different datasets, model sizes, and training regimes.
 from .modules import BertBlocksPretrainingDataModule, BertBlocksPretrainingModule
 
 __all__ = [
-    "BertBlocksPretrainingModule",
     "BertBlocksPretrainingDataModule",
+    "BertBlocksPretrainingModule",
 ]
