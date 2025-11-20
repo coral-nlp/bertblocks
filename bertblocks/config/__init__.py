@@ -253,7 +253,7 @@ class BertBlocksConfig(PretrainedConfig):
         # Dependent parameters
         self._unpadding = self._attn_implementation == "flash_attention_2"
         self.pos_emb_kwargs.update(
-            {"dim": self.hidden_size // self.num_attention_head, "max_seq_len": self.max_sequence_length}
+            {"dim": self.hidden_size // self.num_attention_heads, "max_seq_len": self.max_sequence_length}
         )
 
     @staticmethod

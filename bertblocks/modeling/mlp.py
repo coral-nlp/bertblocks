@@ -150,9 +150,13 @@ def get_mlp(config: "BertBlocksConfig") -> "nn.Module":
         case "linear":
             return Linear(config.hidden_size, config.actv_fn, bias=config.mlp_in_bias)
         case "mlp":
-            return MLP(config.hidden_size, config.intermediate_size, config.actv_fn, config.in_bias, config.out_bias)
+            return MLP(
+                config.hidden_size, config.intermediate_size, config.actv_fn, config.mlp_in_bias, config.mlp_out_bias
+            )
         case "glu":
-            return GLU(config.hidden_size, config.intermediate_size, config.actv_fn, config.in_bias, config.out_bias)
+            return GLU(
+                config.hidden_size, config.intermediate_size, config.actv_fn, config.mlp_in_bias, config.mlp_out_bias
+            )
         case _:
             supported_types = ["mlp", "glu"]
             raise ValueError(f"Unknown MLP type '{config.mlp_type}'. Supported types: {', '.join(supported_types)}")
