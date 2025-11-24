@@ -359,7 +359,6 @@ class BertBlocksPretrainingModule(L.LightningModule):
         learning_rate: float | None = 1e-5,
         weight_decay: float | None = 0.001,
         compile_model: bool | None = True,
-        debug_compile: bool | None = False,
         pretrained_tokenizer_name_or_path: str | None = None,
         optimizer_class: str | None = "adamw",
         optimizer_quantized: bool = False,
@@ -384,8 +383,6 @@ class BertBlocksPretrainingModule(L.LightningModule):
             weight_decay (float, optional): Weight decay coefficient for AdamW. Defaults to 1e-6.
             compile_model (bool, optional): Whether to compile the model with torch.compile.
                 Defaults to True for better performance.
-            debug_compile (bool, optional): Enable verbose debugging for torch.compile.
-                Prints dtype information and enables detailed error traces. Defaults to False.
             pretrained_tokenizer_name_or_path (str, optional): Path to pretrained tokenizer; if provided, will
                 overwrite the model vocab size using the given tokenizer. Defaults to None.
             optimizer_class (str, optional): Optimizer class name. Defaults to "adamw".
@@ -548,7 +545,6 @@ class BertBlocksFinetuningModule(L.LightningModule):
         learning_rate: float = 1e-5,
         weight_decay: float = 0.01,
         compile_model: bool = True,
-        debug_compile: bool = False,
         optimizer_class: str = "adamw",
         optimizer_kwargs: dict[str, Any] | None = None,
         scheduler_type: Literal["linear", "cosine", "constant", "polynomial"] | None = None,
@@ -565,7 +561,6 @@ class BertBlocksFinetuningModule(L.LightningModule):
             learning_rate: Peak learning rate for optimization.
             weight_decay: Weight decay coefficient.
             compile_model: Whether to compile the model with torch.compile.
-            debug_compile: Enable verbose debugging for torch.compile.
             optimizer_class: Optimizer class name.
             optimizer_kwargs: Additional optimizer arguments.
             scheduler_type: Type of learning rate scheduler.
@@ -597,13 +592,6 @@ class BertBlocksFinetuningModule(L.LightningModule):
             torch.set_float32_matmul_precision("high")
             torch._dynamo.config.capture_dynamic_output_shape_ops = True
             torch._dynamo.config.capture_scalar_outputs = True
-
-            # Enable debug mode if requested
-            if debug_compile:
-                from bertblocks.utils.debug import enable_compile_debugging
-
-                enable_compile_debugging(verbose=True, full_stack=True)
-
             self.model = torch.compile(self.model, dynamic=True)
 
     def configure_optimizers(self) -> "torch.optim.Optimizer | dict[str, Any]":

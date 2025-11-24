@@ -18,14 +18,6 @@ def cli(args: ArgsType = None) -> None:
                     window_size=50,
                 ),
                 LearningRateMonitor(logging_interval="step", log_momentum=True, log_weight_decay=True),
-                # ModelCheckpoint(
-                #    save_top_k=1,
-                #    monitor="loss/train",
-                #    mode="min",
-                #    dirpath="./checkpoints",
-                #    every_n_train_steps=10_000,
-                #    filename="neobert-de-fineweb-{epoch:02d}-{loss/train:.2f}",
-                # ),
             ],
         },
     )

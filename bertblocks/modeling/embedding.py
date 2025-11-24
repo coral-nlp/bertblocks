@@ -1,7 +1,5 @@
-import math
 from typing import TYPE_CHECKING
 
-from bertblocks.modeling.mlp import get_mlp
 from bertblocks.modeling.norms import get_norm
 
 if TYPE_CHECKING:
@@ -131,44 +129,4 @@ class TokenEmbedding(nn.Module):
         return x
 
 
-class TimestepEmbedding(nn.Module):
-    """Embeds scalar timesteps into vector representations."""
-
-    def __init__(self, config: "BertBlocksConfig") -> None:
-        super().__init__()
-        self.ffwd = get_mlp(config)
-        self.hidden_size = config.hidden_size
-
-    def embd(self, t: "torch.Tensor", max_period: int = 10000) -> "torch.Tensor":
-        """Create sinusoidal timestep embeddings.
-
-        Args:
-            t (torch.Tensor, shape [batch_size,]): fractional timestep indices for each batch sequence.
-            max_period (int): controls the minimum frequency of the embeddings.
-
-        Returns:
-            torch.Tensor, shape [batch_size, hidden_size]: timestep embeddings for each batch sequence.
-        """
-        half = self.hidden_size // 2
-        freqs = torch.exp(
-            -math.log(max_period) * torch.arange(start=0, end=half, dtype=torch.float32, device=t.device) / half
-        )
-        args = t[:, None].float() * freqs[None]
-        embedding = torch.cat([torch.cos(args), torch.sin(args)], dim=-1)
-        return embedding
-
-    def forward(self, timestep: "torch.Tensor") -> "torch.Tensor":
-        """Forward pass of the timestep embedding layer.
-
-        Args:
-            timestep (torch.Tensor, shape [batch_size,]): fractional timestep indices for each batch sequence.
-
-        Returns:
-            torch.Tensor, shape [batch_size, hidden_size]: timestep embeddings for each batch sequence.
-        """
-        timestep = self.embd(timestep)
-        timestep = self.ffwd(timestep)
-        return timestep
-
-
-__all__ = ["TimestepEmbedding", "TokenEmbedding", "TokenTypeEmbedding"]
+__all__ = ["TokenEmbedding", "TokenTypeEmbedding"]

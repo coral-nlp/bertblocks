@@ -5,25 +5,32 @@ from torch import nn
 class LogLinearNoise(nn.Module):
     """Log Linear noise schedule.
 
-    Built such that 1 - 1/e^(n(t)) interpolates between 0 and
-    ~1 when t varies from 0 to 1. Total noise is
-    -log(1 - (1 - eps) * t), so the sigma will be
-    (1 - eps) * t.
+    Returns alpha_t = 1 - (1-eps)*t and its derivative dalpha_t/dt = -(1-eps).
+    The model internally converts alpha_t to sigma_t = -log(alpha_t) when needed.
+
+    Implementation uses t' = (1 - eps) * t to avoid division/log by 0 as t approaches 1.
+
+    Args:
+        eps (float): Small value to avoid numerical issues at t=1. Defaults to 1e-3.
     """
 
     def __init__(self, eps: float = 1e-3) -> None:
         super().__init__()
         self.eps = eps
 
-    def _rate_noise(self, t: "torch.Tensor") -> "torch.Tensor":
-        return (1 - self.eps) / (1 - (1 - self.eps) * t)
-
-    def _total_noise(self, t: torch.Tensor) -> torch.Tensor:
-        return -torch.log1p(-(1 - self.eps) * t)
-
     def forward(self, t: "torch.Tensor") -> "tuple[torch.Tensor, torch.Tensor]":
-        """Compute the current total noise and rate of change of noise for the given timestep."""
-        return self._total_noise(t), self._rate_noise(t)
+        """Compute alpha_t and dalpha_t/dt for the given timestep.
+
+        Args:
+            t: Timestep in [0, 1]
+
+        Returns:
+            dalpha_t: Derivative of alpha with respect to t (constant = -(1-eps))
+            alpha_t: Alpha value at timestep t (= 1 - (1-eps)*t)
+        """
+        alpha_t = 1 - (1 - self.eps) * t
+        dalpha_t = -(1 - self.eps) * torch.ones_like(t)
+        return dalpha_t, alpha_t
 
 
 def top_k_top_p_filtering(
