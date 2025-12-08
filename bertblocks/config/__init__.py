@@ -12,6 +12,7 @@ FeedForward = Literal["linear", "mlp", "glu"]
 KeywordArgs = dict[str, Any]
 Initializer = Literal["trunc_normal", "kaiming_normal", "kaiming_uniform", "xavier_normal", "xavier_uniform"]
 AttentionBackend = Literal["flash_attention_2", "eager", "sdpa"]
+AttentionGate = Literal["none", "elementwise", "headwise"]
 PositionalEmbedding = Literal["alibi", "sinusoidal", "rope", "relative", "learned", "learned_alibi"]
 
 
@@ -46,6 +47,9 @@ class BertBlocksConfig(PretrainedConfig):
             Each head has dimension hidden_size // num_attention_heads. More heads can capture
             different types of relationships. Common values: 12 (BERT-base), 16 (BERT-large).
             Must be at least 2 and hidden_size must be divisible by this value.
+        attention_gate: Adds a query-dependent gating mechanism that modulates the hidden states after attention.
+            Available options: "none" (no gating, default), "headwise" (gating per head),
+            "elementwise" (gating per element).
         pos_emb_kind: The type of positional embedding to use. Available options:
             "alibi" (ALiBi positional encoding), "sinusoidal" (Sinusoidal positional encoding),
             "rope" (Rotary positional encoding), "relative" (Relative positional encoding),
@@ -150,6 +154,7 @@ class BertBlocksConfig(PretrainedConfig):
         emb_dropout_prob: float = 0.1,
         actv_fn: ActivationFunction = "silu",
         num_attention_heads: int = 12,
+        attention_gate : AttentionGate = "none",
         hidden_size: int = 768,
         intermediate_size: int = 3072,
         pos_emb_kind: PositionalEmbedding = "alibi",
@@ -187,6 +192,7 @@ class BertBlocksConfig(PretrainedConfig):
             initializer_gain=initializer_gain,
             emb_dropout_prob=emb_dropout_prob,
             num_attention_heads=num_attention_heads,
+            attention_gate=attention_gate,
             hidden_dropout_prob=hidden_dropout_prob,
             attn_dropout_prob=attn_dropout_prob,
             classifier_dropout_prob=classifier_dropout_prob,
@@ -207,6 +213,7 @@ class BertBlocksConfig(PretrainedConfig):
         self.num_blocks = num_blocks
         self.intermediate_size = intermediate_size
         self.num_attention_heads = num_attention_heads
+        self.attention_gate = attention_gate
         self.pos_emb_kind = pos_emb_kind
         self.pos_emb_kwargs = pos_emb_kwargs or {}
         self.add_timestep_emb = add_timestep_emb
@@ -270,6 +277,7 @@ class BertBlocksConfig(PretrainedConfig):
         initializer_gain: float,
         emb_dropout_prob: float,
         num_attention_heads: int,
+        attention_gate: str,
         hidden_dropout_prob: float,
         attn_dropout_prob: float,
         classifier_dropout_prob: float,
@@ -312,6 +320,12 @@ class BertBlocksConfig(PretrainedConfig):
 
         if num_attention_heads <= 1:
             raise ValueError(f"num_attention_heads must be at least 2, got {num_attention_heads}")
+
+        if attention_gate not in ["none", "elementwise", "headwise"]:
+            raise ValueError(
+                f"invalid attention_gate: expected one of [\"none\", \"elementwise\", \"headwise\"], "
+                f"got {attention_gate}"
+            )
 
         if not 0.0 <= hidden_dropout_prob <= 1.0:
             raise ValueError(f"hidden_dropout_prob must be between 0.0 and 1.0, got {hidden_dropout_prob}")
@@ -376,6 +390,7 @@ class BertConfig(BertBlocksConfig):
             num_blocks=num_blocks,
             intermediate_size=intermediate_size,
             num_attention_heads=num_attention_heads,
+            attention_gate="none",
             pos_emb_kind="learned" if pos_emb_kind in ("absolute", "learned") else "relative",
             type_vocab_size=type_vocab_size,
             initializer_range=initializer_range,
@@ -429,6 +444,7 @@ class BertConfig(BertBlocksConfig):
             num_blocks=orig_config.num_hidden_layers,
             intermediate_size=orig_config.intermediate_size,
             num_attention_heads=orig_config.num_attention_heads,
+            attention_gate="none",
             pos_emb_kind=orig_config.position_embedding_type,
             type_vocab_size=orig_config.type_vocab_size,
             initializer_range=orig_config.initializer_range,
@@ -483,6 +499,7 @@ class ModernBertConfig(BertBlocksConfig):
             num_blocks=num_blocks,
             intermediate_size=intermediate_size,
             num_attention_heads=num_attention_heads,
+            attention_gate="none",
             pos_emb_kwargs=pos_emb_kwargs,
             mlp_in_bias=mlp_in_bias,
             mlp_out_bias=mlp_out_bias,
@@ -537,6 +554,7 @@ class ModernBertConfig(BertBlocksConfig):
             num_blocks=orig_config.num_hidden_layers,
             intermediate_size=orig_config.intermediate_size,
             num_attention_heads=orig_config.num_attention_heads,
+            attention_gate="none",
             pos_emb_kwargs={
                 "base_global": orig_config.global_rope_theta,
                 "base_local": orig_config.local_rope_theta,

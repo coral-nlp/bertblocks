@@ -61,6 +61,7 @@ class Attention(nn.Module):
         # Layers
         self.norm_qk = config.norm_qk
         self.proj = nn.Linear(self.hidden_size, 3 * self.hidden_size, bias=config.attn_proj_bias)
+        self.attn_gate = AttentionGate(config) if config.attention_gate != "none" else AttentionGateIdentity()
         self.ffwd = nn.Linear(self.hidden_size, self.hidden_size, bias=config.attn_out_bias)
         # Private inits
         self._rotary_enc = self._get_rope(config, layer_id=layer_id)
@@ -152,7 +153,7 @@ class Attention(nn.Module):
         Automatically routes to padded or unpadded implementation based on backend capabilities.
 
         Args:
-            x (torch.Tensor): Input hidden state
+            x (torch.Tensor): Input hidden state (batch_size, seq_len, hidden_dim)
             indices (torch.Tensor, optional): Sequence indices for unpadded sequences
             cu_seqlens (torch.Tensor, optional): Cumulative sequence lengths for unpadded sequences
             max_seq_len (int, optional): Maximum sequence length for unpadded sequences
@@ -171,7 +172,7 @@ class Attention(nn.Module):
             qkv = self._apply_qknorm(qkv)
 
         if cu_seqlens is not None and max_seq_len is not None:
-            x, w = self._backend.forward_unpadded(
+            x_out, w = self._backend.forward_unpadded(
                 qkv,
                 cu_seqlens,
                 max_seq_len,
@@ -183,7 +184,7 @@ class Attention(nn.Module):
                 deterministic=self.deterministic,
             )
         elif attention_mask is not None:
-            x, w = self._backend.forward_padded(
+            x_out, w = self._backend.forward_padded(
                 qkv,
                 attention_mask,
                 self.num_heads,
@@ -195,9 +196,62 @@ class Attention(nn.Module):
             raise ValueError(
                 "Neither `attention_mask` nor `cu_seqlens` were provided, no attention implementation applicable"
             )
+        x_out = self.attn_gate(qkv, x_out)
         # Fuse heads back together
-        x = self.ffwd(x)
-        return x, w
+        x_out = self.ffwd(x_out)
+        return x_out, w
 
 
-__all__ = ["Attention"]
+class AttentionGate(nn.Module):
+    """A multiplicative attention gate that should be positioned ahead of the final feed-forward module.
+    Gating values are computed from the query vectors, which act as the input signal.
+
+    References:
+        - Gated Attention for Large Language Models: Non-linearity, Sparsity, and Attention-Sink-Free
+          (https://openreview.net/pdf?id=1b7whO4SfY)
+    """
+
+    def __init__(self, config: "BertBlocksConfig"):
+        super().__init__()
+        self.config = config
+
+        self.num_heads = config.num_attention_heads
+        hidden_size = config.hidden_size
+        self.head_dim = hidden_size // self.num_heads
+
+        self.attention_gate_type = config.attention_gate
+        if self.attention_gate_type == "elementwise":
+            self.gate_proj = nn.Linear(hidden_size, self.num_heads * self.head_dim, bias=False)
+        elif self.attention_gate_type == "headwise":
+            self.gate_proj = nn.Linear(hidden_size, self.num_heads, bias=False)
+        else:
+            raise ValueError(f'Unknown type of attention gate: {self.attention_gate_type}')
+
+    def forward(self, qkv: "Tensor", x: "Tensor") -> "Tensor":
+        batch_size, seq_len = qkv.shape
+        q, _, _ = rearrange(qkv, "b (t h d) -> t b (h d)", t=3, h=self.num_heads, d=self.head_dim)
+
+        if self.attention_gate_type == "headwise":
+            gate_output = self.gate_proj(q)
+            gate_output = gate_output[:, :, None]
+        else:
+            gate_output = self.gate_proj(q)
+            gate_output = gate_output.view(batch_size, self.num_heads, self.head_dim)
+
+        gate_output = torch.sigmoid(gate_output)
+        x = x.view(batch_size, self.num_heads, self.head_dim)
+
+        x_out = x * gate_output
+        return x_out.view(batch_size, self.num_heads * self.head_dim)
+
+
+class AttentionGateIdentity(nn.Module):
+
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, _qkv: "Tensor", x: "Tensor") -> "Tensor":
+        return x
+
+
+__all__ = ["Attention", "AttentionGate", "AttentionGateIdentity"]
