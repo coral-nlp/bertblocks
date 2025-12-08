@@ -38,7 +38,7 @@ class Attention(nn.Module):
                 - `attn_proj_bias`: Whether to include bias in QKV projection
                 - `attn_out_bias`: Whether to include bias in output projection
                 - `attn_dropout_prob`: Dropout probability for attention weights
-                - `pos_emb_kind`: Type of positional embedding ("alibi", "rope", "relative", etc.)
+                - `pos_enc_kind`: Type of positional embedding ("alibi", "rope", "relative", etc.)
 
             layer_id (int): layer id indicating index in the encoder stack.
     """
@@ -73,23 +73,23 @@ class Attention(nn.Module):
             config (BertBlocksConfig): Configuration object determining model hyperparameters. May be passed to
                 other submodules. Keys used at top level:
 
-                    - `pos_emb_kind`: Type of positional embedding ("alibi", "rope", "relative", etc.)
-                    - `pos_emb_kwargs`: Additional positional encoding arguments
+                    - `pos_enc_kind`: Type of positional embedding ("alibi", "rope", "relative", etc.)
+                    - `pos_enc_kwargs`: Additional positional encoding arguments
                     - `num_attention_heads`: Number of attention heads in multi-head attention
                     - `global_attention_every_n_layers`: Global attention layer stride
 
             layer_id (int): layer id indicating index in the encoder stack.
         """
-        if config.pos_emb_kind == "rope":
+        if config.pos_enc_kind == "rope":
             theta = (
-                config.pos_emb_kwargs.get("base_local") or config.pos_emb_kwargs.get("base", 10_000.0)
+                config.pos_enc_kwargs.get("base_local") or config.pos_enc_kwargs.get("base", 10_000.0)
                 if config.global_attention_every_n_layers > 0 and layer_id % config.global_attention_every_n_layers > 0
-                else config.pos_emb_kwargs.get("base_global") or config.pos_emb_kwargs.get("base", 10_000.0)
+                else config.pos_enc_kwargs.get("base_global") or config.pos_enc_kwargs.get("base", 10_000.0)
             )
             return RotaryPositionalEncoding(
-                dim=config.pos_emb_kwargs["dim"],
+                dim=config.pos_enc_kwargs["dim"],
                 base=theta,
-                interleaved=config.pos_emb_kwargs.get("interleaved", False),
+                interleaved=config.pos_enc_kwargs.get("interleaved", False),
                 max_seq_len=config.max_sequence_length,
             )
         else:
