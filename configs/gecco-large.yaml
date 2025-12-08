@@ -60,7 +60,7 @@ model:
       num_blocks: 28
       pad_token_id: 0
       mask_token_id: 103
-      pos_emb_kind: "alibi"
+      block_pos_enc_kind: "alibi"
       vocab_size: 28996
       head_type: "glu"
       max_sequence_length: ${data.init_args.max_sequence_length}

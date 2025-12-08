@@ -31,7 +31,7 @@ model:
       actv_fn: "silu"
       norm_kind: "pre"
       norm_fn: "rms"
-      pos_emb_kind: "alibi"
+      block_pos_enc_kind: "alibi"
       max_sequence_length: ${data.init_args.max_sequence_length}
     objective: ${data.init_args.objective}
 data:

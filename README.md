@@ -34,14 +34,14 @@ The architecture is configurable through the `BertBlocksConfig` class. Key param
 import bertblocks as bb
 
 config = bb.BertBlocksConfig(
-    vocab_size=30522,        # Vocabulary size
-    hidden_size=768,         # Model dimension
-    num_blocks=12,           # Number of transformer layers
-    num_attention_heads=12,  # Number of attention heads
-    norm_fn="rms",           # Normalization type
-    pos_emb_kind="alibi",    # Positional encoding
-    mlp_type="glu",          # Feed-forward architecture
-    actv_fn="silu"           # Activation function
+    vocab_size=30522,            # Vocabulary size
+    hidden_size=768,             # Model dimension
+    num_blocks=12,               # Number of transformer layers
+    num_attention_heads=12,      # Number of attention heads
+    norm_fn="rms",               # Normalization type
+    block_pos_enc_kind="alibi",  # Positional encoding
+    mlp_type="glu",              # Feed-forward architecture
+    actv_fn="silu"               # Activation function
 )
 
 model = bb.BertBlocksForMaskedLM(config)

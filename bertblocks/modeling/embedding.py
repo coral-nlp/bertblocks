@@ -73,7 +73,7 @@ class TokenEmbedding(nn.Module):
             - `vocab_size` (int): Size of the vocabulary for token embeddings
             - `hidden_size`: Dimensionality of embeddings and hidden states
             - `pad_token_id`: Token ID used for padding sequences
-            - `pos_enc_kind`: Type of positional encoding ("sinusoidal", "learned", etc.)
+            - `emb_pos_enc_kind`: Type of positional encoding ("sinusoidal", "learned", etc.)
             - `max_sequence_length`: Maximum sequence length for positional encodings
             - `add_token_type_emb`: Whether to add token type embeddings
             - `norm_kind`: When to apply normalization ("post", "both", etc.)
@@ -85,8 +85,9 @@ class TokenEmbedding(nn.Module):
         super().__init__()
         self.embd = nn.Embedding(config.vocab_size, config.hidden_size, padding_idx=config.pad_token_id)
 
-        match config.pos_enc_kind:
+        match config.emb_pos_enc_kind:
             case "sinusoidal":
+                # TODO: emb_pos_enc_kwargs should be used to make "base" configurable
                 self.pose = SinusoidalPositionalEncoding(dim=config.hidden_size, max_seq_len=config.max_sequence_length)
             case "learned":
                 self.pose = LearnedPositionalEncoding(dim=config.hidden_size, max_seq_len=config.max_sequence_length)
