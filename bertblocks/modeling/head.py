@@ -1,3 +1,4 @@
+import copy
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -66,9 +67,10 @@ class ProjectionPredictionHead(nn.Module):
 
     def __init__(self, config: "BertBlocksConfig"):
         super().__init__()
-        config.mlp_type = "linear"  # Overwrite to get desired behaviour from getter functions
+        config_copy = copy.deepcopy(config)
+        config_copy.mlp_type = "linear"  # Overwrite to get desired behaviour from getter functions
         self.pre_norm = get_norm(config) if config.norm_kind in ("pre", "both") else nn.Identity()
-        self.ffwd = get_mlp(config)
+        self.ffwd = get_mlp(config_copy)
         self.post_norm = get_norm(config) if config.norm_kind in ("post", "both") else nn.Identity()
 
     def forward(self, x: "torch.Tensor") -> "torch.Tensor":
@@ -105,9 +107,11 @@ class GLUPredictionHead(nn.Module):
 
     def __init__(self, config: "BertBlocksConfig"):
         super().__init__()
-        config.mlp_type = "glu"  # Overwrite to get desired behaviour from getter functions
+        config_copy = copy.deepcopy(config)
+        config_copy.mlp_type = "glu"  # Overwrite to get desired behaviour from getter functions
+        # Overwrite to get desired behaviour from getter functions
         self.pre_norm = get_norm(config) if config.norm_kind in ("pre", "both") else nn.Identity()
-        self.ffwd = get_mlp(config)
+        self.ffwd = get_mlp(config_copy)
         self.post_norm = get_norm(config) if config.norm_kind in ("post", "both") else nn.Identity()
 
     def forward(self, x: "torch.Tensor") -> "torch.Tensor":
@@ -144,9 +148,10 @@ class MLPPredictionHead(nn.Module):
 
     def __init__(self, config: "BertBlocksConfig"):
         super().__init__()
-        config.mlp_type = "mlp"  # Overwrite to get desired behaviour from getter functions
+        config_copy = copy.deepcopy(config)
+        config_copy.mlp_type = "mlp"  # Overwrite to get desired behaviour from getter functions
         self.pre_norm = get_norm(config) if config.norm_kind in ("pre", "both") else nn.Identity()
-        self.ffwd = get_mlp(config)
+        self.ffwd = get_mlp(config_copy)
         self.post_norm = get_norm(config) if config.norm_kind in ("post", "both") else nn.Identity()
 
     def forward(self, x: "torch.Tensor") -> "torch.Tensor":
