@@ -1,14 +1,19 @@
-# train_glue_pl.py
-# works on container: wpertsch/slurm:0.0.1 + pip install evaluate ToDo
-import os, csv, json
+"""
+GLUE Fine-tuning with PyTorch Lightning
+Evaluates on validation splits (never uses test labels)
+"""
+import os
+import csv
+import json
+import fcntl
 from pathlib import Path
-# Avoid tokenizers/datasets fork deadlocks. Is relevant for some tasks/epoch numbers --> num workers on 0 works too!
+from dataclasses import dataclass
+from typing import Optional, Dict, Any, List
+from collections import defaultdict
+
+# Safe defaults for HF tokenizers/datasets + CPU clusters
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 os.environ.setdefault("HF_DATASETS_DISABLE_PARALLEL", "1")
-
-from dataclasses import dataclass
-from typing import Optional, Dict, Any, List, DefaultDict
-from collections import defaultdict
 
 import torch
 from torch.utils.data import DataLoader
@@ -25,24 +30,26 @@ from transformers import (
     get_linear_schedule_with_warmup,
 )
 
-
+# -------------------------
 # GLUE task metadata
+# -------------------------
 GLUE_TASKS = {
-    # name: (sentence1_key, sentence2_key, num_labels, is_regression)
-    "cola":   ("sentence", None, 2, False),
-    "sst2":   ("sentence", None, 2, False),
-    "mrpc":   ("sentence1", "sentence2", 2, False),
-    "qqp":    ("question1", "question2", 2, False),
-    "stsb":   ("sentence1", "sentence2", 1, True),
-    "mnli":   ("premise", "hypothesis", 3, False),
-    "qnli":   ("question", "sentence", 2, False),
-    "rte":    ("sentence1", "sentence2", 2, False),
-    "wnli":   ("sentence1", "sentence2", 2, False),
+    # name: (sentence1_key, sentence2_key, num_labels, is_regression, primary_metric)
+    "cola": ("sentence", None, 2, False, "matthews_correlation"),
+    "sst2": ("sentence", None, 2, False, "accuracy"),
+    "mrpc": ("sentence1", "sentence2", 2, False, "f1"),
+    "qqp": ("question1", "question2", 2, False, "f1"),
+    "stsb": ("sentence1", "sentence2", 1, True, "spearmanr"),
+    "mnli": ("premise", "hypothesis", 3, False, "accuracy"),
+    "qnli": ("question", "sentence", 2, False, "accuracy"),
+    "rte": ("sentence1", "sentence2", 2, False, "accuracy"),
+    "wnli": ("sentence1", "sentence2", 2, False, "accuracy"),
 }
 
 
 @dataclass
 class GlueConfig:
+    """Configuration for GLUE fine-tuning"""
     model_name: str = "bert-base-uncased"
     task_name: str = "sst2"
     max_length: int = 256
@@ -53,48 +60,59 @@ class GlueConfig:
     num_epochs: int = 3
     warmup_ratio: float = 0.06
     seed: int = 42
-    num_workers: int = 0        # no forking by default
+    num_workers: int = 0
     fp16: bool = False
-    trust_remote_code: bool = False  # has to manually set True for ModernBERT or custom repos
+    trust_remote_code: bool = False
 
 
-# DataModule that encapsulates all data logic like: downloading, tokenization, batching
+# -------------------------
+# DataModule
+# -------------------------
 class GlueDataModule(L.LightningDataModule):
+    """DataModule for GLUE tasks - uses validation splits for all evaluation"""
+
     def __init__(self, cfg: GlueConfig):
         super().__init__()
         self.cfg = cfg
-        self.s1, self.s2, _, _ = GLUE_TASKS[cfg.task_name]
+        self.s1, self.s2, _, _, _ = GLUE_TASKS[cfg.task_name]
         self.tokenizer = AutoTokenizer.from_pretrained(
-            cfg.model_name, use_fast=True, trust_remote_code=cfg.trust_remote_code
+            cfg.model_name,
+            use_fast=True,
+            trust_remote_code=cfg.trust_remote_code
         )
         self.collate = DataCollatorWithPadding(self.tokenizer)
         self.ds = None
-        self.has_mnli = cfg.task_name == "mnli"
-        self.pin = torch.cuda.is_available()  # only pin on CUDA GPUs --> works on gammaweb
+        self.is_mnli = cfg.task_name == "mnli"
+        self.pin = torch.cuda.is_available()
 
     def setup(self, stage: Optional[str] = None):
-        raw = load_dataset("glue", self.cfg.task_name)  # downloads GLUE dataset split
+        """Load and tokenize dataset"""
+        raw = load_dataset("glue", self.cfg.task_name)
 
         def tokenize(ex):
-            #  defines how to tokenize each example (handles one or two sentences)
             texts = (ex[self.s1],) if self.s2 is None else (ex[self.s1], ex[self.s2])
-            return self.tokenizer(*texts, truncation=True, max_length=self.cfg.max_length)
+            return self.tokenizer(
+                *texts,
+                truncation=True,
+                max_length=self.cfg.max_length
+            )
 
-        def rm_cols(split_name: str) -> List[str]:
-            #  removes unused columns to keep dataset as small as possible
+        def get_cols_to_remove(split_name: str) -> List[str]:
             cols = raw[split_name].column_names
             keep = {"label"}
             return [c for c in cols if c not in keep]
 
-        mapped = {}
-        for split_name in raw.keys():
-            mapped[split_name] = raw[split_name].map(
-                tokenize, batched=True, remove_columns=rm_cols(split_name)
+        self.ds = {
+            s: raw[s].map(
+                tokenize,
+                batched=True,
+                remove_columns=get_cols_to_remove(s)
             )
-        self.ds = mapped
+            for s in raw.keys()
+        }
 
-    def _dl(self, split, bsz: int, shuffle: bool):
-        #  dataloader boiler code
+    def _make_dataloader(self, split, bsz: int, shuffle: bool):
+        """Create a DataLoader with appropriate settings"""
         return DataLoader(
             split,
             batch_size=bsz,
@@ -106,174 +124,349 @@ class GlueDataModule(L.LightningDataModule):
         )
 
     def train_dataloader(self):
-        return self._dl(self.ds["train"], self.cfg.batch_size, shuffle=True)
+        return self._make_dataloader(self.ds["train"], self.cfg.batch_size, shuffle=True)
 
     def val_dataloader(self):
-        if self.has_mnli:
+        """Returns validation split(s) for monitoring during training"""
+        if self.is_mnli:
             return [
-                self._dl(self.ds["validation_matched"], self.cfg.eval_batch_size, shuffle=False),
-                self._dl(self.ds["validation_mismatched"], self.cfg.eval_batch_size, shuffle=False),
+                self._make_dataloader(self.ds["validation_matched"], self.cfg.eval_batch_size, False),
+                self._make_dataloader(self.ds["validation_mismatched"], self.cfg.eval_batch_size, False),
             ]
-        return self._dl(self.ds["validation"], self.cfg.eval_batch_size, shuffle=False)
+        return self._make_dataloader(self.ds["validation"], self.cfg.eval_batch_size, False)
 
     def test_dataloader(self):
-        if self.has_mnli:
-            return [
-                self._dl(self.ds["test_matched"], self.cfg.eval_batch_size, shuffle=False),
-                self._dl(self.ds["test_mismatched"], self.cfg.eval_batch_size, shuffle=False),
-            ]
-        return self._dl(self.ds["test"], self.cfg.eval_batch_size, shuffle=False)
+        """Returns validation split(s) for final evaluation (NOT test splits)"""
+        return self.val_dataloader()
 
 
+# -------------------------
 # LightningModule
-class LightningBERT(L.LightningModule):
-    #  encapsulates model, loss, optimizer, scheduler, and metrics
+# -------------------------
+class GlueModule(L.LightningModule):
+    """Lightning module for GLUE fine-tuning"""
+
     def __init__(self, cfg: GlueConfig):
         super().__init__()
         self.save_hyperparameters()
         self.cfg = cfg
-        _, _, num_labels, is_reg = GLUE_TASKS[cfg.task_name]
+
+        # Task metadata
+        _, _, num_labels, is_reg, self.primary_metric = GLUE_TASKS[cfg.task_name]
         self.is_regression = is_reg
+
+        # Model
         self.model = AutoModelForSequenceClassification.from_pretrained(
             cfg.model_name,
             num_labels=num_labels,
             problem_type="regression" if is_reg else "single_label_classification",
             trust_remote_code=cfg.trust_remote_code,
         )
+
+        # Metrics
         self.metric = evaluate.load("glue", cfg.task_name)
-        self._test_preds: DefaultDict[int, List[torch.Tensor]] = defaultdict(list)
-        self._test_labels: DefaultDict[int, List[torch.Tensor]] = defaultdict(list)
-        self.test_epoch_metrics: Dict[str, Dict[str, float]] = {}
+
+        # Accumulators for full-dataset evaluation
+        self._eval_preds: Dict[int, List[torch.Tensor]] = defaultdict(list)
+        self._eval_labels: Dict[int, List[torch.Tensor]] = defaultdict(list)
+        self.final_metrics: Dict[str, Dict[str, float]] = {}
 
     def forward(self, **batch):
         return self.model(**batch)
 
-    def _suffix_for_split(self, dataloader_idx: Optional[int]):
-        multi = self.cfg.task_name == "mnli"
-        return f"_{dataloader_idx}" if (multi and dataloader_idx is not None) else ""
+    def _get_split_suffix(self, dataloader_idx: Optional[int]) -> str:
+        """Get suffix for multi-dataloader scenarios (MNLI)"""
+        if self.cfg.task_name == "mnli" and dataloader_idx is not None:
+            return f"_{dataloader_idx}"
+        return ""
 
-    def common_step(self, batch):
-        labels = batch["labels"] if "labels" in batch else batch["label"]
-        fwd = {k: v for k, v in batch.items() if k not in ("label", "labels")}
-        out = self(**fwd, labels=labels)
-        return out.loss, out.logits, labels
+    def _common_step(self, batch):
+        """Shared forward pass logic"""
+        labels = batch.get("labels", batch.get("label"))
+        inputs = {k: v for k, v in batch.items() if k not in ("label", "labels")}
+        outputs = self(**inputs, labels=labels)
+        return outputs.loss, outputs.logits, labels
 
-    def training_step(self, batch, _):
-        loss, logits, labels = self.common_step(batch)
+    def training_step(self, batch, batch_idx):
+        loss, logits, labels = self._common_step(batch)
         self.log("train_loss", loss, prog_bar=True, on_step=True, on_epoch=True)
         return loss
 
-    def _compute_and_log_metrics(self, logits, labels, stage: str, dataloader_idx: Optional[int] = None):
-        #  dataloader_idx is only needed for tasks with mult. val/test sets (like MNLI)
+    def validation_step(self, batch, batch_idx, dataloader_idx=0):
+        """Validation during training for checkpointing/monitoring"""
+        loss, logits, labels = self._common_step(batch)
+        suffix = self._get_split_suffix(dataloader_idx)
+
+        # Log loss
+        self.log(f"val_loss{suffix}", loss, prog_bar=True, on_epoch=True, sync_dist=True)
+
+        # Compute and log metrics
         if self.is_regression:
             preds = logits.squeeze().detach().cpu().float()
-            labels = labels.detach().cpu().float()
+            refs = labels.detach().cpu().float()
         else:
             preds = torch.argmax(logits, dim=-1).detach().cpu()
-            labels = labels.detach().cpu()
-        metrics: Dict[str, Any] = self.metric.compute(predictions=preds, references=labels)
-        tag = self._suffix_for_split(dataloader_idx)
-        for k, v in metrics.items():
-            self.log(f"{stage}{tag}_{k}", v, prog_bar=True, on_epoch=True, sync_dist=True)
-        return metrics
+            refs = labels.detach().cpu()
 
-    def validation_step(self, batch, batch_idx, dataloader_idx=0):
-        loss, logits, labels = self.common_step(batch)
-        tag = self._suffix_for_split(dataloader_idx)
-        self.log(f"val_loss{tag}", loss, prog_bar=False, on_epoch=True, sync_dist=True)
-        self._compute_and_log_metrics(logits, labels, "val", dataloader_idx)
+        metrics = self.metric.compute(predictions=preds, references=refs)
+        for metric_name, value in metrics.items():
+            self.log(
+                f"val{suffix}_{metric_name}",
+                value,
+                prog_bar=(metric_name == self.primary_metric),
+                on_epoch=True,
+                sync_dist=True
+            )
 
     def on_test_epoch_start(self):
-        self._test_preds.clear()
-        self._test_labels.clear()
-        self.test_epoch_metrics.clear()
+        """Initialize accumulators for final evaluation"""
+        self._eval_preds.clear()
+        self._eval_labels.clear()
+        self.final_metrics.clear()
 
     def test_step(self, batch, batch_idx, dataloader_idx=0):
-        loss, logits, labels = self.common_step(batch)
-        # accumulate raw preds/labels to compute metrics on the whole set
+        """Final evaluation on validation splits (accumulate predictions)"""
+        labels = batch.get("labels", batch.get("label"))
+        inputs = {k: v for k, v in batch.items() if k not in ("label", "labels")}
+
+        with torch.no_grad():
+            outputs = self(**inputs)
+            logits = outputs.logits if hasattr(outputs, "logits") else outputs
+
+        # Accumulate predictions and labels
         if self.is_regression:
-            self._test_preds[dataloader_idx].append(logits.detach().cpu().squeeze())
+            self._eval_preds[dataloader_idx].append(logits.squeeze().detach().cpu())
         else:
-            self._test_preds[dataloader_idx].append(torch.argmax(logits, dim=-1).detach().cpu())
-        self._test_labels[dataloader_idx].append(labels.detach().cpu())
+            self._eval_preds[dataloader_idx].append(
+                torch.argmax(logits, dim=-1).detach().cpu()
+            )
+        self._eval_labels[dataloader_idx].append(labels.detach().cpu())
 
     def on_test_epoch_end(self):
-        # compute metrics per test split
-        for idx in sorted(self._test_preds.keys()):
-            preds = torch.cat(self._test_preds[idx]).numpy().tolist()
-            refs = torch.cat(self._test_labels[idx]).numpy().tolist()
-            metrics: Dict[str, float] = evaluate.load("glue", self.cfg.task_name).compute(
-                predictions=preds, references=refs
+        """Compute final metrics across entire validation split(s)"""
+        for idx in sorted(self._eval_preds.keys()):
+            # Concatenate all batches
+            preds = torch.cat(self._eval_preds[idx]).numpy()
+            refs = torch.cat(self._eval_labels[idx]).numpy()
+
+            # Compute metrics
+            metrics = evaluate.load("glue", self.cfg.task_name).compute(
+                predictions=preds.tolist(),
+                references=refs.tolist()
             )
-            tag = self._suffix_for_split(idx)
-            # log nice names for single-split tasks; suffixed for MNLI
-            for k, v in metrics.items():
-                self.log(f"test{tag}_{k}", v, prog_bar=True, on_epoch=True, sync_dist=True)
-            key = f"test{tag}"
-            self.test_epoch_metrics[key] = metrics
+
+            # Log metrics
+            suffix = self._get_split_suffix(idx)
+            split_name = f"validation{suffix}"
+
+            for metric_name, value in metrics.items():
+                self.log(
+                    f"{split_name}_{metric_name}",
+                    value,
+                    prog_bar=(metric_name == self.primary_metric),
+                    on_epoch=True,
+                    sync_dist=True
+                )
+
+            # Store for CSV output
+            self.final_metrics[split_name] = metrics
+
+            # Print summary
+            primary_val = metrics.get(self.primary_metric, list(metrics.values())[0])
+            print(f"\n{split_name} {self.primary_metric}: {primary_val:.4f}")
 
     def configure_optimizers(self):
+        """Setup optimizer and learning rate scheduler"""
+        # Separate parameters with/without weight decay
         no_decay = ["bias", "LayerNorm.weight", "layer_norm.weight"]
-        wd = self.cfg.weight_decay
-        grouped = [
-            {"params": [p for n, p in self.model.named_parameters() if not any(nd in n for nd in no_decay)], "weight_decay": wd},
-            {"params": [p for n, p in self.model.named_parameters() if any(nd in n for nd in no_decay)], "weight_decay": 0.0},
+        optimizer_grouped_parameters = [
+            {
+                "params": [
+                    p for n, p in self.model.named_parameters()
+                    if not any(nd in n for nd in no_decay)
+                ],
+                "weight_decay": self.cfg.weight_decay,
+            },
+            {
+                "params": [
+                    p for n, p in self.model.named_parameters()
+                    if any(nd in n for nd in no_decay)
+                ],
+                "weight_decay": 0.0,
+            },
         ]
-        optimizer = torch.optim.AdamW(grouped, lr=self.cfg.lr, betas=(0.9, 0.999), eps=1e-8)
 
-        # Scheduler with warmup
-        steps_per_epoch = max(1, self.trainer.estimated_stepping_batches // self.cfg.num_epochs)
+        optimizer = torch.optim.AdamW(
+            optimizer_grouped_parameters,
+            lr=self.cfg.lr,
+            betas=(0.9, 0.999),
+            eps=1e-8,
+        )
+
+        # Linear warmup + decay schedule
+        steps_per_epoch = max(
+            1,
+            self.trainer.estimated_stepping_batches // self.cfg.num_epochs
+        )
         num_training_steps = steps_per_epoch * self.cfg.num_epochs
         num_warmup_steps = int(self.cfg.warmup_ratio * num_training_steps)
-        scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps, num_training_steps)
-        return {"optimizer": optimizer, "lr_scheduler": {"scheduler": scheduler, "interval": "step"}}
+
+        scheduler = get_linear_schedule_with_warmup(
+            optimizer,
+            num_warmup_steps,
+            num_training_steps
+        )
+
+        return {
+            "optimizer": optimizer,
+            "lr_scheduler": {
+                "scheduler": scheduler,
+                "interval": "step",
+            },
+        }
 
 
-# Entrypoint
+# -------------------------
+# CSV Writing with File Locking
+# -------------------------
+def write_results_to_csv(
+        csv_path: Path,
+        rows: List[Dict[str, Any]],
+):
+    """Safely append results to CSV with file locking"""
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Determine if we need to write header
+    write_header = not csv_path.exists()
+
+    # Collect all field names
+    if write_header:
+        fieldnames = sorted(set().union(*[row.keys() for row in rows]))
+    else:
+        # Read existing fieldnames
+        with csv_path.open("r", newline="") as f:
+            reader = csv.DictReader(f)
+            existing_fields = reader.fieldnames or []
+
+        # Merge with new fields
+        all_fields = set(existing_fields) | set().union(*[row.keys() for row in rows])
+        fieldnames = list(existing_fields) + [
+            f for f in sorted(all_fields) if f not in existing_fields
+        ]
+
+        # If new fields were added, we need to rewrite the entire file
+        if set(fieldnames) != set(existing_fields):
+            with csv_path.open("r", newline="") as f:
+                reader = csv.DictReader(f)
+                existing_rows = list(reader)
+
+            # Rewrite with new header
+            with csv_path.open("w", newline="") as f:
+                fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+                try:
+                    writer = csv.DictWriter(f, fieldnames=fieldnames)
+                    writer.writeheader()
+                    for row in existing_rows:
+                        for field in fieldnames:
+                            row.setdefault(field, "")
+                        writer.writerow(row)
+                finally:
+                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+
+            write_header = False
+
+    # Append new rows with locking
+    with csv_path.open("a", newline="") as f:
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        try:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            if write_header:
+                writer.writeheader()
+
+            for row in rows:
+                for field in fieldnames:
+                    row.setdefault(field, "")
+                writer.writerow(row)
+        finally:
+            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+
+
+# -------------------------
+# Main
+# -------------------------
 def main():
     import argparse
-    parser = argparse.ArgumentParser()
-    # Core training args
-    parser.add_argument("--task", type=str, default="sst2", choices=list(GLUE_TASKS.keys()))
-    parser.add_argument("--model", type=str, default="bert-base-uncased")
-    parser.add_argument("--epochs", type=int, default=3)
-    parser.add_argument("--bsz", type=int, default=32)
-    parser.add_argument("--eval_bsz", type=int, default=64)
-    parser.add_argument("--lr", type=float, default=2e-5)
-    parser.add_argument("--wd", type=float, default=0.01)
-    parser.add_argument("--max_len", type=int, default=256)
-    parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--accum", type=int, default=1, help="gradient accumulation steps")
-    parser.add_argument("--precision", type=str, default="32-true", choices=["32-true","16-mixed","bf16-mixed"])
-    parser.add_argument("--outdir", type=str, default="lightning_logs")
-    parser.add_argument("--num_workers", type=int, default=0, help="DataLoader workers (0 avoids forking)")
+
+    parser = argparse.ArgumentParser(
+        description="Fine-tune transformers on GLUE tasks",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+    )
+
+    # Core training arguments
+    parser.add_argument("--task", type=str, default="sst2",
+                        choices=list(GLUE_TASKS.keys()),
+                        help="GLUE task name")
+    parser.add_argument("--model", type=str, default="bert-base-uncased",
+                        help="HuggingFace model name")
+    parser.add_argument("--epochs", type=int, default=3,
+                        help="Number of training epochs")
+    parser.add_argument("--bsz", type=int, default=32,
+                        help="Training batch size")
+    parser.add_argument("--eval_bsz", type=int, default=64,
+                        help="Evaluation batch size")
+    parser.add_argument("--lr", type=float, default=2e-5,
+                        help="Learning rate")
+    parser.add_argument("--wd", type=float, default=0.01,
+                        help="Weight decay")
+    parser.add_argument("--max_len", type=int, default=256,
+                        help="Maximum sequence length")
+    parser.add_argument("--seed", type=int, default=42,
+                        help="Random seed")
+    parser.add_argument("--accum", type=int, default=1,
+                        help="Gradient accumulation steps")
+    parser.add_argument("--precision", type=str, default="32-true",
+                        choices=["32-true", "16-mixed", "bf16-mixed"],
+                        help="Training precision")
+    parser.add_argument("--num_workers", type=int, default=0,
+                        help="DataLoader workers (0 avoids forking)")
     parser.add_argument("--trust_remote_code", action="store_true",
-                        help="Allow custom model/tokenizer code from HF repos (e.g., ModernBERT)")
+                        help="Trust remote code from model repos")
 
-    # W&B args
-    parser.add_argument("--wandb_project", type=str, default="glue-finetuning")
-    parser.add_argument("--wandb_run_name", type=str, default=None)
-    parser.add_argument("--wandb_group", type=str, default=None)
-    parser.add_argument("--wandb_tags", type=str, nargs="*", default=None)
-    parser.add_argument("--wandb_mode", type=str, default=None, choices=[None, "offline", "disabled", "online"])
+    # Logging arguments
+    parser.add_argument("--outdir", type=str, default="lightning_logs",
+                        help="Output directory for logs")
+    parser.add_argument("--wandb_project", type=str, default="glue-finetuning",
+                        help="Weights & Biases project name")
+    parser.add_argument("--wandb_run_name", type=str, default=None,
+                        help="Weights & Biases run name")
+    parser.add_argument("--wandb_group", type=str, default=None,
+                        help="Weights & Biases group name")
+    parser.add_argument("--wandb_tags", type=str, nargs="*", default=None,
+                        help="Weights & Biases tags")
+    parser.add_argument("--wandb_mode", type=str, default="disabled",
+                        choices=["online", "offline", "disabled"],
+                        help="Weights & Biases mode")
 
-    # I/O & callbacks
+    # Output arguments
     parser.add_argument("--no_ckpt", action="store_true",
-                        help="Disable model checkpointing (useful on slow/NFS storage)")
+                        help="Disable checkpointing")
     parser.add_argument("--results_csv", type=str, default=None,
-                        help="If set, append one row per test split with metrics.")
+                        help="CSV file to append results")
     parser.add_argument("--echo_json", action="store_true",
-                        help="Print a JSON object with test metrics to stdout at the end.")
+                        help="Print JSON results to stdout")
 
-    # Optional trainer batch limits (handy for smoke tests)
-    parser.add_argument("--limit_train_batches", type=float, default=1.0)
-    parser.add_argument("--limit_val_batches", type=float, default=1.0)
+    # Debug/testing arguments
+    parser.add_argument("--limit_train_batches", type=float, default=1.0,
+                        help="Limit training batches (for testing)")
+    parser.add_argument("--limit_val_batches", type=float, default=1.0,
+                        help="Limit validation batches (for testing)")
 
     args = parser.parse_args()
 
-    # Repro
+    # Set seed for reproducibility
     L.seed_everything(args.seed)
 
+    # Create config
     cfg = GlueConfig(
         model_name=args.model,
         task_name=args.task,
@@ -289,29 +482,35 @@ def main():
         trust_remote_code=args.trust_remote_code,
     )
 
-    # Data & model
+    # Initialize data and model
     dm = GlueDataModule(cfg)
-    model = LightningBERT(cfg)
+    model = GlueModule(cfg)
 
-    # Loggers (CSV + W&B)
-    csv_logger = CSVLogger(save_dir=args.outdir, name=f"{args.task}-{args.model.replace('/','_')}")
+    # Setup loggers
+    csv_logger = CSVLogger(
+        save_dir=args.outdir,
+        name=f"{args.task}-{args.model.replace('/', '_')}"
+    )
+
     wandb_logger = WandbLogger(
         project=args.wandb_project,
-        name=args.wandb_run_name or f"{args.task}-{args.model.replace('/','_')}",
+        name=args.wandb_run_name or f"{args.task}-{args.model.replace('/', '_')}",
         group=args.wandb_group,
         tags=args.wandb_tags,
         config=vars(args),
         save_dir=args.outdir,
         mode=args.wandb_mode,
     )
+
     loggers = [csv_logger, wandb_logger]
 
-    # Callbacks
+    # Setup callbacks
     callbacks = [LearningRateMonitor(logging_interval="step")]
+
     if not args.no_ckpt:
         callbacks.append(
             ModelCheckpoint(
-                monitor="val_loss",     # <— works with Option B naming
+                monitor="val_loss",
                 mode="min",
                 save_top_k=1,
                 save_last=True,
@@ -319,7 +518,7 @@ def main():
             )
         )
 
-    # Trainer
+    # Create trainer
     trainer = L.Trainer(
         max_epochs=cfg.num_epochs,
         precision=args.precision,
@@ -333,72 +532,68 @@ def main():
         limit_val_batches=args.limit_val_batches,
     )
 
-    # Fit & test
+    # Train
+    print(f"\n{'=' * 60}")
+    print(f"Training {args.model} on {args.task.upper()}")
+    print(f"{'=' * 60}\n")
+
     trainer.fit(model, dm)
 
-    # Test with best/last if available --> ToDo does not work on cluster
+    # Get best checkpoint
     best_ckpt = None
     if not args.no_ckpt:
         for cb in callbacks:
             if isinstance(cb, ModelCheckpoint) and cb.best_model_path:
                 best_ckpt = cb.best_model_path
                 break
+
         if best_ckpt is None:
-            ckpt_dir = os.path.join(csv_logger.log_dir, "checkpoints")
-            last_ckpt = os.path.join(ckpt_dir, "last.ckpt")
-            if os.path.exists(last_ckpt):
-                best_ckpt = last_ckpt
+            ckpt_dir = Path(csv_logger.log_dir) / "checkpoints"
+            last_ckpt = ckpt_dir / "last.ckpt"
+            if last_ckpt.exists():
+                best_ckpt = str(last_ckpt)
+
+    # Final evaluation on validation splits
+    print(f"\n{'=' * 60}")
+    print(f"Final Evaluation on Validation Split(s)")
+    print(f"{'=' * 60}\n")
 
     trainer.test(model, datamodule=dm, ckpt_path=best_ckpt)
 
-    # model.test_epoch_metrics looks like {"test": {...}} or {"test_0": {...}, "test_1": {...}}
-    results = []
-    for split_name, metrics in model.test_epoch_metrics.items():
+    # Prepare results
+    rows = []
+    for split_name, metrics in model.final_metrics.items():
         row = {
             "task": args.task,
             "model": args.model,
-            "split": split_name,  # "test" or "test_0"/"test_1" for MNLI
+            "split": split_name,
             "seed": args.seed,
             "epochs": args.epochs,
             "batch_size": args.bsz,
-            **metrics,  # glue metrics (e.g., accuracy, f1, matthews_correlation, pearson, spearmanr)
+            "lr": args.lr,
+            "primary_metric": GLUE_TASKS[args.task][4],
+            **metrics,
         }
-        results.append(row)
+        rows.append(row)
 
-    # append to CSV if requested
+    # Write to CSV
     if args.results_csv:
-        out = Path(args.results_csv)
-        out.parent.mkdir(parents=True, exist_ok=True)
-        # unify the header across tasks by collecting all keys
-        # if file does not exist, write header
-        write_header = not out.exists()
-        # Determine superset of keys for this write pass
-        # (For incremental consistency, read existing header if present)
-        if out.exists():
-            with out.open("r", newline="") as f:
-                reader = csv.DictReader(f)
-                existing_fields = reader.fieldnames or []
-        else:
-            existing_fields = []
-        # new fields from rows
-        new_fields = set(existing_fields) | set().union(*[row.keys() for row in results])
-        fieldnames = list(existing_fields) if existing_fields else list(sorted(new_fields))
-        # ensure all keys present
-        for row in results:
-            for k in new_fields:
-                row.setdefault(k, "")
-        # write (append mode)
-        file_exists = out.exists()
-        with out.open("a", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
-            if not file_exists:
-                writer.writeheader()
-            for row in results:
-                writer.writerow(row)
+        csv_path = Path(args.results_csv)
+        write_results_to_csv(csv_path, rows)
+        print(f"\nResults appended to: {csv_path}")
 
-    # echo a compact JSON line if requested (easy to parse in a runner)
+    # Echo JSON
     if args.echo_json:
-        print(json.dumps({"task": args.task, "model": args.model, "results": model.test_epoch_metrics}), flush=True)
+        output = {
+            "task": args.task,
+            "model": args.model,
+            "results": model.final_metrics,
+        }
+        print(json.dumps(output), flush=True)
+
+    print(f"\n{'=' * 60}")
+    print(f"Training Complete!")
+    print(f"{'=' * 60}\n")
 
 
 if __name__ == "__main__":
