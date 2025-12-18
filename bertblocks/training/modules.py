@@ -547,6 +547,7 @@ class BertBlocksFinetuningModule(L.LightningModule):
         compile_model: bool = True,
         optimizer_class: str = "adamw",
         optimizer_kwargs: dict[str, Any] | None = None,
+        optimizer_quantized: bool = False,
         scheduler_type: Literal["linear", "cosine", "constant", "polynomial"] | None = None,
         scheduler_kwargs: dict[str, Any] | None = None,
         warmup_steps: int = 0,
@@ -611,7 +612,12 @@ class BertBlocksFinetuningModule(L.LightningModule):
         ]
         optimizer_kwargs = self.hparams.optimizer_kwargs or {}
         optimizer_kwargs.update({"lr": self.hparams.learning_rate})
-        optimizer = get_optimizer(self.hparams.optimizer_class, optimizer_grouped_parameters, optimizer_kwargs)
+        optimizer = get_optimizer(
+            self.hparams.optimizer_class,
+            optimizer_grouped_parameters,
+            optimizer_kwargs,
+            self.hparams.optimizer_quantized,
+        )
 
         if self.hparams.scheduler_type is None:
             return optimizer

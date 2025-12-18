@@ -765,82 +765,31 @@ class BertBlocksForQuestionAnswering(BertBlocksForTasksBase):
         )
 
 
-class BertBlocksForMaskedDiffusion(BertBlocksPreTrainedModel):
+class BertBlocksForMaskedDiffusion(BertBlocksForMaskedLM):
     """Implementation of a masked diffusion model.
 
     Closely follows https://github.com/kuleshov-group/mdlm
     """
 
-    _tied_weights_keys: ClassVar = ["decoder.weight"]
-
     def __init__(self, config: "BertBlocksConfig"):
         super().__init__(config)
-        self.model = BertBlocksModel(config)
-        self.head = get_prediction_head(config)
-        self.decoder = nn.Linear(config.hidden_size, config.vocab_size, bias=True)
         self.max_seq_len = config.max_sequence_length
-        self.vocab_size = config.vocab_size
         self.mask_token_id = config.mask_token_id
         # Noise Schedule
         self.noise = LogLinearNoise()
+        self.post_init()
 
     def get_input_embeddings(self) -> "nn.Module":
         """Return the encoder input embeddings."""
-        return self.model.embd.embd
+        return self.model.model.embd.embd
 
     def get_output_embeddings(self) -> "nn.Module":
         """Return the decoder embeddings."""
-        return self.decoder
+        return self.model.get_output_embeddings()
 
     def set_output_embeddings(self, new_embeddings: "nn.Linear") -> None:
         """Replace the decoder embeddings with given one (e.g., the encoder side)."""
-        self.decoder = new_embeddings
-
-    def _forward(
-        self,
-        input_ids: "torch.Tensor",
-        attention_mask: "torch.Tensor | None" = None,
-        token_type_ids: "torch.Tensor | None" = None,
-        output_attentions: bool = False,
-        output_hidden_states: bool = False,
-    ) -> MaskedLMOutput:
-        """Wrap the forward pass to infers logits from the backbone model compatible with the diffusion process.
-
-        Args:
-            input_ids (torch.Tensor, shape [batch_size, seq_len]): Tensor of token ids. When training, should
-                be timestep-corrupted token IDs.
-            attention_mask (torch.Tensor, shape [batch_size, seq_len], optional): Tensor indicating which tokens should
-                be attended to. Defaults to None (all tokens are attended to).
-            token_type_ids (torch.Tensor, shape [batch_size, seq_len], optional): Tensor indicating type of tokens.
-                Defaults to None.
-            output_attentions (bool): Whether to return attention weights from all layers. Defaults to False.
-            output_hidden_states (bool): Whether to return hidden states from all layers. Defaults to False.
-        """
-        # Infer the token-level embeddings
-        output = self.model(
-            input_ids,
-            attention_mask=attention_mask,
-            token_type_ids=token_type_ids,
-            output_attentions=output_attentions,
-            output_hidden_states=output_hidden_states,
-        )
-        # Predict log probabilities over the vocabulary based on the embeddings
-        # logits = self.decoder(self.head(output.last_hidden_state))
-        logits = output.logits
-        # Set the prediction probability of the mask token to 0 (-inf in log space)
-        logits[:, :, self.mask_token_id] = -torch.inf
-        # Re-normalize the logits such that x.exp() is a probability distribution over vocab_size.
-        logits = logits - torch.logsumexp(logits, dim=-1, keepdim=True)
-        # Clamp unmasked ground-truth tokens (p=1 for ground-truth token, p=0 for any other token at that position)
-        unmasked_indices = input_ids != self.mask_token_id
-        logits[unmasked_indices] = -torch.inf
-        logits[unmasked_indices, input_ids[unmasked_indices]] = 0
-        return MaskedLMOutput(
-            loss=None,
-            logits=logits,
-            hidden_states=output.hidden_states,
-            attentions=output.attentions,
-        )
+        self.model.decoder = new_embeddings
 
     def forward(
         self,
@@ -848,8 +797,8 @@ class BertBlocksForMaskedDiffusion(BertBlocksPreTrainedModel):
         attention_mask: "torch.Tensor | None" = None,
         token_type_ids: "torch.Tensor | None" = None,
         labels: "torch.Tensor | None" = None,
-        output_attentions: bool = False,
-        output_hidden_states: bool = False,
+        output_attentions: bool | None = False,
+        output_hidden_states: bool | None = False,
     ) -> "MaskedLMOutput":
         """Forward pass for diffusion language modeling.
 
@@ -867,7 +816,7 @@ class BertBlocksForMaskedDiffusion(BertBlocksPreTrainedModel):
         if attention_mask is None:
             attention_mask = torch.ones_like(input_ids)
 
-        output = self._forward(
+        output: MaskedLMOutput = super().forward(
             input_ids=input_ids,
             attention_mask=attention_mask,
             token_type_ids=token_type_ids,
@@ -876,18 +825,20 @@ class BertBlocksForMaskedDiffusion(BertBlocksPreTrainedModel):
         )
 
         if labels is not None:
+            logits = self._process_logits(input_ids=input_ids, logits=output.logits)
             # Get the per-token log-likelihood of ground-truth tokens
-            token_nll = torch.gather(input=output.logits, dim=-1, index=labels[:, :, None]).squeeze(-1)
+            token_nll = torch.gather(input=logits, dim=-1, index=labels[:, :, None]).squeeze(-1)
             # Negate loss to optimize in correct direction
             loss = -1 * token_nll
             # Average weighted NLL over valid token positions
             loss = (loss * attention_mask).sum() / attention_mask.sum()
         else:
+            logits = output.logits
             loss = None
 
         return MaskedLMOutput(
             loss=loss,
-            logits=output.logits,
+            logits=logits,
             hidden_states=output.hidden_states,
             attentions=output.attentions,
         )
@@ -983,8 +934,8 @@ class BertBlocksForMaskedDiffusion(BertBlocksPreTrainedModel):
                     prefix_mask.shape[1] == seq_len
                 ), f"attention_mask length {prefix_mask.shape[1]} doesn't match input_ids length {seq_len}"
 
-            # Extend to target length if needed
             if seq_len < target_length:
+                # Extend to target length if needed
                 # Pad input_ids with MASK tokens
                 padding = self._prior((batch_size, target_length - seq_len)).to(self.device)
                 x = torch.cat([input_ids, padding], dim=1)
@@ -1023,7 +974,7 @@ class BertBlocksForMaskedDiffusion(BertBlocksPreTrainedModel):
                 x[prefix_mask] = original_prefix[prefix_mask]
 
         # Final cleanup (greedy sample any remaining mask tokens)
-        x = self._final_denoise(x, timesteps[-1])
+        x = self._final_denoise(x)
 
         # Restore prefix one last time
         if prefix_mask is not None:
@@ -1031,9 +982,18 @@ class BertBlocksForMaskedDiffusion(BertBlocksPreTrainedModel):
 
         return x
 
-    def _compute_transition_probs(
-        self, input_ids: "torch.Tensor", timestep: "torch.Tensor", sigma: "torch.Tensor"
-    ) -> "torch.Tensor":
+    def _process_logits(self, input_ids: "torch.Tensor", logits: "torch.Tensor") -> "torch.Tensor":
+        # Set the prediction probability of the mask token to 0 (-inf in log space)
+        logits[:, :, self.mask_token_id] = -torch.inf
+        # Re-normalize the logits such that x.exp() is a probability distribution over vocab_size.
+        logits = logits - torch.logsumexp(logits, dim=-1, keepdim=True)
+        # Clamp unmasked ground-truth tokens (p=1 for ground-truth token, p=0 for any other token at that position)
+        unmasked_indices = input_ids != self.mask_token_id
+        logits[unmasked_indices] = -torch.inf
+        logits[unmasked_indices, input_ids[unmasked_indices]] = 0
+        return logits
+
+    def _compute_transition_probs(self, input_ids: "torch.Tensor", sigma: "torch.Tensor") -> "torch.Tensor":
         """Compute token-wise transition probabilities for discrete diffusion reverse process.
 
         Score represents transition probability ratios:
@@ -1053,6 +1013,7 @@ class BertBlocksForMaskedDiffusion(BertBlocksPreTrainedModel):
         # == q_t
         # Pass timestep here, as it will internally convert to sigma
         logits = self._forward(input_ids=input_ids).logits
+        logits = self._process_logits(input_ids=input_ids, logits=logits)
         batch, seq, vocab = logits.shape
 
         # k = P(token = [MASK]) / P(token = ~[MASK]) = exp(- timestep) / (1 - exp(- timestep))
@@ -1126,14 +1087,14 @@ class BertBlocksForMaskedDiffusion(BertBlocksPreTrainedModel):
         dsigma = curr_sigma - next_sigma
 
         # Get transition_probs and apply corrections
-        transition_probs = self._compute_transition_probs(input_ids, timestep, curr_sigma)
+        transition_probs = self._compute_transition_probs(input_ids, curr_sigma)
         transition_probs = self._staggered_correction(transition_probs, dsigma)
         # Compute posterior
         posterior_distribution = transition_probs * self._transp_transition(input_ids, dsigma)
         # Sample using Gumbel-max trick (works with unnormalized probabilities)
         return self._sample_categorical(posterior_distribution)
 
-    def _final_denoise(self, input_ids: "torch.Tensor", timestep: "torch.Tensor") -> "torch.Tensor":
+    def _final_denoise(self, input_ids: "torch.Tensor") -> "torch.Tensor":
         """Perform final greedy denoising step at near-zero noise to clean output.
 
         Args:
@@ -1145,6 +1106,7 @@ class BertBlocksForMaskedDiffusion(BertBlocksPreTrainedModel):
         """
         # Infer final logits
         logits = self._forward(input_ids).logits
+        logits = self._process_logits(input_ids=input_ids, logits=logits)
 
         # For MASK positions, use model predictions, for non-MASK positions, keep current token
         is_mask = input_ids == self.mask_token_id

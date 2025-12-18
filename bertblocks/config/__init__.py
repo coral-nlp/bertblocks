@@ -53,7 +53,6 @@ class BertBlocksConfig(PretrainedConfig):
         pos_emb_kwargs: Additional keyword arguments to pass to the positional embedding class. Values dependent
             on chosen pos_emb_kind. All positional embeddings receive `dim` and `max_seq_len` automatically, these
             do not need to be specified.
-        add_timestep_emb: Whether to add timestep embeddings to the model (only needed for some diffusion models).
         add_token_type_emb: Whether to add token type embeddings to the model.
         type_vocab_size: The size of the token_type vocabulary. Only used if add_token_type_emb is True.
         mlp_type: The type of MLP (feed-forward) layer architecture. Available options:
@@ -141,7 +140,6 @@ class BertBlocksConfig(PretrainedConfig):
         initializer_range: float = 0.02,
         initializer_cutoff_factor: float = 3.0,
         initializer_gain: float = 1.0,
-        add_timestep_emb: bool = False,
         add_token_type_emb: bool = False,
         type_vocab_size: int = 1,
         head_type: Head = "mlp",
@@ -209,7 +207,6 @@ class BertBlocksConfig(PretrainedConfig):
         self.num_attention_heads = num_attention_heads
         self.pos_emb_kind = pos_emb_kind
         self.pos_emb_kwargs = pos_emb_kwargs or {}
-        self.add_timestep_emb = add_timestep_emb
         self.add_token_type_emb = add_token_type_emb
         self.type_vocab_size = type_vocab_size
         self.residual_first_layer = residual_first_layer
