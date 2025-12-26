@@ -258,7 +258,6 @@ class AttentionGate(nn.Module):
         if unpadded:
             q, _, _ = rearrange(qkv, "s (t h d) -> t s h d", t=3, h=self.num_heads, d=self.head_dim)
             # Reshape q to [s, h*d] for gate projection
-            q = rearrange(q, "s h d -> s (h d)")
         else:
             batch_size, seq_len, _ = qkv.shape
             q, _, _ = rearrange(
@@ -271,14 +270,12 @@ class AttentionGate(nn.Module):
                 d=self.head_dim,
             )
             # Reshape q to [b, s, h*d] for gate projection
-            q = rearrange(q, "b s h d -> b s (h d)")
 
+        q = q.flatten(-2)
         gate_output = self.gate_proj(q)  # [s, h*d] or [b, s, h*d]
+
         if self.attention_gate_type == "headwise":
-            if unpadded:
-                gate_output = rearrange(gate_output, "s h -> s h 1")
-            else:
-                gate_output = rearrange(gate_output, "b s h -> b s h 1")
+            gate_output = gate_output.unsqueeze(-1)
         else:  # elementwise
             if unpadded:
                 gate_output = rearrange(gate_output, "s (h d) -> s h d", h=self.num_heads, d=self.head_dim)
@@ -291,11 +288,8 @@ class AttentionGate(nn.Module):
         x_out = x.view(*x.shape[:-1], self.num_heads, self.head_dim)
         x_out = x_out * gate_output
 
-        # Reshape output
-        if unpadded:
-            return rearrange(x_out, "s h d -> s (h d)")
-        else:
-            return rearrange(x_out, "b s h d -> b s (h d)")
+        # unpadded: s h d -> s (h d); padded: b s h d -> b s (h d)
+        return  x_out.flatten(-2)
 
 
 __all__ = ["Attention", "AttentionGate"]
