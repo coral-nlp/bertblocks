@@ -248,8 +248,8 @@ class AttentionGate(nn.Module):
         Args:
             qkv (torch.Tensor, shape [batch_size, seq_len, num_heads, head_dim]
                 or [total_seq_len, num_heads, head_dim]): QKV projection.
-            x: (torch.Tensor, shape [batch_size, seq_len, num_heads, head_dim]
-                or [total_seq_len, num_heads, head_dim]): hidden state.
+            x: (torch.Tensor, shape [batch_size, seq_len, num_heads * head_dim]
+                or [total_seq_len, num_heads * head_dim]): hidden state.
 
         Returns: torch.Tensor
             Hidden state modulated by query projection.
@@ -288,7 +288,8 @@ class AttentionGate(nn.Module):
         gate_output = torch.sigmoid(gate_output)
 
         # Apply gating
-        x_out = x * gate_output
+        x_out = x.view(*x.shape[:-1], self.num_heads, self.head_dim)
+        x_out = x_out * gate_output
 
         # Reshape output
         if unpadded:
