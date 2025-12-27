@@ -172,7 +172,7 @@ class BertBlocksModel(BertBlocksPreTrainedModel):
         self.local_attention = config.local_attention
         self.alibi = (
             AlibiPositionalEncoding(config.num_attention_heads, device="cpu")
-            if config.pos_emb_kind == "alibi"
+            if config.block_pos_enc_kind == "alibi"
             else None
         )
 
@@ -245,7 +245,7 @@ class BertBlocksModel(BertBlocksPreTrainedModel):
             )
             attention_mask = convert_to_4d_attention_mask(attention_mask)
 
-            if self.config.pos_emb_kind == "alibi" and self.alibi is not None:
+            if self.config.block_pos_enc_kind == "alibi" and self.alibi is not None:
                 attention_mask = self.alibi(attention_mask)
 
             if self.local_attention != (-1, -1) and self.local_attention[0] > 0:

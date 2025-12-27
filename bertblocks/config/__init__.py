@@ -1,4 +1,3 @@
-from collections.abc import Sequence
 from typing import Any, Literal
 
 from transformers import AutoTokenizer
@@ -12,8 +11,9 @@ FeedForward = Literal["linear", "mlp", "glu"]
 KeywordArgs = dict[str, Any]
 Initializer = Literal["trunc_normal", "kaiming_normal", "kaiming_uniform", "xavier_normal", "xavier_uniform"]
 AttentionBackend = Literal["flash_attention_2", "eager", "sdpa"]
+EmbeddingPositionalEncoding = Literal["none", "sinusoidal", "learned"]
+BlockPositionalEncoding = Literal["none", "alibi", "rope", "learned_alibi"]
 AttentionGate = Literal["elementwise", "headwise"]
-PositionalEmbedding = Literal["alibi", "sinusoidal", "rope", "relative", "learned", "learned_alibi"]
 
 
 class BertBlocksConfig(PretrainedConfig):
@@ -27,7 +27,7 @@ class BertBlocksConfig(PretrainedConfig):
             the model can process. Common values: 30522 (BERT), 50257 (GPT-2), 32000 (T5).
             Must be greater than 0.
         max_sequence_length: Maximum number of tokens the model can process in a single sequence.
-            This affects memory usage and determines the size of positional embeddings (if used).
+            This affects memory usage and determines the size of positional encodings (if used).
             Common values: 512 (BERT), 1024, 2048. Longer sequences require more memory.
             Must be greater than 0.
         pad_token_id: The token ID used for padding sequences to the same length.
@@ -47,16 +47,21 @@ class BertBlocksConfig(PretrainedConfig):
             Each head has dimension hidden_size // num_attention_heads. More heads can capture
             different types of relationships. Common values: 12 (BERT-base), 16 (BERT-large).
             Must be at least 2 and hidden_size must be divisible by this value.
+        emb_pos_enc_kind: The type of positional encoding to use at the embedding level. Available options:
+            "sinusoidal" (Sinusoidal positional encoding), "learned" (Learned positional encoding).
+        emb_pos_enc_kwargs: Additional keyword arguments to pass to the positional encoding class. Values dependent
+            on chosen pos_enc_kind. All positional encodings receive `dim` and `max_seq_len` automatically, these
+            do not need to be specified.
+        block_pos_enc_kind: The type of positional encoding to use at the block level. Available options:
+            "alibi" (ALiBi positional encoding), "sinusoidal" (Sinusoidal positional encoding),
+            "rope" (Rotary positional encoding), "learned" (Learned positional encoding),
+            "learned_alibi" (ALiBi positional encoding with linear layer).
+        block_pos_enc_kwargs: Additional keyword arguments to pass to the positional encoding class. Values dependent
+            on chosen pos_enc_kind. All positional encodings receive `dim` and `max_seq_len` automatically, these
+            do not need to be specified.
         attention_gate: Adds a query-dependent gating mechanism that modulates the hidden states after attention.
             Available options: None (no gating, default), "headwise" (gating per head),
             "elementwise" (gating per element).
-        pos_emb_kind: The type of positional embedding to use. Available options:
-            "alibi" (ALiBi positional encoding), "sinusoidal" (Sinusoidal positional encoding),
-            "rope" (Rotary positional encoding), "relative" (Relative positional encoding),
-            "learned" (Learned positional encoding), "learned_alibi" (ALiBi positional encoding with linear layer).
-        pos_emb_kwargs: Additional keyword arguments to pass to the positional embedding class. Values dependent
-            on chosen pos_emb_kind. All positional embeddings receive `dim` and `max_seq_len` automatically, these
-            do not need to be specified.
         add_token_type_emb: Whether to add token type embeddings to the model.
         type_vocab_size: The size of the token_type vocabulary. Only used if add_token_type_emb is True.
         mlp_type: The type of MLP (feed-forward) layer architecture. Available options:
@@ -155,8 +160,10 @@ class BertBlocksConfig(PretrainedConfig):
         attention_gate: AttentionGate | None = None,
         hidden_size: int = 768,
         intermediate_size: int = 3072,
-        pos_emb_kind: PositionalEmbedding = "alibi",
-        pos_emb_kwargs: KeywordArgs | None = None,
+        emb_pos_enc_kind: EmbeddingPositionalEncoding = "none",
+        emb_pos_enc_kwargs: KeywordArgs | None = None,
+        block_pos_enc_kind: BlockPositionalEncoding = "alibi",
+        block_pos_enc_kwargs: KeywordArgs | None = None,
         mlp_type: FeedForward = "mlp",
         mlp_in_bias: bool = True,
         mlp_out_bias: bool = True,
@@ -211,9 +218,12 @@ class BertBlocksConfig(PretrainedConfig):
         self.num_blocks = num_blocks
         self.intermediate_size = intermediate_size
         self.num_attention_heads = num_attention_heads
+        self.emb_pos_enc_kind = emb_pos_enc_kind
+        self.emb_pos_enc_kwargs = emb_pos_enc_kwargs or {}
+        self.block_pos_enc_kind = block_pos_enc_kind
+        self.block_pos_enc_kwargs = block_pos_enc_kwargs or {}
+        self.add_timestep_emb = add_timestep_emb
         self.attention_gate = attention_gate
-        self.pos_emb_kind = pos_emb_kind
-        self.pos_emb_kwargs = pos_emb_kwargs or {}
         self.add_token_type_emb = add_token_type_emb
         self.type_vocab_size = type_vocab_size
         self.residual_first_layer = residual_first_layer
@@ -256,7 +266,7 @@ class BertBlocksConfig(PretrainedConfig):
 
         # Dependent parameters
         self._unpadding = self._attn_implementation == "flash_attention_2"
-        self.pos_emb_kwargs.update(
+        self.block_pos_enc_kwargs.update(
             {"dim": self.hidden_size // self.num_attention_heads, "max_seq_len": self.max_sequence_length}
         )
 
@@ -365,7 +375,7 @@ class BertConfig(BertBlocksConfig):
         num_blocks: int = 12,
         intermediate_size: int = 3072,
         num_attention_heads: int = 12,
-        pos_emb_kind: Literal["learned", "absolute", "relative"] = "absolute",
+        pos_enc_kind: Literal["learned", "absolute"] = "absolute",
         type_vocab_size: int = 2,
         initializer_range: float = 0.02,
         actv_fn: Literal["relu", "silu", "gelu", "leakyrelu", "selu", "logsigmoid", "sigmoid", "prelu"] = "gelu",
@@ -386,8 +396,9 @@ class BertConfig(BertBlocksConfig):
             num_blocks=num_blocks,
             intermediate_size=intermediate_size,
             num_attention_heads=num_attention_heads,
+            emb_pos_enc_kind="learned" if pos_enc_kind in ("absolute", "learned") else "none",
+            block_pos_enc_kind="none",
             attention_gate=None,
-            pos_emb_kind="learned" if pos_emb_kind in ("absolute", "learned") else "relative",
             type_vocab_size=type_vocab_size,
             initializer_range=initializer_range,
             actv_fn=actv_fn,
@@ -440,7 +451,7 @@ class BertConfig(BertBlocksConfig):
             num_blocks=orig_config.num_hidden_layers,
             intermediate_size=orig_config.intermediate_size,
             num_attention_heads=orig_config.num_attention_heads,
-            pos_emb_kind=orig_config.position_embedding_type,
+            pos_enc_kind=orig_config.position_embedding_type,
             type_vocab_size=orig_config.type_vocab_size,
             initializer_range=orig_config.initializer_range,
             actv_fn=orig_config.hidden_act,
@@ -468,7 +479,7 @@ class ModernBertConfig(BertBlocksConfig):
         num_blocks: int,
         intermediate_size: int,
         num_attention_heads: int,
-        pos_emb_kwargs: dict[str, Any],
+        block_pos_enc_kwargs: dict[str, Any],
         mlp_in_bias: bool,
         mlp_out_bias: bool,
         attn_proj_bias: bool,
@@ -494,8 +505,8 @@ class ModernBertConfig(BertBlocksConfig):
             num_blocks=num_blocks,
             intermediate_size=intermediate_size,
             num_attention_heads=num_attention_heads,
+            block_pos_enc_kwargs=block_pos_enc_kwargs,
             attention_gate=None,
-            pos_emb_kwargs=pos_emb_kwargs,
             mlp_in_bias=mlp_in_bias,
             mlp_out_bias=mlp_out_bias,
             attn_proj_bias=attn_proj_bias,
@@ -513,7 +524,7 @@ class ModernBertConfig(BertBlocksConfig):
             attn_implementation=attn_implementation,
             # Hard-coded values for architecture compatibility
             residual_first_layer=True,
-            pos_emb_kind="rope",
+            block_pos_enc_kind="rope",
             add_token_type_emb=False,
             mlp_type="glu",
             initializer_kind="trunc_normal",
@@ -549,7 +560,7 @@ class ModernBertConfig(BertBlocksConfig):
             num_blocks=orig_config.num_hidden_layers,
             intermediate_size=orig_config.intermediate_size,
             num_attention_heads=orig_config.num_attention_heads,
-            pos_emb_kwargs={
+            block_pos_enc_kwargs={
                 "base_global": orig_config.global_rope_theta,
                 "base_local": orig_config.local_rope_theta,
                 "scale": 1,

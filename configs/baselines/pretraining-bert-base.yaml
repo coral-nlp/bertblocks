@@ -26,11 +26,11 @@ model:
       norm_kind: "post"
       norm_fn: "layer"
       norm_bias: True
-      pos_emb_kind: "learned"
+      emb_pos_enc_kind: "learned"
       max_sequence_length: ${data.init_args.max_sequence_length}
       mlp_in_bias: true
       mlp_out_bias: true
-      attn_implementation: "fa2"
+      attn_implementation: "flash_attention_2"
       attn_proj_bias: true
       attn_out_bias: true
       norm_eps: 1e-05
@@ -52,7 +52,8 @@ data:
     pretrained_tokenizer_name_or_path: "bert-base-uncased"
     dataset_name_or_path: "roneneldan/TinyStories"
     max_sequence_length: 512
-    mlm_probability: 0.3
     train_batch_size: 32
     val_batch_size: 16
     num_workers: 4
+    collator_kwargs:
+      mlm_probability: 0.3
