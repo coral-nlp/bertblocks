@@ -13,6 +13,7 @@ Initializer = Literal["trunc_normal", "kaiming_normal", "kaiming_uniform", "xavi
 AttentionBackend = Literal["flash_attention_2", "eager", "sdpa"]
 EmbeddingPositionalEncoding = Literal["none", "sinusoidal", "learned"]
 BlockPositionalEncoding = Literal["none", "alibi", "rope", "learned_alibi"]
+AttentionGate = Literal["elementwise", "headwise"]
 
 
 class BertBlocksConfig(PretrainedConfig):
@@ -58,7 +59,9 @@ class BertBlocksConfig(PretrainedConfig):
         block_pos_enc_kwargs: Additional keyword arguments to pass to the positional encoding class. Values dependent
             on chosen pos_enc_kind. All positional encodings receive `dim` and `max_seq_len` automatically, these
             do not need to be specified.
-        add_timestep_emb: Whether to add timestep embeddings to the model (only needed for some diffusion models).
+        attention_gate: Adds a query-dependent gating mechanism that modulates the hidden states after attention.
+            Available options: None (no gating, default), "headwise" (gating per head),
+            "elementwise" (gating per element).
         add_token_type_emb: Whether to add token type embeddings to the model.
         type_vocab_size: The size of the token_type vocabulary. Only used if add_token_type_emb is True.
         mlp_type: The type of MLP (feed-forward) layer architecture. Available options:
@@ -146,7 +149,6 @@ class BertBlocksConfig(PretrainedConfig):
         initializer_range: float = 0.02,
         initializer_cutoff_factor: float = 3.0,
         initializer_gain: float = 1.0,
-        add_timestep_emb: bool = False,
         add_token_type_emb: bool = False,
         type_vocab_size: int = 1,
         head_type: Head = "mlp",
@@ -155,6 +157,7 @@ class BertBlocksConfig(PretrainedConfig):
         emb_dropout_prob: float = 0.1,
         actv_fn: ActivationFunction = "silu",
         num_attention_heads: int = 12,
+        attention_gate: AttentionGate | None = None,
         hidden_size: int = 768,
         intermediate_size: int = 3072,
         emb_pos_enc_kind: EmbeddingPositionalEncoding = "none",
@@ -194,6 +197,7 @@ class BertBlocksConfig(PretrainedConfig):
             initializer_gain=initializer_gain,
             emb_dropout_prob=emb_dropout_prob,
             num_attention_heads=num_attention_heads,
+            attention_gate=attention_gate,
             hidden_dropout_prob=hidden_dropout_prob,
             attn_dropout_prob=attn_dropout_prob,
             classifier_dropout_prob=classifier_dropout_prob,
@@ -219,6 +223,7 @@ class BertBlocksConfig(PretrainedConfig):
         self.block_pos_enc_kind = block_pos_enc_kind
         self.block_pos_enc_kwargs = block_pos_enc_kwargs or {}
         self.add_timestep_emb = add_timestep_emb
+        self.attention_gate = attention_gate
         self.add_token_type_emb = add_token_type_emb
         self.type_vocab_size = type_vocab_size
         self.residual_first_layer = residual_first_layer
@@ -279,6 +284,7 @@ class BertBlocksConfig(PretrainedConfig):
         initializer_gain: float,
         emb_dropout_prob: float,
         num_attention_heads: int,
+        attention_gate: str | None,
         hidden_dropout_prob: float,
         attn_dropout_prob: float,
         classifier_dropout_prob: float,
@@ -321,6 +327,11 @@ class BertBlocksConfig(PretrainedConfig):
 
         if num_attention_heads <= 1:
             raise ValueError(f"num_attention_heads must be at least 2, got {num_attention_heads}")
+
+        if attention_gate not in [None, "elementwise", "headwise"]:
+            raise ValueError(
+                f'invalid attention_gate: expected one of ["elementwise", "headwise"] or None, ' f"got {attention_gate}"
+            )
 
         if not 0.0 <= hidden_dropout_prob <= 1.0:
             raise ValueError(f"hidden_dropout_prob must be between 0.0 and 1.0, got {hidden_dropout_prob}")
@@ -387,6 +398,7 @@ class BertConfig(BertBlocksConfig):
             num_attention_heads=num_attention_heads,
             emb_pos_enc_kind="learned" if pos_enc_kind in ("absolute", "learned") else "none",
             block_pos_enc_kind="none",
+            attention_gate=None,
             type_vocab_size=type_vocab_size,
             initializer_range=initializer_range,
             actv_fn=actv_fn,
@@ -494,6 +506,7 @@ class ModernBertConfig(BertBlocksConfig):
             intermediate_size=intermediate_size,
             num_attention_heads=num_attention_heads,
             block_pos_enc_kwargs=block_pos_enc_kwargs,
+            attention_gate=None,
             mlp_in_bias=mlp_in_bias,
             mlp_out_bias=mlp_out_bias,
             attn_proj_bias=attn_proj_bias,

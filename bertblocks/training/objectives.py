@@ -468,7 +468,6 @@ class MaskedDiffusionCollator(Collator):
             max_sequence_length=max_sequence_length,
             pretokenized=pretokenized,
         )
-        self.batch_keys = [*self.batch_keys, "timestep", "alpha_t", "dalpha_t"]
         self.vocab_size = tokenizer.vocab_size
         self.mask_token_id = mask_token_id
         self.noise = LogLinearNoise()
@@ -523,7 +522,6 @@ class MaskedDiffusionCollator(Collator):
         noise_prob = (1 - alpha_t).unsqueeze(-1)
         noised_input_ids = self._apply_noise(tokenized["input_ids"], noise_prob)
         tokenized["input_ids"] = noised_input_ids
-        tokenized["timestep"] = t  # Store t for model to convert to sigma internally
         return tokenized
 
 

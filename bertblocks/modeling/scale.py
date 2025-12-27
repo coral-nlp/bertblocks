@@ -35,3 +35,34 @@ class LayerScaler(nn.Module):
 
         """
         return x * self.scale
+
+
+class LearnableLayerScaler(nn.Module):
+    """Scales an input with a learnable per-layer scale parameter.
+
+    Unlike LayerScaler which uses a fixed formula based on depth, this module
+    learns an independent scale parameter for each layer during training.
+
+    Attributes:
+        scale (nn.Parameter): Learnable scaling parameter.
+
+    Args:
+        layer_id (int): layer position in the encoder stack (0-indexed).
+            Used to maintain interface compatibility with LayerScaler.
+    """
+
+    def __init__(self, layer_id: int):
+        super().__init__()
+        self.scale = nn.Parameter(torch.tensor(1.0))
+
+    def forward(self, x: "torch.Tensor") -> "torch.Tensor":
+        """Apply learnable layer scaling.
+
+        Args:
+            x (torch.Tensor): Input tensor to scale.
+
+        Returns:
+            torch.Tensor: Scaled tensor.
+
+        """
+        return x * self.scale
