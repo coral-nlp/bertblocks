@@ -132,7 +132,7 @@ class BertBlocksPreTrainedModel(PreTrainedModel):
         init_fn = _get_init_fn()
         if hasattr(module, "weight") and module.weight is not None:
             init_fn(module.weight)
-            module.weight *= initializer_gain
+            module.weight.data *= initializer_gain
 
         # Initialize bias terms to zero for linear layers
         if isinstance(module, nn.Linear) and module.bias is not None:
