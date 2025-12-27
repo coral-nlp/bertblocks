@@ -88,6 +88,7 @@ class BertBlocksConfig(PretrainedConfig):
             Must be greater than 0.0.
         initializer_gain: Gain to scale initialized weights with, e.g., for DeepNorm.
             Must be greater than 0.0.
+        add_timestep_emb: Whether to add timestep embeddings to the model (only needed for some diffusion models).
         actv_fn: The activation function used in feed-forward networks.
         norm_kind: When to apply normalization in the transformer layers. Available options:
             "pre" (Pre-normalization, normalize before attention/FFN, default, more stable),
@@ -149,6 +150,7 @@ class BertBlocksConfig(PretrainedConfig):
         initializer_range: float = 0.02,
         initializer_cutoff_factor: float = 3.0,
         initializer_gain: float = 1.0,
+        add_timestep_emb: bool = False,
         add_token_type_emb: bool = False,
         type_vocab_size: int = 1,
         head_type: Head = "mlp",
