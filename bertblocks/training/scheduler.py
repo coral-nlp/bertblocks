@@ -52,7 +52,7 @@ def get_scheduler(
 
     if cooldown_steps > 0:
         schedulers.append(get_single_scheduler(optimizer, cooldown_kind, cooldown_steps, cooldown_decay))
-        milestones.append(training_steps)
+        milestones.append(warmup_steps + training_steps)
 
     return torch.optim.lr_scheduler.SequentialLR(
         optimizer,
