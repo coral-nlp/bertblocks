@@ -274,7 +274,8 @@ class RotaryPositionalEncoding(nn.Module):
     """Implementation of rotary positional encodings.
 
     Args:
-        dim (int): dimensionality of positional encoding. Should be head_dim // 2.
+        rope_dim (int): dimensionality of positional encoding. Equal to head_dim for full RoPE.
+        head_dim (int): dimensionality of attention heads.
         base (float, optional): frequency base for positional encodings. Defaults to 10_000.0
         interleaved (bool, optional): indicates whether to rotate pairs of even and odd dimensions (True, GPT-J style)
             instead of 1st half and 2nd half (False, GPT-NeoX style). Defaults to False.
@@ -283,19 +284,26 @@ class RotaryPositionalEncoding(nn.Module):
     References:
         - "RoFormer: Enhanced Transformer with Rotary Position Embedding" (https://arxiv.org/abs/2104.09864)
         - "GPT-NeoX-20B: An Open-Source Autoregressive Language Model" (https://arxiv.org/abs/2204.06745)
+        - "Round and Round We Go! What makes Rotary Positional Encodings useful?" (https://arxiv.org/abs/2410.06205)
     """
 
     def __init__(
         self,
-        dim: int,
+        rope_dim: int,
+        head_dim: int,
         base: float | None = 10_000.0,
         interleaved: bool | None = False,
         max_seq_len: int = 512,
         device: "device | str" = "cuda",
     ):
         super().__init__()
+
+        if rope_dim < 2 or rope_dim > head_dim:
+            raise ValueError(f"partial_rope_dim must be in [2, head_dim] (was: {rope_dim})")
+
         self.interleaved = interleaved
-        inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2, device=device) / dim))
+
+        inv_freq = 1.0 / (base ** (torch.arange(0, rope_dim, 2, device=device) / rope_dim))
         self.register_buffer("_inv_freq", inv_freq, persistent=False)
 
         self._seq_len_cached = max_seq_len
@@ -323,8 +331,10 @@ class RotaryPositionalEncoding(nn.Module):
             self._seq_len_cached = seqlen
             t = torch.arange(seqlen, device=device)
             freqs = torch.outer(t, self._inv_freq)
-            self._cos_cached = torch.cos(freqs).to(dtype)
-            self._sin_cached = torch.sin(freqs).to(dtype)
+            cos, sin = torch.cos(freqs), torch.sin(freqs)
+
+            self._cos_cached = cos.to(dtype)
+            self._sin_cached = sin.to(dtype)
 
     def forward(
         self,
@@ -347,10 +357,13 @@ class RotaryPositionalEncoding(nn.Module):
         Returns:
             Tensor, same shape as qkv; qkv with rotary position encoding applied.
         """
-        # TODO: this yields a graph break and is not critically needed in a training setting, so disable it for now
-        # if max_seqlen is not None:
-        #    self._update_cos_sin_cache(max_seqlen, device=qkv.device, dtype=qkv.dtype)
-        if cu_seqlens is not None:  # Unpadded
+        is_unpadded = cu_seqlens is not None
+
+        # TODO: this yields a graph break
+        if max_seqlen is not None:
+           self._update_cos_sin_cache(max_seqlen, device=qkv.device, dtype=qkv.dtype)
+
+        if is_unpadded:
             q, k, v = rearrange(qkv, "s (t h d) -> t s h d", t=3, h=num_heads, d=head_dim)
         else:
             batch_size, seq_len, _ = qkv.shape
@@ -363,6 +376,27 @@ class RotaryPositionalEncoding(nn.Module):
                 h=num_heads,
                 d=head_dim,
             )
+
+        q, k = self._apply_rope(q, k, cu_seqlens, max_seqlen)
+
+        qkv_stacked = torch.stack([q, k, v], 0)
+        if is_unpadded:
+            qkv = rearrange(qkv_stacked, "t s h d -> s (t h d)", t=3, h=num_heads, d=head_dim)
+        else:
+            batch_size, seq_len, _ = qkv.shape
+            qkv = rearrange(
+                qkv_stacked,
+                "t b s h d -> b s (t h d)",
+                b=batch_size,
+                s=seq_len,
+                t=3,
+                h=num_heads,
+                d=head_dim,
+            )
+        return qkv
+
+    def _apply_rope(self, q, k, cu_seqlens, max_seqlen):
+
         q = apply_rotary(
             q,
             self._cos_cached,
@@ -379,20 +413,8 @@ class RotaryPositionalEncoding(nn.Module):
             cu_seqlens=cu_seqlens,
             max_seqlen=max_seqlen,
         )
-        if cu_seqlens is not None:
-            qkv = rearrange(torch.stack([q, k, v], 0), "t s h d -> s (t h d)", t=3, h=num_heads, d=head_dim)
-        else:
-            batch_size, seq_len, _ = qkv.shape
-            qkv = rearrange(
-                torch.stack([q, k, v], 0),
-                "t b s h d -> b s (t h d)",
-                b=batch_size,
-                s=seq_len,
-                t=3,
-                h=num_heads,
-                d=head_dim,
-            )
-        return qkv
+
+        return q, k
 
 
 __all__ = [

@@ -268,8 +268,14 @@ class BertBlocksConfig(PretrainedConfig):
 
         # Dependent parameters
         self._unpadding = self._attn_implementation == "flash_attention_2"
+        rope_dim = self.block_pos_enc_kwargs["rope_dim"] \
+            if "rope_dim" in self.block_pos_enc_kwargs \
+            else self.hidden_size // self.num_attention_heads
         self.block_pos_enc_kwargs.update(
-            {"dim": self.hidden_size // self.num_attention_heads, "max_seq_len": self.max_sequence_length}
+            {
+                "rope_dim": rope_dim,
+                "max_seq_len": self.max_sequence_length
+            }
         )
 
     @staticmethod

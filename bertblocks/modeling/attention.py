@@ -87,8 +87,10 @@ class Attention(nn.Module):
                 if config.global_attention_every_n_layers > 0 and layer_id % config.global_attention_every_n_layers > 0
                 else config.block_pos_enc_kwargs.get("base_global") or config.block_pos_enc_kwargs.get("base", 10_000.0)
             )
+
             return RotaryPositionalEncoding(
-                dim=config.block_pos_enc_kwargs["dim"],
+                rope_dim=config.block_pos_enc_kwargs["rope_dim"],
+                head_dim=self.head_dim,
                 base=theta,
                 interleaved=config.block_pos_enc_kwargs.get("interleaved", False),
                 max_seq_len=config.max_sequence_length,
