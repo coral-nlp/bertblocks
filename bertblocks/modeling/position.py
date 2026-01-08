@@ -361,7 +361,7 @@ class RotaryPositionalEncoding(nn.Module):
 
         # TODO: this yields a graph break
         if max_seqlen is not None:
-           self._update_cos_sin_cache(max_seqlen, device=qkv.device, dtype=qkv.dtype)
+            self._update_cos_sin_cache(max_seqlen, device=qkv.device, dtype=qkv.dtype)
 
         if is_unpadded:
             q, k, v = rearrange(qkv, "s (t h d) -> t s h d", t=3, h=num_heads, d=head_dim)
@@ -395,8 +395,7 @@ class RotaryPositionalEncoding(nn.Module):
             )
         return qkv
 
-    def _apply_rope(self, q, k, cu_seqlens, max_seqlen):
-
+    def _apply_rope(self, q, k, cu_seqlens, max_seqlen):  # type: ignore
         q = apply_rotary(
             q,
             self._cos_cached,
