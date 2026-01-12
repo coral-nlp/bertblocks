@@ -13,7 +13,7 @@ from einops import einsum, rearrange
 from transformers.modeling_utils import is_flash_attn_2_available
 
 if is_flash_attn_2_available():
-    from flash_attn import flash_attn_varlen_qkvpacked_func
+    from flash_attn import flash_attn_varlen_func
 
 
 class AttentionBackend(ABC):
@@ -21,23 +21,38 @@ class AttentionBackend(ABC):
 
     def forward_unpadded(
         self,
-        qkv: "Tensor",
+        q: "Tensor",
+        k: "Tensor",
+        v: "Tensor",
         cu_seqlens: "Tensor",
         max_seq_len: int,
-        num_heads: int,
-        head_dim: int,
         alibi_slopes: "Tensor | None" = None,
         local_attention: tuple[int, int] = (-1, -1),
         dropout_p: float = 0.0,
         deterministic: bool = False,
     ) -> "tuple[Tensor, Tensor | None]":
-        """Forward pass with unpadded sequences."""
+        """Forward pass with unpadded sequences.
+
+        Args:
+            q (Tensor, shape [total_seq_len, num_heads, head_dim]): Query tensor.
+            k (Tensor, shape [total_seq_len, num_kv_heads, head_dim]): Key tensor.
+            v (Tensor, shape [total_seq_len, num_kv_heads, head_dim]): Value tensor.
+            cu_seqlens (Tensor, shape [batch_size + 1]): Cumulative sequence lengths.
+            max_seq_len (int): Maximum sequence length in batch.
+            alibi_slopes (Tensor, optional): ALiBi slopes for positional bias.
+            local_attention (tuple[int, int]): Local attention window size.
+            dropout_p (float): Dropout probability.
+            deterministic (bool): Whether to use deterministic attention.
+
+        Returns:
+            tuple[Tensor, Tensor | None]: Output tensor [total_seq_len, num_heads * head_dim] and optional attention weights.
+        """
         return self._forward_unpadded(
-            qkv=qkv,
+            q=q,
+            k=k,
+            v=v,
             cu_seqlens=cu_seqlens,
             max_seq_len=max_seq_len,
-            num_heads=num_heads,
-            head_dim=head_dim,
             alibi_slopes=alibi_slopes,
             local_attention=local_attention,
             dropout_p=dropout_p,
@@ -46,19 +61,31 @@ class AttentionBackend(ABC):
 
     def forward_padded(
         self,
-        qkv: "Tensor",
+        q: "Tensor",
+        k: "Tensor",
+        v: "Tensor",
         attention_mask: "Tensor",
-        num_heads: int,
-        head_dim: int,
         dropout_p: float = 0.0,
         deterministic: bool = False,
     ) -> "tuple[Tensor, Tensor | None]":
-        """Forward pass with padded sequences."""
+        """Forward pass with padded sequences.
+
+        Args:
+            q (Tensor, shape [batch_size, seq_len, num_heads, head_dim]): Query tensor.
+            k (Tensor, shape [batch_size, seq_len, num_kv_heads, head_dim]): Key tensor.
+            v (Tensor, shape [batch_size, seq_len, num_kv_heads, head_dim]): Value tensor.
+            attention_mask (Tensor): Attention mask.
+            dropout_p (float): Dropout probability.
+            deterministic (bool): Whether to use deterministic attention.
+
+        Returns:
+            tuple[Tensor, Tensor | None]: Output tensor [batch_size, seq_len, num_heads * head_dim] and optional attention weights.
+        """
         return self._forward_padded(
-            qkv=qkv,
+            q=q,
+            k=k,
+            v=v,
             attention_mask=attention_mask,
-            num_heads=num_heads,
-            head_dim=head_dim,
             dropout_p=dropout_p,
             deterministic=deterministic,
         )
@@ -66,11 +93,11 @@ class AttentionBackend(ABC):
     @abstractmethod
     def _forward_unpadded(
         self,
-        qkv: "Tensor",
+        q: "Tensor",
+        k: "Tensor",
+        v: "Tensor",
         cu_seqlens: "Tensor",
         max_seq_len: int,
-        num_heads: int,
-        head_dim: int,
         alibi_slopes: "Tensor | None" = None,
         local_attention: tuple[int, int] = (-1, -1),
         dropout_p: float = 0.0,
@@ -82,10 +109,10 @@ class AttentionBackend(ABC):
     @abstractmethod
     def _forward_padded(
         self,
-        qkv: "Tensor",
+        q: "Tensor",
+        k: "Tensor",
+        v: "Tensor",
         attention_mask: "Tensor",
-        num_heads: int,
-        head_dim: int,
         dropout_p: float = 0.0,
         deterministic: bool = False,
     ) -> "tuple[Tensor, Tensor | None]":  # type: ignore
@@ -98,23 +125,28 @@ class FlashBackend(AttentionBackend):
 
     def _forward_unpadded(
         self,
-        qkv: "Tensor",
+        q: "Tensor",
+        k: "Tensor",
+        v: "Tensor",
         cu_seqlens: "Tensor",
         max_seq_len: int,
-        num_heads: int,
-        head_dim: int,
         alibi_slopes: "Tensor | None" = None,
         local_attention: tuple[int, int] = (-1, -1),
         dropout_p: float = 0.0,
         deterministic: bool = False,
     ) -> "tuple[Tensor, Tensor]":
         """Flash attention forward pass without padding."""
-        qkv = rearrange(qkv, "s (t h d) -> s t h d", t=3, h=num_heads, d=head_dim)
-        orig_dtype = qkv.dtype
+        orig_dtype = q.dtype
         alibi_slopes = alibi_slopes.to(torch.float32) if alibi_slopes is not None else None
-        x, _, w = flash_attn_varlen_qkvpacked_func(
-            qkv.to(torch.bfloat16),
-            cu_seqlens.to(torch.int32),
+        cu_seqlens_int32 = cu_seqlens.to(torch.int32)
+
+        x, _, w = flash_attn_varlen_func(
+            q.to(torch.bfloat16),
+            k.to(torch.bfloat16),
+            v.to(torch.bfloat16),
+            cu_seqlens_int32,
+            cu_seqlens_int32,
+            max_seq_len,
             max_seq_len,
             dropout_p=dropout_p,
             causal=False,
@@ -124,21 +156,22 @@ class FlashBackend(AttentionBackend):
             deterministic=deterministic,
             return_attn_probs=True,
         )
+
         x = x.to(orig_dtype)
-        w = w.to(orig_dtype)
+        w = w.to(orig_dtype) if w is not None else None
         x = rearrange(x, "s h d -> s (h d)")
         return x, w
 
     def _forward_padded(
         self,
-        qkv: "Tensor",
+        q: "Tensor",
+        k: "Tensor",
+        v: "Tensor",
         attention_mask: "Tensor",
-        num_heads: int,
-        head_dim: int,
         dropout_p: float = 0.0,
         deterministic: bool = False,
     ) -> "tuple[Tensor, Tensor | None]":  # type: ignore
-        """FlashAttention backend does not support unpadded sequences."""
+        """FlashAttention backend does not support padded sequences."""
         raise NotImplementedError
 
 
@@ -147,16 +180,27 @@ class SDPABackend(AttentionBackend):
 
     def _forward_padded(
         self,
-        qkv: "Tensor",
+        q: "Tensor",
+        k: "Tensor",
+        v: "Tensor",
         attention_mask: "Tensor",
-        num_heads: int,
-        head_dim: int,
         dropout_p: float = 0.0,
         deterministic: bool = False,
     ) -> "tuple[Tensor, Tensor | None]":
         """SDPA forward pass with padded sequences."""
-        batch_size, seqlen, _ = qkv.shape
-        q, k, v = rearrange(qkv, "b s (t h d) -> t b h s d", t=3, h=num_heads, d=head_dim)
+        num_heads = q.shape[2]
+        num_kv_heads = k.shape[2]
+
+        # Transpose to [b, h, s, d] for SDPA
+        q = rearrange(q, "b s h d -> b h s d")
+        k = rearrange(k, "b s h d -> b h s d")
+        v = rearrange(v, "b s h d -> b h s d")
+
+        # Expand K/V heads if using GQA
+        if num_kv_heads < num_heads:
+            num_kv_groups = num_heads // num_kv_heads
+            k = k.repeat_interleave(num_kv_groups, dim=1)
+            v = v.repeat_interleave(num_kv_groups, dim=1)
 
         output = torch.nn.functional.scaled_dot_product_attention(
             q,
@@ -179,15 +223,29 @@ class EagerBackend(AttentionBackend):
 
     def _forward_padded(
         self,
-        qkv: "Tensor",
+        q: "Tensor",
+        k: "Tensor",
+        v: "Tensor",
         attention_mask: "Tensor",
-        num_heads: int,
-        head_dim: int,
         dropout_p: float = 0.0,
         deterministic: bool = False,
     ) -> "tuple[Tensor, Tensor | None]":
         """Eager attention forward pass with padded sequences."""
-        q, k, v = rearrange(qkv, "b s (t h d) -> t b h s d", t=3, h=num_heads, d=head_dim)
+        num_heads = q.shape[2]
+        num_kv_heads = k.shape[2]
+        head_dim = q.shape[3]
+
+        # Transpose to [b, h, s, d] for attention computation
+        q = rearrange(q, "b s h d -> b h s d")
+        k = rearrange(k, "b s h d -> b h s d")
+        v = rearrange(v, "b s h d -> b h s d")
+
+        # Expand K/V heads if using GQA
+        if num_kv_heads < num_heads:
+            num_kv_groups = num_heads // num_kv_heads
+            k = k.repeat_interleave(num_kv_groups, dim=1)
+            v = v.repeat_interleave(num_kv_groups, dim=1)
+
         scores = einsum(q, k, "b h i d, b h j d -> b h i j") * (head_dim**-0.5)
 
         if attention_mask.dtype == torch.bool:

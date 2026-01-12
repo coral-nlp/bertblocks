@@ -47,6 +47,10 @@ class BertBlocksConfig(PretrainedConfig):
             Each head has dimension hidden_size // num_attention_heads. More heads can capture
             different types of relationships. Common values: 12 (BERT-base), 16 (BERT-large).
             Must be at least 2 and hidden_size must be divisible by this value.
+        num_kv_heads: The number of key-value heads for Grouped Query Attention (GQA).
+            When set to num_attention_heads (default), standard multi-head attention is used.
+            When set to 1, multi-query attention (MQA) is used. Values between 1 and
+            num_attention_heads enable GQA. Must divide num_attention_heads evenly.
         emb_pos_enc_kind: The type of positional encoding to use at the embedding level. Available options:
             "sinusoidal" (Sinusoidal positional encoding), "learned" (Learned positional encoding).
         emb_pos_enc_kwargs: Additional keyword arguments to pass to the positional encoding class. Values dependent
@@ -159,6 +163,7 @@ class BertBlocksConfig(PretrainedConfig):
         emb_dropout_prob: float = 0.1,
         actv_fn: ActivationFunction = "silu",
         num_attention_heads: int = 12,
+        num_kv_heads: int | None = None,
         attention_gate: AttentionGate | None = None,
         hidden_size: int = 768,
         intermediate_size: int = 3072,
@@ -186,6 +191,10 @@ class BertBlocksConfig(PretrainedConfig):
         num_classes: int = 2,
         **kwargs: Any,
     ) -> None:
+        # Default num_kv_heads to num_attention_heads (standard MHA)
+        if num_kv_heads is None:
+            num_kv_heads = num_attention_heads
+
         self._validate(
             vocab_size=vocab_size,
             max_sequence_length=max_sequence_length,
@@ -199,6 +208,7 @@ class BertBlocksConfig(PretrainedConfig):
             initializer_gain=initializer_gain,
             emb_dropout_prob=emb_dropout_prob,
             num_attention_heads=num_attention_heads,
+            num_kv_heads=num_kv_heads,
             attention_gate=attention_gate,
             hidden_dropout_prob=hidden_dropout_prob,
             attn_dropout_prob=attn_dropout_prob,
@@ -220,6 +230,7 @@ class BertBlocksConfig(PretrainedConfig):
         self.num_blocks = num_blocks
         self.intermediate_size = intermediate_size
         self.num_attention_heads = num_attention_heads
+        self.num_kv_heads = num_kv_heads
         self.emb_pos_enc_kind = emb_pos_enc_kind
         self.emb_pos_enc_kwargs = emb_pos_enc_kwargs or {}
         self.block_pos_enc_kind = block_pos_enc_kind
@@ -292,6 +303,7 @@ class BertBlocksConfig(PretrainedConfig):
         initializer_gain: float,
         emb_dropout_prob: float,
         num_attention_heads: int,
+        num_kv_heads: int,
         attention_gate: str | None,
         hidden_dropout_prob: float,
         attn_dropout_prob: float,
@@ -335,6 +347,20 @@ class BertBlocksConfig(PretrainedConfig):
 
         if num_attention_heads <= 1:
             raise ValueError(f"num_attention_heads must be at least 2, got {num_attention_heads}")
+
+        if num_kv_heads < 1:
+            raise ValueError(f"num_kv_heads must be at least 1, got {num_kv_heads}")
+
+        if num_kv_heads > num_attention_heads:
+            raise ValueError(
+                f"num_kv_heads ({num_kv_heads}) must be less than or equal to "
+                f"num_attention_heads ({num_attention_heads})"
+            )
+
+        if num_attention_heads % num_kv_heads != 0:
+            raise ValueError(
+                f"num_attention_heads ({num_attention_heads}) must be divisible by num_kv_heads ({num_kv_heads})"
+            )
 
         if attention_gate not in [None, "elementwise", "headwise"]:
             raise ValueError(

@@ -47,6 +47,8 @@ class Attention(nn.Module):
         super().__init__()
         # General hyperparameters
         self.num_heads = config.num_attention_heads
+        self.num_kv_heads = config.num_kv_heads
+        self.num_kv_groups = self.num_heads // self.num_kv_heads
         self.hidden_size = config.hidden_size
         self.head_dim = self.hidden_size // self.num_heads
         self.max_seq_len = config.max_sequence_length
@@ -60,7 +62,9 @@ class Attention(nn.Module):
         self.deterministic = True
         # Layers
         self.norm_qk = config.norm_qk
-        self.proj = nn.Linear(self.hidden_size, 3 * self.hidden_size, bias=config.attn_proj_bias)
+        # QKV projection: Q has num_heads, K and V have num_kv_heads each
+        qkv_dim = (self.num_heads + 2 * self.num_kv_heads) * self.head_dim
+        self.proj = nn.Linear(self.hidden_size, qkv_dim, bias=config.attn_proj_bias)
         self.attn_gate = AttentionGate(config) if config.attention_gate is not None else None
         self.ffwd = nn.Linear(self.hidden_size, self.hidden_size, bias=config.attn_out_bias)
         # Private inits
@@ -98,50 +102,49 @@ class Attention(nn.Module):
         else:
             return None
 
-    def _apply_qknorm(self, qkv: torch.Tensor) -> torch.Tensor:
-        """Apply the given norm selectively to the q & k part of the combined input.
+    def _split_qkv(self, qkv: torch.Tensor) -> "tuple[torch.Tensor, torch.Tensor, torch.Tensor]":
+        """Split combined QKV tensor into separate Q, K, V tensors.
 
         Args:
-            qkv (torch.Tensor, shape [total_seq_len, (3 * num_heads * head_dim)] or [batch_size, seq_len,
-                (3 * num_heads * head_dim)]): projected combined QKV tensor.
+            qkv (torch.Tensor, shape [..., (num_heads + 2*num_kv_heads) * head_dim]):
+                Combined QKV projection.
 
         Returns:
-            torch.Tensor, same shape as input: combined QKV tensor after selectively applying norm to QK part.
+            tuple of (q, k, v) tensors with shapes:
+                - q: [..., num_heads, head_dim]
+                - k: [..., num_kv_heads, head_dim]
+                - v: [..., num_kv_heads, head_dim]
+        """
+        q_dim = self.num_heads * self.head_dim
+        kv_dim = self.num_kv_heads * self.head_dim
+
+        if qkv.dim() == 2:  # Unpadded: [s, qkv_dim]
+            q = rearrange(qkv[..., :q_dim], "s (h d) -> s h d", h=self.num_heads, d=self.head_dim)
+            k = rearrange(qkv[..., q_dim:q_dim + kv_dim], "s (h d) -> s h d", h=self.num_kv_heads, d=self.head_dim)
+            v = rearrange(qkv[..., q_dim + kv_dim:], "s (h d) -> s h d", h=self.num_kv_heads, d=self.head_dim)
+        else:  # Padded: [b, s, qkv_dim]
+            q = rearrange(qkv[..., :q_dim], "b s (h d) -> b s h d", h=self.num_heads, d=self.head_dim)
+            k = rearrange(qkv[..., q_dim:q_dim + kv_dim], "b s (h d) -> b s h d", h=self.num_kv_heads, d=self.head_dim)
+            v = rearrange(qkv[..., q_dim + kv_dim:], "b s (h d) -> b s h d", h=self.num_kv_heads, d=self.head_dim)
+
+        return q, k, v
+
+    def _apply_qknorm(self, q: torch.Tensor, k: torch.Tensor) -> "tuple[torch.Tensor, torch.Tensor]":
+        """Apply L2 normalization to query and key tensors.
+
+        Args:
+            q (torch.Tensor, shape [..., num_heads, head_dim]): Query tensor.
+            k (torch.Tensor, shape [..., num_kv_heads, head_dim]): Key tensor.
+
+        Returns:
+            tuple of normalized (q, k) tensors with same shapes as input.
 
         References:
             - https://arxiv.org/abs/2010.04245
         """
-        if qkv.dim() == 2:  # Unpadded
-            q, k, v = rearrange(qkv, "s (t h d) -> t s h d", t=3, h=self.num_heads, d=self.head_dim)
-        else:  # Padded
-            batch_size, seq_len, _ = qkv.shape
-            q, k, v = rearrange(
-                qkv,
-                "b s (t h d) -> t b s h d",
-                b=batch_size,
-                s=seq_len,
-                t=3,
-                h=self.num_heads,
-                d=self.head_dim,
-            )
-
         q = F.normalize(q, p=2, dim=-1)
         k = F.normalize(k, p=2, dim=-1)
-
-        if qkv.dim() == 2:  # Unpadded
-            qkv = rearrange(torch.stack([q, k, v], 0), "t s h d -> s (t h d)", t=3, h=self.num_heads, d=self.head_dim)
-        else:  # Padded
-            batch_size, seq_len, _ = qkv.shape
-            qkv = rearrange(
-                torch.stack([q, k, v], 0),
-                "t b s h d -> b s (t h d)",
-                b=batch_size,
-                s=seq_len,
-                t=3,
-                h=self.num_heads,
-                d=self.head_dim,
-            )
-        return qkv
+        return q, k
 
     def forward(
         self,
@@ -155,42 +158,44 @@ class Attention(nn.Module):
         Automatically routes to padded or unpadded implementation based on backend capabilities.
 
         Args:
-            x (torch.Tensor, shape [batch_size, seq_len, hidden_dim] or [total_seq_len, hidden_dim] ): Hidden state.
-            indices (torch.Tensor, optional): Sequence indices for unpadded sequences
-            cu_seqlens (torch.Tensor, optional): Cumulative sequence lengths for unpadded sequences
-            max_seq_len (int, optional): Maximum sequence length for unpadded sequences
-            attention_mask (torch.Tensor, optional): Attention mask for padded sequences
+            x (torch.Tensor, shape [batch_size, seq_len, hidden_dim] or [total_seq_len, hidden_dim]): Hidden state.
+            cu_seqlens (torch.Tensor, optional): Cumulative sequence lengths for unpadded sequences.
+            max_seq_len (int, optional): Maximum sequence length for unpadded sequences.
+            attention_mask (torch.Tensor, optional): Attention mask for padded sequences.
 
         Returns:
             tuple[torch.Tensor, torch.Tensor | None]: Output and optional attention weights
         """
-        # Fused projection
+        # Fused projection and split into Q, K, V
         qkv = self.proj(x)
+        q, k, v = self._split_qkv(qkv)
+
         # Rotary encoding if applicable
         if self._rotary_enc is not None:
-            qkv = self._rotary_enc(qkv, self.num_heads, self.head_dim, cu_seqlens, max_seq_len)
+            q, k = self._rotary_enc(q, k, cu_seqlens, max_seq_len)
+
         # QK-Norm if applicable
         if self.norm_qk:
-            qkv = self._apply_qknorm(qkv)
+            q, k = self._apply_qknorm(q, k)
 
         if cu_seqlens is not None and max_seq_len is not None:
             x_out, w = self._backend.forward_unpadded(
-                qkv,
+                q,
+                k,
+                v,
                 cu_seqlens,
                 max_seq_len,
-                self.num_heads,
-                self.head_dim,
-                alibi_slopes=AlibiPositionalEncoding.get_slopes(self.num_heads, device=qkv.device),
+                alibi_slopes=AlibiPositionalEncoding.get_slopes(self.num_heads, device=q.device),
                 local_attention=self.local_attention,
                 dropout_p=self.dropout_p if self.training else 0.0,
                 deterministic=self.deterministic,
             )
         elif attention_mask is not None:
             x_out, w = self._backend.forward_padded(
-                qkv,
+                q,
+                k,
+                v,
                 attention_mask,
-                self.num_heads,
-                self.head_dim,
                 dropout_p=self.dropout_p if self.training else 0.0,
                 deterministic=self.deterministic,
             )
@@ -201,7 +206,7 @@ class Attention(nn.Module):
 
         # Apply attention gating
         if self.attn_gate is not None:
-            x_out = self.attn_gate(qkv, x_out)
+            x_out = self.attn_gate(q, x_out)
 
         # Fuse heads back together
         x_out = self.ffwd(x_out)
@@ -244,45 +249,28 @@ class AttentionGate(nn.Module):
         else:
             raise ValueError(f"Unknown type of attention gate: {self.attention_gate_type}")
 
-    def forward(self, qkv: "Tensor", x: "Tensor") -> "Tensor":
+    def forward(self, q: "Tensor", x: "Tensor") -> "Tensor":
         """Forward pass of the attention gate.
 
         Args:
-            qkv (torch.Tensor, shape [batch_size, seq_len, num_heads, head_dim]
-                or [total_seq_len, num_heads, head_dim]): QKV projection.
-            x: (torch.Tensor, shape [batch_size, seq_len, num_heads * head_dim]
-                or [total_seq_len, num_heads * head_dim]): hidden state.
+            q (torch.Tensor, shape [batch_size, seq_len, num_heads, head_dim]
+                or [total_seq_len, num_heads, head_dim]): Query tensor.
+            x (torch.Tensor, shape [batch_size, seq_len, num_heads * head_dim]
+                or [total_seq_len, num_heads * head_dim]): Hidden state after attention.
 
         Returns: torch.Tensor
             Hidden state modulated by query projection.
         """
-        unpadded = qkv.dim() == 2
-        if unpadded:
-            q, _, _ = rearrange(qkv, "s (t h d) -> t s h d", t=3, h=self.num_heads, d=self.head_dim)
-            # Reshape q to [s, h*d] for gate projection
-        else:
-            batch_size, seq_len, _ = qkv.shape
-            q, _, _ = rearrange(
-                qkv,
-                "b s (t h d) -> t b s h d",
-                b=batch_size,
-                s=seq_len,
-                t=3,
-                h=self.num_heads,
-                d=self.head_dim,
-            )
-            # Reshape q to [b, s, h*d] for gate projection
+        # Flatten q for projection: [..., h, d] -> [..., h*d]
+        q_flat = q.flatten(-2)
 
-        q = q.flatten(-2)
-        gate_output = self.gate_proj(q)  # [s, h*d] or [b, s, h*d]
+        gate_output = self.gate_proj(q_flat)  # [s, h*d] or [b, s, h*d] or [s, h] or [b, s, h]
 
         if self.attention_gate_type == "headwise":
             gate_output = gate_output.unsqueeze(-1)
         else:  # elementwise
-            if unpadded:
-                gate_output = rearrange(gate_output, "s (h d) -> s h d", h=self.num_heads, d=self.head_dim)
-            else:
-                gate_output = rearrange(gate_output, "b s (h d) -> b s h d", h=self.num_heads, d=self.head_dim)
+            # Reshape to [..., h, d]
+            gate_output = gate_output.view(*q.shape)
 
         gate_output = torch.sigmoid(gate_output)
 
@@ -290,8 +278,8 @@ class AttentionGate(nn.Module):
         x_out = x.view(*x.shape[:-1], self.num_heads, self.head_dim)
         x_out = x_out * gate_output
 
-        # unpadded: s h d -> s (h d); padded: b s h d -> b s (h d)
-        return  x_out.flatten(-2)
+        # [..., h, d] -> [..., h*d]
+        return x_out.flatten(-2)
 
 
 __all__ = ["Attention", "AttentionGate"]
