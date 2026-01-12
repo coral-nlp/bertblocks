@@ -2,7 +2,7 @@
 seed_everything: 153201820 # For reproducibility
 trainer:
   accelerator: "gpu"
-  precision: "transformer-engine"
+  precision: "16-mixed"
   default_root_dir: "./checkpoints"
   #logger:
   #  - class_path: lightning.pytorch.loggers.WandbLogger
