@@ -338,62 +338,32 @@ class RotaryPositionalEncoding(nn.Module):
 
     def forward(
         self,
-        qkv: "Tensor",
-        num_heads: int,
-        head_dim: int,
+        q: "Tensor",
+        k: "Tensor",
         cu_seqlens: "Tensor | None" = None,
         max_seqlen: int | None = None,
-    ) -> "Tensor | tuple[Tensor, Tensor]":
-        """Apply rotary positional encoding to qkv.
+    ) -> "tuple[Tensor, Tensor]":
+        """Apply rotary positional encoding to query and key tensors.
 
         Args:
-            qkv (Tensor, shape [batch, seqlen, 3 * num_heads * head_dim] if padded or
-                shape [total_seqlen, 3 * num_heads * head_dim] if unpadded): combined query/key/value tensor.
-            number
-            cu_seqlens (Tensor, shape [total_seq_len + 1,], optional): Cumulative sequence lengths if qkv is unpadded.
+            q (Tensor, shape [batch, seqlen, num_heads, head_dim] if padded or
+                shape [total_seqlen, num_heads, head_dim] if unpadded): Query tensor.
+            k (Tensor, shape [batch, seqlen, num_kv_heads, head_dim] if padded or
+                shape [total_seqlen, num_kv_heads, head_dim] if unpadded): Key tensor.
+            cu_seqlens (Tensor, shape [batch_size + 1,], optional): Cumulative sequence lengths if unpadded.
                 Defaults to None.
             max_seqlen (int, optional): Maximum sequence length in batch. Defaults to None.
 
         Returns:
-            Tensor, same shape as qkv; qkv with rotary position encoding applied.
+            tuple[Tensor, Tensor]: (q, k) with rotary position encoding applied, same shapes as input.
         """
-        is_unpadded = cu_seqlens is not None
-
         # TODO: this yields a graph break
         if max_seqlen is not None:
-            self._update_cos_sin_cache(max_seqlen, device=qkv.device, dtype=qkv.dtype)
-
-        if is_unpadded:
-            q, k, v = rearrange(qkv, "s (t h d) -> t s h d", t=3, h=num_heads, d=head_dim)
-        else:
-            batch_size, seq_len, _ = qkv.shape
-            q, k, v = rearrange(
-                qkv,
-                "b s (t h d) -> t b s h d",
-                b=batch_size,
-                s=seq_len,
-                t=3,
-                h=num_heads,
-                d=head_dim,
-            )
+            self._update_cos_sin_cache(max_seqlen, device=q.device, dtype=q.dtype)
 
         q, k = self._apply_rope(q, k, cu_seqlens, max_seqlen)
 
-        qkv_stacked = torch.stack([q, k, v], 0)
-        if is_unpadded:
-            qkv = rearrange(qkv_stacked, "t s h d -> s (t h d)", t=3, h=num_heads, d=head_dim)
-        else:
-            batch_size, seq_len, _ = qkv.shape
-            qkv = rearrange(
-                qkv_stacked,
-                "t b s h d -> b s (t h d)",
-                b=batch_size,
-                s=seq_len,
-                t=3,
-                h=num_heads,
-                d=head_dim,
-            )
-        return qkv
+        return q, k
 
     def _apply_rope(self, q, k, cu_seqlens, max_seqlen):  # type: ignore
         q = apply_rotary(
