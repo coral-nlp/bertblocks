@@ -543,7 +543,7 @@ def run_eval(
         )
         task = task_cls(
             pretrained_model_name_or_path=pretrained_model_name_or_path,
-            pretrained_tokenizer_name_or_path="bert-base-uncased",
+            pretrained_tokenizer_name_or_path=pretrained_model_name_or_path,
             max_seq_length=max_seq_length,
             learning_rate=learning_rate,
             weight_decay=weight_decay,
