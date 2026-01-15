@@ -43,7 +43,7 @@ class SequenceClassificationCollator:
         self.multi_labels = multi_labels
         self.max_seq_length = max_seq_length
 
-    def __call__(self, batch: list[dict[str, str | int]]) -> dict[str, torch.Tensor]:
+    def __call__(self, batch: list[dict[str, str | int | float | list]]) -> dict[str, torch.Tensor]:
         """Perform collation operation on a batch of sequence classification examples."""
         if isinstance(self.text_column, str):
             texts = [str(item[self.text_column]) for item in batch]
@@ -72,6 +72,31 @@ class SequenceClassificationCollator:
         return {k: v for k, v in out.items() if k in ["input_ids", "attention_mask", "labels"]}
 
 
+class RegressionCollator(SequenceClassificationCollator):
+    """Collator for regression tasks (e.g., STS-B)."""
+
+    def __call__(self, batch: list[dict[str, str | int | float | list]]) -> dict[str, torch.Tensor]:
+        """Perform collation operation on a batch of regression examples."""
+        if isinstance(self.text_column, str):
+            texts = [str(item[self.text_column]) for item in batch]
+        else:
+            if self.tokenizer.sep_token:
+                texts = [f" {self.tokenizer.sep_token} ".join(str(item[c]) for c in self.text_column) for item in batch]
+            else:
+                texts = [" ".join(str(item[c]) for c in self.text_column) for item in batch]
+
+        out = self.tokenizer(
+            texts,
+            padding="max_length",
+            truncation=True,
+            max_length=self.max_seq_length,
+            return_tensors="pt",
+            return_special_tokens_mask=True,
+        )
+        out["labels"] = torch.FloatTensor([item[self.label_column] for item in batch])
+        return {k: v for k, v in out.items() if k in ["input_ids", "attention_mask", "labels"]}
+
+
 class TokenClassificationCollator:
     """Collator for sequence tagging tasks."""
 
@@ -87,7 +112,7 @@ class TokenClassificationCollator:
         self.label_column = label_column
         self.max_seq_length = max_seq_length
 
-    def __call__(self, batch: list[dict[str, str | int | list]]) -> dict[str, torch.Tensor]:
+    def __call__(self, batch: list[dict[str, str | int | float | list]]) -> dict[str, torch.Tensor]:
         """Perform collation operation on a batch of sequence tagging examples."""
         texts = [item[self.text_column] for item in batch]
         out = self.tokenizer(
@@ -133,7 +158,9 @@ class QuestionAnsweringCollator:
         self.label_column = label_column
         self.max_seq_length = max_seq_length
 
-    def __call__(self, batch: list[dict[str, str | int | dict[str, list[str | int]]]]) -> dict[str, torch.Tensor]:
+    def __call__(
+        self, batch: list[dict[str, str | int | float | list | dict[str, list[str | int]]]]
+    ) -> dict[str, torch.Tensor]:
         """Perform collation operation on a batch of QA examples."""
         questions = [q[self.text_column[0]].strip() for q in batch]
         contexts = [c[self.text_column[1]] for c in batch]
@@ -197,6 +224,14 @@ class QuestionAnsweringCollator:
         return res
 
 
+def _set_config_num_labels(config: AutoConfig, num_labels: int) -> None:
+    """Set the number of labels on a config, handling both num_labels and num_classes attributes."""
+    if hasattr(config, "num_labels"):
+        config.num_labels = num_labels
+    else:
+        config.num_classes = num_labels
+
+
 class TaskModule(abc.ABC, L.LightningModule):
     """Base LightningModule for evaluation tasks."""
 
@@ -208,7 +243,9 @@ class TaskModule(abc.ABC, L.LightningModule):
     num_classes: int  # How many unique classes
     multi_label: bool = False
     metric: torchmetrics.Metric
-    collator: TokenClassificationCollator | SequenceClassificationCollator | QuestionAnsweringCollator
+    collator: (
+        TokenClassificationCollator | SequenceClassificationCollator | QuestionAnsweringCollator | RegressionCollator
+    )
 
     def __init__(
         self,
@@ -237,7 +274,7 @@ class TaskModule(abc.ABC, L.LightningModule):
     def _init_classification_(self) -> None:
         config = AutoConfig.from_pretrained(self.hparams.pretrained_model_name_or_path)
         config.problem_type = "single_label_classification" if not self.multi_label else "multi_label_classification"
-        config.num_classes = self.num_classes
+        _set_config_num_labels(config, self.num_classes)
         self.model = AutoModelForSequenceClassification.from_pretrained(
             self.hparams.pretrained_model_name_or_path, config=config
         )
@@ -252,7 +289,7 @@ class TaskModule(abc.ABC, L.LightningModule):
     def _init_tagging_(self) -> None:
         config = AutoConfig.from_pretrained(self.hparams.pretrained_model_name_or_path)
         config.problem_type = "single_label_classification"
-        config.num_classes = self.num_classes + 1  # include -100 dummy label
+        _set_config_num_labels(config, self.num_classes + 1)  # include -100 dummy label
         config.compile_model = False
         self.model = AutoModelForTokenClassification.from_pretrained(
             self.hparams.pretrained_model_name_or_path, config=config
@@ -265,7 +302,19 @@ class TaskModule(abc.ABC, L.LightningModule):
         )
 
     def _init_similarity_(self) -> None:
-        pass
+        """Initialize regression/similarity task."""
+        config = AutoConfig.from_pretrained(self.hparams.pretrained_model_name_or_path)
+        config.problem_type = "regression"
+        _set_config_num_labels(config, 1)
+        self.model = AutoModelForSequenceClassification.from_pretrained(
+            self.hparams.pretrained_model_name_or_path, config=config
+        )
+        self.collator = RegressionCollator(
+            tokenizer=AutoTokenizer.from_pretrained(self.hparams.pretrained_tokenizer_name_or_path),
+            text_column=self.text_column,
+            label_column=self.label_column,
+            max_seq_length=self.hparams.max_seq_length,
+        )
 
     def _init_qa_(self) -> None:
         config = AutoConfig.from_pretrained(self.hparams.pretrained_model_name_or_path)
@@ -280,6 +329,14 @@ class TaskModule(abc.ABC, L.LightningModule):
     def _postprocess_classification_(
         self, batch: dict[str, torch.Tensor | Any], out: SequenceClassifierOutput
     ) -> tuple[torch.Tensor, torch.Tensor]:
+        if self.multi_label:
+            # Multi-label: return logits, torchmetrics applies sigmoid
+            return out.logits, batch["labels"]
+        metric_task = getattr(self.metric, "task", None)
+        if metric_task == "binary":
+            # Binary metric: return positive class logits
+            return out.logits[:, 1], batch["labels"]
+        # Multiclass: return logits, torchmetrics applies argmax
         return out.logits, batch["labels"]
 
     def _postprocess_tagging_(
@@ -290,7 +347,13 @@ class TaskModule(abc.ABC, L.LightningModule):
         # Restrict to "real" labels, i.e., non -100
         logits = logits[labels != -100, :-1]
         labels = labels[labels != -100]
-        return labels, logits
+        return logits, labels
+
+    def _postprocess_similarity_(
+        self, batch: dict[str, torch.Tensor | Any], out: SequenceClassifierOutput
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Postprocess regression/similarity outputs."""
+        return out.logits.squeeze(), batch["labels"]
 
     def _postprocess_qa_(
         self, batch: dict[str, Any], out: QuestionAnsweringModelOutput
@@ -301,7 +364,7 @@ class TaskModule(abc.ABC, L.LightningModule):
         # Reduce batch and output to per-sample dictionaries
         batch = [{k: v[i] for k, v in batch.items()} for i in range(batch["input_ids"].shape[0])]
         logits = [
-            {"start_logits": sl, "end_logits": el} for el, sl in zip(out.start_logits, out.end_logits, strict=False)
+            {"start_logits": sl, "end_logits": el} for sl, el in zip(out.start_logits, out.end_logits, strict=False)
         ]
 
         for example, lgts in zip(batch, logits, strict=False):
@@ -342,7 +405,11 @@ class TaskModule(abc.ABC, L.LightningModule):
 
     def configure_optimizers(self) -> "torch.optim.Optimizer":
         """Set up the optimizer."""
-        optimizer = torch.optim.AdamW(self.parameters(), lr=self.hparams.learning_rate)
+        optimizer = torch.optim.AdamW(
+            self.parameters(),
+            lr=self.hparams.learning_rate,
+            weight_decay=self.hparams.weight_decay,
+        )
         return optimizer
 
     def training_step(self, batch: dict[str, torch.Tensor]) -> torch.Tensor:
@@ -373,6 +440,8 @@ class TaskModule(abc.ABC, L.LightningModule):
             preds, target = self._postprocess_classification_(batch, out)
         elif self.task_type == "tagging":
             preds, target = self._postprocess_tagging_(batch, out)
+        elif self.task_type == "similarity":
+            preds, target = self._postprocess_similarity_(batch, out)
         elif self.task_type == "qa":
             preds, target = self._postprocess_qa_(batch, out)
         self.metric.update(preds=preds, target=target)
@@ -399,6 +468,8 @@ class TaskModule(abc.ABC, L.LightningModule):
             preds, target = self._postprocess_classification_(batch, out)
         elif self.task_type == "tagging":
             preds, target = self._postprocess_tagging_(batch, out)
+        elif self.task_type == "similarity":
+            preds, target = self._postprocess_similarity_(batch, out)
         elif self.task_type == "qa":
             preds, target = self._postprocess_qa_(batch, out)
         self.metric.update(preds=preds, target=target)
