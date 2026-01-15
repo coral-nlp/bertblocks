@@ -3,7 +3,7 @@ from typing import TYPE_CHECKING
 from bertblocks.modeling.norms import get_norm
 
 if TYPE_CHECKING:
-    from bertblocks.modeling.config import BertBlocksConfig
+    from bertblocks.config import BertBlocksConfig
 
 import torch
 from torch import nn
@@ -49,10 +49,8 @@ class TokenTypeEmbedding(nn.Module):
 
         """
         shape = x.shape[:2] if len(x.shape) == 3 else x.shape[:1]
-        token_type_ids = (
-            token_type_ids if token_type_ids is not None else torch.zeros(shape, dtype=torch.long, device=x.device)
-        )
-        return x + self.embd(token_type_ids)
+        token_type_ids = token_type_ids if token_type_ids is not None else torch.zeros(shape, device=x.device)
+        return x + self.embd(token_type_ids.to(torch.int32))
 
 
 class TokenEmbedding(nn.Module):
@@ -75,7 +73,7 @@ class TokenEmbedding(nn.Module):
             - `vocab_size` (int): Size of the vocabulary for token embeddings
             - `hidden_size`: Dimensionality of embeddings and hidden states
             - `pad_token_id`: Token ID used for padding sequences
-            - `pos_emb_kind`: Type of positional embedding ("sinusoidal", "learned", etc.)
+            - `emb_pos_enc_kind`: Type of positional encoding ("sinusoidal", "learned", etc.)
             - `max_sequence_length`: Maximum sequence length for positional encodings
             - `add_token_type_emb`: Whether to add token type embeddings
             - `norm_kind`: When to apply normalization ("post", "both", etc.)
@@ -86,8 +84,10 @@ class TokenEmbedding(nn.Module):
     def __init__(self, config: "BertBlocksConfig"):
         super().__init__()
         self.embd = nn.Embedding(config.vocab_size, config.hidden_size, padding_idx=config.pad_token_id)
-        match config.pos_emb_kind:
+
+        match config.emb_pos_enc_kind:
             case "sinusoidal":
+                # TODO: emb_pos_enc_kwargs should be used to make "base" configurable
                 self.pose = SinusoidalPositionalEncoding(dim=config.hidden_size, max_seq_len=config.max_sequence_length)
             case "learned":
                 self.pose = LearnedPositionalEncoding(dim=config.hidden_size, max_seq_len=config.max_sequence_length)

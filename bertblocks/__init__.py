@@ -11,14 +11,21 @@ The models are compatible with HuggingFace transformers ecosystem.
 
 """
 
-from bertblocks.compat import from_huggingface
-from bertblocks.modeling.config import BertBlocksConfig
+from bertblocks.config import BertBlocksConfig
+from bertblocks.integration import from_huggingface
 from bertblocks.modeling.model import (
+    BertBlocksForMaskedDiffusion,
     BertBlocksForMaskedLM,
     BertBlocksForQuestionAnswering,
     BertBlocksForSequenceClassification,
     BertBlocksForTokenClassification,
     BertBlocksModel,
+)
+from bertblocks.training.modules import (
+    BertBlocksFinetuningDataModule,
+    BertBlocksFinetuningModule,
+    BertBlocksPretrainingDataModule,
+    BertBlocksPretrainingModule,
 )
 
 # Register models with HuggingFace AutoModel system
@@ -47,10 +54,15 @@ except ImportError:
 
 __all__ = [
     "BertBlocksConfig",
-    "BertBlocksModel",
+    "BertBlocksFinetuningDataModule",
+    "BertBlocksFinetuningModule",
+    "BertBlocksForMaskedDiffusion",
     "BertBlocksForMaskedLM",
+    "BertBlocksForQuestionAnswering",
     "BertBlocksForSequenceClassification",
     "BertBlocksForTokenClassification",
-    "BertBlocksForQuestionAnswering",
+    "BertBlocksModel",
+    "BertBlocksPretrainingDataModule",
+    "BertBlocksPretrainingModule",
     "from_huggingface",
 ]

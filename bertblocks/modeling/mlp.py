@@ -3,11 +3,33 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     import torch
 
-    from bertblocks.modeling.config import BertBlocksConfig
+    from bertblocks.config import BertBlocksConfig
 
 from torch import nn
 
 from bertblocks.modeling.activations import get_actv_fn
+
+
+class Linear(nn.Module):
+    """Linear layer wrapper implementation for BertBlocks.
+
+    Attributes:
+        ffwd (nn.Linear): linear feed-forward layer.
+        actv (nn.Module): activation function.
+
+    Args:
+        hidden_size (int): Dimensionality of hidden layers (input/output dimension).
+        actv_fn (str): Activation function.
+        bias (bool): Whether to include bias in the layer. Defaults to True.
+    """
+
+    def __init__(self, hidden_size: int, actv_fn: str, bias: bool = True):
+        super().__init__()
+        self.ffwd = nn.Linear(hidden_size, hidden_size, bias=bias)
+        self.actv = get_actv_fn(actv_fn)
+
+    def forward(self, x: "torch.Tensor") -> "torch.Tensor":
+        return self.actv(self.ffwd(x))
 
 
 class GLU(nn.Module):
@@ -21,22 +43,20 @@ class GLU(nn.Module):
         dprj (nn.Linear): down projection layer, from intermediate size to hidden size.
 
     Args:
-        config (BertBlocksConfig): Configuration object determining model hyperparameters. May be passed to
-            other submodules. Keys used at top level:
-
-                - `hidden_size`: Dimensionality of hidden layers (input/output dimension)
-                - `intermediate_size`: Dimensionality of feed-forward layers
-                - `mlp_in_bias`: Whether to include bias in the input projection layer
-                - `mlp_out_bias`: Whether to include bias in the output projection layer
-                - `actv_fn`: Activation function used in feed-forward networks
-
+        hidden_size (int): Dimensionality of hidden layers (input/output dimension).
+        intermediate_size (int): Dimensionality of feed-forward layers.
+        actv_fn (str): Activation function used in feed-forward networks.
+        in_bias (bool): Whether to include bias in the input projection layer. Defaults to True.
+        out_bias (bool): Whether to include bias in the output projection layer. Defaults to True.
     """
 
-    def __init__(self, config: "BertBlocksConfig"):
+    def __init__(
+        self, hidden_size: int, intermediate_size: int, actv_fn: str, in_bias: bool = True, out_bias: bool = True
+    ):
         super().__init__()
-        self.uprj = nn.Linear(config.hidden_size, config.intermediate_size * 2, bias=config.mlp_in_bias)
-        self.actv = get_actv_fn(config)
-        self.dprj = nn.Linear(config.intermediate_size, config.hidden_size, bias=config.mlp_out_bias)
+        self.uprj = nn.Linear(hidden_size, intermediate_size * 2, bias=in_bias)
+        self.actv = get_actv_fn(actv_fn)
+        self.dprj = nn.Linear(intermediate_size, hidden_size, bias=out_bias)
 
     def forward(self, x: "torch.Tensor") -> "torch.Tensor":
         """Forward pass of the GLU layer.
@@ -69,22 +89,21 @@ class MLP(nn.Module):
         dprj (nn.Linear): down projection layer, from intermediate size to hidden size.
 
     Args:
-        config (BertBlocksConfig): Configuration object determining model hyperparameters. May be passed to
-            other submodules. Keys used at top level:
-
-                - `hidden_size`: Dimensionality of hidden layers (input/output dimension)
-                - `intermediate_size`: Dimensionality of feed-forward layers
-                - `mlp_in_bias`: Whether to include bias in the input projection layer
-                - `mlp_out_bias`: Whether to include bias in the output projection layer
-                - `actv_fn`: Activation function used in feed-forward networks
+        hidden_size (int): Dimensionality of hidden layers (input/output dimension).
+        intermediate_size (int): Dimensionality of feed-forward layers.
+        actv_fn (str): Activation function used in feed-forward networks.
+        in_bias (bool): Whether to include bias in the input projection layer. Defaults to True.
+        out_bias (bool): Whether to include bias in the output projection layer. Defaults to True.
 
     """
 
-    def __init__(self, config: "BertBlocksConfig"):
+    def __init__(
+        self, hidden_size: int, intermediate_size: int, actv_fn: str, in_bias: bool = True, out_bias: bool = True
+    ):
         super().__init__()
-        self.uprj = nn.Linear(config.hidden_size, config.intermediate_size, bias=config.mlp_in_bias)
-        self.actv = get_actv_fn(config)
-        self.dprj = nn.Linear(config.intermediate_size, config.hidden_size, bias=config.mlp_out_bias)
+        self.uprj = nn.Linear(hidden_size, intermediate_size, bias=in_bias)
+        self.actv = get_actv_fn(actv_fn)
+        self.dprj = nn.Linear(intermediate_size, hidden_size, bias=out_bias)
 
     def forward(self, x: "torch.Tensor") -> "torch.Tensor":
         """Forward pass of the MLP layer.
@@ -122,20 +141,25 @@ def get_mlp(config: "BertBlocksConfig") -> "nn.Module":
         ValueError: If the specified MLP type is not supported.
 
     Supported MLP types:
-
+        - `linear`: Standard single feed-forward layer.
         - `mlp`: Standard two-layer feedforward network
         - `glu`: Gated Linear Unit with learned gating mechanism
 
     """
-    mlp_type = getattr(config, "mlp_type", "mlp")  # Default to mlp for backward compatibility
+    match config.mlp_type:
+        case "linear":
+            return Linear(config.hidden_size, config.actv_fn, bias=config.mlp_in_bias)
+        case "mlp":
+            return MLP(
+                config.hidden_size, config.intermediate_size, config.actv_fn, config.mlp_in_bias, config.mlp_out_bias
+            )
+        case "glu":
+            return GLU(
+                config.hidden_size, config.intermediate_size, config.actv_fn, config.mlp_in_bias, config.mlp_out_bias
+            )
+        case _:
+            supported_types = ["mlp", "glu"]
+            raise ValueError(f"Unknown MLP type '{config.mlp_type}'. Supported types: {', '.join(supported_types)}")
 
-    if mlp_type == "mlp":
-        return MLP(config)
-    elif mlp_type == "glu":
-        return GLU(config)
-    else:
-        supported_types = ["mlp", "glu"]
-        raise ValueError(f"Unknown MLP type '{mlp_type}'. Supported types: {', '.join(supported_types)}")
 
-
-__all__ = ["get_mlp", "GLU", "MLP"]
+__all__ = ["GLU", "MLP", "get_mlp"]

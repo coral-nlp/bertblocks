@@ -23,7 +23,7 @@ It is highly configurable and allows for easy experimentation with various archi
 Train a model with the default configuration:
 
 ```bash
-uv run main.py fit --config configs/pretraining.yaml
+uv run -m bertblocks fit --config configs/pretraining.yaml
 ```
 
 ### Configuration
@@ -34,14 +34,14 @@ The architecture is configurable through the `BertBlocksConfig` class. Key param
 import bertblocks as bb
 
 config = bb.BertBlocksConfig(
-    vocab_size=30522,        # Vocabulary size
-    hidden_size=768,         # Model dimension
-    num_blocks=12,           # Number of transformer layers
-    num_attention_heads=12,  # Number of attention heads
-    norm_fn="rms",           # Normalization type
-    pos_emb_kind="alibi",    # Positional encoding
-    mlp_type="glu",          # Feed-forward architecture
-    actv_fn="silu"           # Activation function
+    vocab_size=30522,            # Vocabulary size
+    hidden_size=768,             # Model dimension
+    num_blocks=12,               # Number of transformer layers
+    num_attention_heads=12,      # Number of attention heads
+    norm_fn="rms",               # Normalization type
+    block_pos_enc_kind="alibi",  # Positional encoding
+    mlp_type="glu",              # Feed-forward architecture
+    actv_fn="silu"               # Activation function
 )
 
 model = bb.BertBlocksForMaskedLM(config)
@@ -56,7 +56,9 @@ import bertblocks as bb
 model = bb.from_huggingface("answerdotai/ModernBERT-base", load_weights=True)
 ```
 
-We are actively working on adding more verified model loaders. If you want to contribute, have a look at [`bertblocks.compat`](bertblocks/compat).
+We are actively working on adding more verified model loaders.
+
+If you want to add one, or make general improvements to `bertblocks`, have a look at our  [contribution guide](CONTRIBUTING.md).
 
 ## License
 

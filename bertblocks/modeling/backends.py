@@ -1,117 +1,121 @@
 """Attention backend implementations with unified interface."""
 
 from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING
+
+from bertblocks import BertBlocksConfig
+
+if TYPE_CHECKING:
+    from torch import Tensor
 
 import torch
 from einops import einsum, rearrange
-from transformers.modeling_attn_mask_utils import _prepare_4d_attention_mask_for_sdpa
 from transformers.modeling_utils import is_flash_attn_2_available
 
 if is_flash_attn_2_available():
-    from flash_attn import flash_attn_varlen_qkvpacked_func
-
-    # Otherwise triggers graph break?
-    torch._dynamo.config.capture_scalar_outputs = True
-
-from bertblocks.modeling.position import RotaryEmbedding
+    from flash_attn import flash_attn_varlen_func
 
 
 class AttentionBackend(ABC):
     """Abstract base class for attention backends."""
 
-    @property
-    @abstractmethod
-    def supports_unpadded(self) -> bool:
-        """Whether this backend supports unpadded sequences."""
-        pass
-
-    @property
-    @abstractmethod
-    def supports_padded(self) -> bool:
-        """Whether this backend supports padded sequences."""
-        pass
-
-    @property
-    @abstractmethod
-    def supports_alibi(self) -> bool:
-        """Whether this backend supports ALiBi positional bias."""
-        pass
-
-    @property
-    @abstractmethod
-    def supports_local_attention(self) -> bool:
-        """Whether this backend supports local attention."""
-        pass
-
-    @property
-    @abstractmethod
-    def supports_rope(self) -> bool:
-        """Whether this backend supports RoPE positional encoding."""
-        pass
-
     def forward_unpadded(
         self,
-        qkv: torch.Tensor,
-        cu_seqlens: torch.Tensor,
+        q: "Tensor",
+        k: "Tensor",
+        v: "Tensor",
+        cu_seqlens: "Tensor",
         max_seq_len: int,
-        num_heads: int,
-        head_dim: int,
-        rotary_emb: RotaryEmbedding | None = None,
-        alibi_slopes: torch.Tensor | None = None,
+        alibi_slopes: "Tensor | None" = None,
         local_attention: tuple[int, int] = (-1, -1),
         dropout_p: float = 0.0,
         deterministic: bool = False,
-    ) -> tuple[torch.Tensor, torch.Tensor | None]:
-        """Forward pass with unpadded sequences."""
-        if not self.supports_unpadded:
-            raise NotImplementedError(f"{self.__class__.__name__} does not support unpadded sequences")
+    ) -> "tuple[Tensor, Tensor | None]":
+        """Forward pass with unpadded sequences.
+
+        Args:
+            q (Tensor, shape [total_seq_len, num_heads, head_dim]): Query tensor.
+            k (Tensor, shape [total_seq_len, num_kv_heads, head_dim]): Key tensor.
+            v (Tensor, shape [total_seq_len, num_kv_heads, head_dim]): Value tensor.
+            cu_seqlens (Tensor, shape [batch_size + 1]): Cumulative sequence lengths.
+            max_seq_len (int): Maximum sequence length in batch.
+            alibi_slopes (Tensor, optional): ALiBi slopes for positional bias.
+            local_attention (tuple[int, int]): Local attention window size.
+            dropout_p (float): Dropout probability.
+            deterministic (bool): Whether to use deterministic attention.
+
+        Returns:
+            tuple[Tensor, Tensor | None]: Output tensor [total_seq_len, num_heads * head_dim] and optional attention weights.
+        """
         return self._forward_unpadded(
-            qkv,
-            cu_seqlens,
-            max_seq_len,
-            num_heads,
-            head_dim,
-            rotary_emb,
-            alibi_slopes,
-            local_attention,
-            dropout_p,
-            deterministic,
+            q=q,
+            k=k,
+            v=v,
+            cu_seqlens=cu_seqlens,
+            max_seq_len=max_seq_len,
+            alibi_slopes=alibi_slopes,
+            local_attention=local_attention,
+            dropout_p=dropout_p,
+            deterministic=deterministic,
         )
 
     def forward_padded(
         self,
-        qkv: torch.Tensor,
-        attention_mask: torch.Tensor,
-        num_heads: int,
-        head_dim: int,
-        rotary_emb: RotaryEmbedding | None = None,
-        alibi_slopes: torch.Tensor | None = None,
-        local_attention: tuple[int, int] = (-1, -1),
+        q: "Tensor",
+        k: "Tensor",
+        v: "Tensor",
+        attention_mask: "Tensor",
         dropout_p: float = 0.0,
         deterministic: bool = False,
-    ) -> tuple[torch.Tensor, torch.Tensor | None]:
-        """Forward pass with padded sequences."""
-        if not self.supports_padded:
-            raise NotImplementedError(f"{self.__class__.__name__} does not support padded sequences")
+    ) -> "tuple[Tensor, Tensor | None]":
+        """Forward pass with padded sequences.
+
+        Args:
+            q (Tensor, shape [batch_size, seq_len, num_heads, head_dim]): Query tensor.
+            k (Tensor, shape [batch_size, seq_len, num_kv_heads, head_dim]): Key tensor.
+            v (Tensor, shape [batch_size, seq_len, num_kv_heads, head_dim]): Value tensor.
+            attention_mask (Tensor): Attention mask.
+            dropout_p (float): Dropout probability.
+            deterministic (bool): Whether to use deterministic attention.
+
+        Returns:
+            tuple[Tensor, Tensor | None]: Output tensor [batch_size, seq_len, num_heads * head_dim] and optional attention weights.
+        """
         return self._forward_padded(
-            qkv,
-            attention_mask,
-            num_heads,
-            head_dim,
-            rotary_emb,
-            alibi_slopes,
-            local_attention,
-            dropout_p,
-            deterministic,
+            q=q,
+            k=k,
+            v=v,
+            attention_mask=attention_mask,
+            dropout_p=dropout_p,
+            deterministic=deterministic,
         )
 
     @abstractmethod
-    def _forward_unpadded(self, *args, **kwargs) -> tuple[torch.Tensor, torch.Tensor | None]:  # type: ignore
+    def _forward_unpadded(
+        self,
+        q: "Tensor",
+        k: "Tensor",
+        v: "Tensor",
+        cu_seqlens: "Tensor",
+        max_seq_len: int,
+        alibi_slopes: "Tensor | None" = None,
+        local_attention: tuple[int, int] = (-1, -1),
+        dropout_p: float = 0.0,
+        deterministic: bool = False,
+    ) -> "tuple[Tensor, Tensor | None]":  # type: ignore
         """Implement the unpadded forward pass."""
         pass
 
     @abstractmethod
-    def _forward_padded(self, *args, **kwargs) -> tuple[torch.Tensor, torch.Tensor | None]:  # type: ignore
+    def _forward_padded(
+        self,
+        q: "Tensor",
+        k: "Tensor",
+        v: "Tensor",
+        attention_mask: "Tensor",
+        dropout_p: float = 0.0,
+        deterministic: bool = False,
+    ) -> "tuple[Tensor, Tensor | None]":  # type: ignore
         """Implement the padded forward pass."""
         pass
 
@@ -119,56 +123,30 @@ class AttentionBackend(ABC):
 class FlashBackend(AttentionBackend):
     """Flash Attention 2 backend."""
 
-    @property
-    def supports_unpadded(self) -> bool:
-        """Whether this backend supports unpadded sequences."""
-        return True
-
-    @property
-    def supports_padded(self) -> bool:
-        """Whether this backend supports padded sequences."""
-        return False
-
-    @property
-    def supports_alibi(self) -> bool:
-        """Whether this backend supports ALiBi positional bias."""
-        return True
-
-    @property
-    def supports_local_attention(self) -> bool:
-        """Whether this backend supports local attention."""
-        return True
-
-    @property
-    def supports_rope(self) -> bool:
-        """Whether this backend supports RoPE positional encoding."""
-        return True
-
     def _forward_unpadded(
         self,
-        qkv: torch.Tensor,
-        cu_seqlens: torch.Tensor,
+        q: "Tensor",
+        k: "Tensor",
+        v: "Tensor",
+        cu_seqlens: "Tensor",
         max_seq_len: int,
-        num_heads: int,
-        head_dim: int,
-        rotary_emb: RotaryEmbedding | None = None,
-        alibi_slopes: torch.Tensor | None = None,
+        alibi_slopes: "Tensor | None" = None,
         local_attention: tuple[int, int] = (-1, -1),
         dropout_p: float = 0.0,
         deterministic: bool = False,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Flash attention forward pass."""
-        qkv = rearrange(qkv, "... (t h d) -> ... t h d", t=3, h=num_heads, d=head_dim)
+    ) -> "tuple[Tensor, Tensor]":
+        """Flash attention forward pass without padding."""
+        orig_dtype = q.dtype
+        alibi_slopes = alibi_slopes.to(torch.float32) if alibi_slopes is not None else None
+        cu_seqlens_int32 = cu_seqlens.to(torch.int32)
 
-        if rotary_emb is not None:
-            qkv = rotary_emb(qkv, cu_seqlens, max_seq_len)
-
-        orig_dtype = qkv.dtype
-        qkv = qkv.to(torch.bfloat16)
-
-        x, _, w = flash_attn_varlen_qkvpacked_func(
-            qkv,
-            cu_seqlens.to(torch.int32),
+        x, _, w = flash_attn_varlen_func(
+            q.to(torch.bfloat16),
+            k.to(torch.bfloat16),
+            v.to(torch.bfloat16),
+            cu_seqlens_int32,
+            cu_seqlens_int32,
+            max_seq_len,
             max_seq_len,
             dropout_p=dropout_p,
             causal=False,
@@ -180,146 +158,107 @@ class FlashBackend(AttentionBackend):
         )
 
         x = x.to(orig_dtype)
-        x = rearrange(x, "... h d -> ... (h d)")
+        w = w.to(orig_dtype) if w is not None else None
+        x = rearrange(x, "s h d -> s (h d)")
         return x, w
 
-    def _forward_padded(self, *args, **kwargs) -> tuple[torch.Tensor, torch.Tensor | None]:  # type: ignore
-        """Flash attention does not support padded sequences."""
-        # TODO: this would be possible.
-        raise NotImplementedError("Flash attention only supports unpadded sequences")
+    def _forward_padded(
+        self,
+        q: "Tensor",
+        k: "Tensor",
+        v: "Tensor",
+        attention_mask: "Tensor",
+        dropout_p: float = 0.0,
+        deterministic: bool = False,
+    ) -> "tuple[Tensor, Tensor | None]":  # type: ignore
+        """FlashAttention backend does not support padded sequences."""
+        raise NotImplementedError
 
 
 class SDPABackend(AttentionBackend):
     """PyTorch SDPA backend - works efficiently with padded sequences."""
 
-    @property
-    def supports_unpadded(self) -> bool:
-        """Whether this backend supports unpadded sequences."""
-        return False
-
-    @property
-    def supports_padded(self) -> bool:
-        """Whether this backend supports padded sequences."""
-        return True
-
-    @property
-    def supports_alibi(self) -> bool:
-        """Whether this backend supports ALiBi positional bias."""
-        return False
-
-    @property
-    def supports_local_attention(self) -> bool:
-        """Whether this backend supports local attention."""
-        return False
-
-    @property
-    def supports_rope(self) -> bool:
-        """Whether this backend supports RoPE positional encoding."""
-        return False
-
     def _forward_padded(
         self,
-        qkv: torch.Tensor,
-        attention_mask: torch.Tensor,
-        num_heads: int,
-        head_dim: int,
-        rotary_emb: RotaryEmbedding | None = None,
-        alibi_slopes: torch.Tensor | None = None,
-        local_attention: tuple[int, int] = (-1, -1),
+        q: "Tensor",
+        k: "Tensor",
+        v: "Tensor",
+        attention_mask: "Tensor",
         dropout_p: float = 0.0,
         deterministic: bool = False,
-    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+    ) -> "tuple[Tensor, Tensor | None]":
         """SDPA forward pass with padded sequences."""
-        if rotary_emb is not None:
-            raise NotImplementedError("RoPE is not supported with SDPA backend")
-        if alibi_slopes is not None:
-            raise NotImplementedError("ALiBi is not supported with SDPA backend")
-        if local_attention != (-1, -1):
-            raise NotImplementedError("Local attention is not supported with SDPA backend")
+        num_heads = q.shape[2]
+        num_kv_heads = k.shape[2]
 
-        batch_size, seqlen, _ = qkv.shape
-        q, k, v = rearrange(qkv, "b s (t h d) -> t b h s d", t=3, h=num_heads, d=head_dim)
+        # Transpose to [b, h, s, d] for SDPA
+        q = rearrange(q, "b s h d -> b h s d")
+        k = rearrange(k, "b s h d -> b h s d")
+        v = rearrange(v, "b s h d -> b h s d")
 
-        attn_mask = _prepare_4d_attention_mask_for_sdpa(attention_mask, dtype=q.dtype, tgt_len=seqlen)
+        # Expand K/V heads if using GQA
+        if num_kv_heads < num_heads:
+            num_kv_groups = num_heads // num_kv_heads
+            k = k.repeat_interleave(num_kv_groups, dim=1)
+            v = v.repeat_interleave(num_kv_groups, dim=1)
+
         output = torch.nn.functional.scaled_dot_product_attention(
             q,
             k,
             v,
-            attn_mask=attn_mask,
+            attn_mask=attention_mask,
             dropout_p=dropout_p,
             is_causal=False,
         )
         output = rearrange(output, "b h s d -> b s (h d)")
         return output, None
 
-    def _forward_unpadded(self, *args, **kwargs) -> tuple[torch.Tensor, torch.Tensor | None]:  # type: ignore
+    def _forward_unpadded(self, *args, **kwargs):  # type: ignore
         """SDPA backend does not support unpadded sequences."""
-        raise NotImplementedError("SDPA backend only supports padded sequences")
+        raise NotImplementedError
 
 
 class EagerBackend(AttentionBackend):
     """Native PyTorch backend."""
 
-    @property
-    def supports_unpadded(self) -> bool:
-        """Whether this backend supports unpadded sequences."""
-        return False
-
-    @property
-    def supports_padded(self) -> bool:
-        """Whether this backend supports padded sequences."""
-        return True
-
-    @property
-    def supports_alibi(self) -> bool:
-        """Whether this backend supports ALiBi positional bias."""
-        return True
-
-    @property
-    def supports_local_attention(self) -> bool:
-        """Whether this backend supports local attention."""
-        return True
-
-    @property
-    def supports_rope(self) -> bool:
-        """Whether this backend supports RoPE positional encoding."""
-        return False
-
     def _forward_padded(
         self,
-        qkv: torch.Tensor,
-        attention_mask: torch.Tensor,
-        num_heads: int,
-        head_dim: int,
-        rotary_emb: RotaryEmbedding | None = None,
-        alibi_slopes: torch.Tensor | None = None,
-        local_attention: tuple[int, int] = (-1, -1),
+        q: "Tensor",
+        k: "Tensor",
+        v: "Tensor",
+        attention_mask: "Tensor",
         dropout_p: float = 0.0,
         deterministic: bool = False,
-    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+    ) -> "tuple[Tensor, Tensor | None]":
         """Eager attention forward pass with padded sequences."""
-        if rotary_emb is not None:
-            raise NotImplementedError("Eager backedn does not support RoPE positional encoding")
+        num_heads = q.shape[2]
+        num_kv_heads = k.shape[2]
+        head_dim = q.shape[3]
 
-        q, k, v = rearrange(qkv, "b s (t h d) -> t b h s d", t=3, h=num_heads, d=head_dim)
+        # Transpose to [b, h, s, d] for attention computation
+        q = rearrange(q, "b s h d -> b h s d")
+        k = rearrange(k, "b s h d -> b h s d")
+        v = rearrange(v, "b s h d -> b h s d")
+
+        # Expand K/V heads if using GQA
+        if num_kv_heads < num_heads:
+            num_kv_groups = num_heads // num_kv_heads
+            k = k.repeat_interleave(num_kv_groups, dim=1)
+            v = v.repeat_interleave(num_kv_groups, dim=1)
+
         scores = einsum(q, k, "b h i d, b h j d -> b h i j") * (head_dim**-0.5)
-        mask = (attention_mask.unsqueeze(1) & attention_mask.unsqueeze(2)).bool()
 
-        if local_attention != (-1, -1) and local_attention[0] > 0:
-            window_size = local_attention[0]
-            pos = torch.arange(qkv.shape[1], device=qkv.device)
-            local_mask = (pos.unsqueeze(0) - pos.unsqueeze(1)).abs() <= window_size
-            mask = mask & local_mask.unsqueeze(0)
+        if attention_mask.dtype == torch.bool:
+            # Regular boolean mask
+            scores = scores.masked_fill(~attention_mask, -float("inf"))
+        else:
+            # Float mask (includes ALiBi bias)
+            scores = scores + attention_mask
 
-        if alibi_slopes is not None:
-            pos = torch.arange(qkv.shape[1], device=qkv.device)
-            pos_diff = (pos.unsqueeze(0) - pos.unsqueeze(1)).abs()
-            alibi_bias = einsum(alibi_slopes, pos_diff, "h, i j -> h i j").unsqueeze(0)
-            scores = scores + alibi_bias
-
-        scores = scores.masked_fill(~mask.unsqueeze(1), -float("inf"))
         attn_weights = torch.softmax(scores, dim=-1)
-        attn_weights = attn_weights.masked_fill(~mask.unsqueeze(1), 0.0)
+
+        if attention_mask.dtype == torch.bool:
+            attn_weights = attn_weights.masked_fill(~attention_mask, 0.0)
 
         if dropout_p > 0.0:
             attn_weights = torch.nn.functional.dropout(attn_weights, p=dropout_p)
@@ -328,14 +267,42 @@ class EagerBackend(AttentionBackend):
         output = rearrange(output, "b h s d -> b s (h d)")
         return output, None
 
-    def _forward_unpadded(self, *args, **kwargs) -> tuple[torch.Tensor, torch.Tensor | None]:  # type: ignore
+    def _forward_unpadded(self, *args, **kwargs):  # type: ignore
         """Eager backend does not support unpadded sequences."""
-        raise NotImplementedError("Eager backend only supports padded sequences")
+        raise NotImplementedError
 
 
-# Registry of available backends
-ATTENTION_BACKENDS = {
-    "fa2": FlashBackend(),
-    "sdpa": SDPABackend(),
-    "eager": EagerBackend(),
-}
+def get_attention(config: "BertBlocksConfig") -> "AttentionBackend":
+    """Get the Attention backend specified in the configuration.
+
+    This factory function returns the appropriate attention backend based on
+    the configuration.
+
+    Args:
+        config (BertBlocksConfig): Configuration object determining model hyperparameters.
+
+    Returns:
+        An attention backend module.
+
+    Raises:
+        ValueError: If the specified attention backend is not supported.
+
+    Supported backends:
+
+        - `flash_attention_2`: Flash Attention
+        - `sdpa`: torch scaled dot product attention
+        - `eager`: native torch attention
+
+    """
+    match config._attn_implementation:
+        case "flash_attention_2":
+            return FlashBackend()
+        case "sdpa":
+            return SDPABackend()
+        case "eager":
+            return EagerBackend()
+        case _:
+            raise ValueError(
+                f"Unsupported _backend: {config._attn_implementation}, "
+                "expected one of 'sdpa', 'eager', 'flash_attention_2'"
+            )

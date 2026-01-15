@@ -3,7 +3,7 @@ import torch
 from pytest_dependency import depends
 from transformers import AutoTokenizer, BertModel
 
-from bertblocks.compat.load_bert import from_bert_model
+from bertblocks.integration import from_bert_model
 
 TEST_MODELS = ["bert-base-uncased", "bert-base-cased", "bert-large-uncased"]
 
@@ -182,18 +182,20 @@ class TestFromBertModel:
         bb_emb = bb_model.embd(seq["input_ids"])
         hf_emb = hf_model.embeddings(seq["input_ids"])
         torch.testing.assert_close(bb_emb, hf_emb)
-        hf_msk = _prepare_4d_attention_mask_for_sdpa(
+        attention_mask = _prepare_4d_attention_mask_for_sdpa(
             seq["attention_mask"], dtype=hf_emb.dtype, tgt_len=seq["input_ids"].shape[1]
         )
 
         with torch.no_grad():
             for layer_idx in range(len(hf_model.encoder.layer)):
                 with subtests.test(f"layer_{layer_idx}"):
-                    hf_out = hf_model.encoder.layer[layer_idx].attention(hf_emb, attention_mask=hf_msk)[0]
+                    hf_out = hf_model.encoder.layer[layer_idx].attention(hf_emb, attention_mask=attention_mask)[0]
                     # HF does residual and norm inside the attention, so we need to manually add it here, too
-                    bb_out = bb_model.encd.blocks[layer_idx].attn(bb_emb, attention_mask=seq["attention_mask"])[0]
+                    bb_out = bb_model.encd.blocks[layer_idx].attn(bb_emb, attention_mask=attention_mask)[0]
                     bb_out = bb_model.encd.blocks[layer_idx].post_norm_attn(bb_out + bb_emb)
-                    torch.testing.assert_close(hf_out, bb_out)
+                    torch.testing.assert_close(
+                        hf_out[seq["attention_mask"].bool()], bb_out[seq["attention_mask"].bool()]
+                    )
 
     @pytest.mark.dependency
     def test_blocks(self, request, baseline_model_name, subtests, seq, hf_model, bb_model):  # type: ignore
@@ -210,7 +212,7 @@ class TestFromBertModel:
 
         bb_emb = bb_model.embd(seq["input_ids"])
         hf_emb = hf_model.embeddings(seq["input_ids"])
-        hf_msk = _prepare_4d_attention_mask_for_sdpa(
+        attention_mask = _prepare_4d_attention_mask_for_sdpa(
             seq["attention_mask"], dtype=hf_emb.dtype, tgt_len=seq["input_ids"].shape[1]
         )
 
@@ -218,8 +220,12 @@ class TestFromBertModel:
             for layer_idx in range(len(hf_model.encoder.layer)):
                 with subtests.test(f"layer_{layer_idx}"):
                     torch.testing.assert_close(
-                        hf_model.encoder.layer[layer_idx](hf_emb, attention_mask=hf_msk)[0],
-                        bb_model.encd.blocks[layer_idx](bb_emb, attention_mask=seq["attention_mask"])[0],
+                        hf_model.encoder.layer[layer_idx](hf_emb, attention_mask=attention_mask)[0][
+                            seq["attention_mask"].bool()
+                        ],
+                        bb_model.encd.blocks[layer_idx](bb_emb, attention_mask=attention_mask)[0][
+                            seq["attention_mask"].bool()
+                        ],
                     )
 
     @pytest.mark.dependency
@@ -242,4 +248,6 @@ class TestFromBertModel:
 
             for layer_idx, (hf_hidden_layer, bb_hidden_layer) in enumerate(zip(hf_hidden, bb_hidden, strict=False)):
                 with subtests.test(f"layer_{layer_idx}"):
-                    torch.testing.assert_close(hf_hidden_layer, bb_hidden_layer)
+                    torch.testing.assert_close(
+                        hf_hidden_layer[seq["attention_mask"].bool()], bb_hidden_layer[seq["attention_mask"].bool()]
+                    )

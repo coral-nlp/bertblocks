@@ -1,13 +1,14 @@
+import copy
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     import torch
 
-    from bertblocks.modeling.config import BertBlocksConfig
+    from bertblocks.config import BertBlocksConfig
 
 from torch import nn
 
-from bertblocks.modeling.activations import get_actv_fn
+from bertblocks.modeling.mlp import get_mlp
 from bertblocks.modeling.norms import get_norm
 
 
@@ -31,8 +32,8 @@ class Pooler(nn.Module):
 
     def __init__(self, config: "BertBlocksConfig") -> None:
         super().__init__()
-        self.ffwd = nn.Linear(config.hidden_size, config.hidden_size)
-        self.actv = get_actv_fn(config)
+        config.mlp_type = "linear"  # Overwrite to get desired behaviour from getter functions
+        self.ffwd = get_mlp(config)
 
     def forward(self, x: "torch.Tensor") -> "torch.Tensor":
         """Forward pass of the pooling layer.
@@ -45,34 +46,31 @@ class Pooler(nn.Module):
 
         """
         x = self.ffwd(x[:, 0])
-        x = self.actv(x)
         return x
 
 
-class GLUPredictionHead(nn.Module):
-    """Prediction head with gated activation.
+class ProjectionPredictionHead(nn.Module):
+    """Prediction head with linear projection.
 
     Attributes:
         pre_norm (nn.Module): Pre-norm function. Falls back to `nn.Identity` if not configured.
-        ffwd (nn.Linear): Feed-forward projection layer, from hidden size to 2 * hidden size.
-        actv (nn.Module): Activation function.
+        ffwd (nn.Linear): Feed-forward projection layer.
         post_norm (nn.Module): Post-norm function. Falls back to `nn.Identity` if not configured.
 
     Args:
         config (BertBlocksConfig): Configuration object determining model hyperparameters. May be passed to
             other submodules. Keys used at top level:
 
-            - `hidden_size`: Dimensionality of hidden layers
-            - `actv_fn`: Activation function used in feed-forward networks
             - `norm_kind`: When to apply normalization ("pre", "post", "both", "none")
 
     """
 
     def __init__(self, config: "BertBlocksConfig"):
         super().__init__()
+        config_copy = copy.deepcopy(config)
+        config_copy.mlp_type = "linear"  # Overwrite to get desired behaviour from getter functions
         self.pre_norm = get_norm(config) if config.norm_kind in ("pre", "both") else nn.Identity()
-        self.ffwd = nn.Linear(config.hidden_size, 2 * config.hidden_size, bias=False)
-        self.actv = get_actv_fn(config)
+        self.ffwd = get_mlp(config_copy)
         self.post_norm = get_norm(config) if config.norm_kind in ("post", "both") else nn.Identity()
 
     def forward(self, x: "torch.Tensor") -> "torch.Tensor":
@@ -86,8 +84,48 @@ class GLUPredictionHead(nn.Module):
 
         """
         x = self.pre_norm(x)
-        x, gate = self.ffwd(x).chunk(2, axis=-1)
-        x = x * self.actv(gate)
+        x = self.ffwd(x)
+        x = self.post_norm(x)
+        return x
+
+
+class GLUPredictionHead(nn.Module):
+    """Prediction head with gated activation.
+
+    Attributes:
+        pre_norm (nn.Module): Pre-norm function. Falls back to `nn.Identity` if not configured.
+        ffwd (nn.Module): Feed-forward projection layer.
+        post_norm (nn.Module): Post-norm function. Falls back to `nn.Identity` if not configured.
+
+    Args:
+        config (BertBlocksConfig): Configuration object determining model hyperparameters. May be passed to
+            other submodules. Keys used at top level:
+
+            - `norm_kind`: When to apply normalization ("pre", "post", "both", "none")
+
+    """
+
+    def __init__(self, config: "BertBlocksConfig"):
+        super().__init__()
+        config_copy = copy.deepcopy(config)
+        config_copy.mlp_type = "glu"  # Overwrite to get desired behaviour from getter functions
+        # Overwrite to get desired behaviour from getter functions
+        self.pre_norm = get_norm(config) if config.norm_kind in ("pre", "both") else nn.Identity()
+        self.ffwd = get_mlp(config_copy)
+        self.post_norm = get_norm(config) if config.norm_kind in ("post", "both") else nn.Identity()
+
+    def forward(self, x: "torch.Tensor") -> "torch.Tensor":
+        """Forward pass of the prediction head.
+
+        Args:
+            x (torch.Tensor, shape [batch_size, sequence_length, hidden_size]): Padded input hidden state.
+
+        Returns:
+            torch.Tensor: Transformed hidden state, shape [batch_size, sequence_length, hidden_size].
+
+        """
+        x = self.pre_norm(x)
+        x = self.ffwd(x)
         x = self.post_norm(x)
         return x
 
@@ -97,30 +135,23 @@ class MLPPredictionHead(nn.Module):
 
     Attributes:
         pre_norm (nn.Module): Pre-norm function. Falls back to `nn.Identity` if not configured.
-        uprj (nn.Linear): MLP up projection layer, from hidden size to intermediate size.
-        actv (nn.Module): Activation function.
-        dprj (nn.Linear): MLP down projection layer, from intermediate size to hidden size.
+        ffwd (nn.Module): Feed-forward projection layer.
         post_norm (nn.Module): Post-norm function. Falls back to `nn.Identity` if not configured.
 
     Args:
         config (BertBlocksConfig): Configuration object determining model hyperparameters. May be passed to
             other submodules. Keys used at top level:
 
-                - `hidden_size`: Dimensionality of hidden layers
-                - `intermediate_size`: Dimensionality of feed-forward layers
-                - `actv_fn`: Activation function used in feed-forward networks
-                - `mlp_in_bias`: Whether to include bias in input projection of MLP layers
-                - `mlp_out_bias`: Whether to include bias in output projection of MLP layers
                 - `norm_kind`: When to apply normalization ("pre", "post", "both", "none")
 
     """
 
     def __init__(self, config: "BertBlocksConfig"):
         super().__init__()
+        config_copy = copy.deepcopy(config)
+        config_copy.mlp_type = "mlp"  # Overwrite to get desired behaviour from getter functions
         self.pre_norm = get_norm(config) if config.norm_kind in ("pre", "both") else nn.Identity()
-        self.uprj = nn.Linear(config.hidden_size, config.intermediate_size, bias=config.mlp_in_bias)
-        self.actv = get_actv_fn(config)
-        self.dprj = nn.Linear(config.intermediate_size, config.hidden_size, bias=config.mlp_out_bias)
+        self.ffwd = get_mlp(config_copy)
         self.post_norm = get_norm(config) if config.norm_kind in ("post", "both") else nn.Identity()
 
     def forward(self, x: "torch.Tensor") -> "torch.Tensor":
@@ -134,9 +165,7 @@ class MLPPredictionHead(nn.Module):
 
         """
         x = self.pre_norm(x)
-        x = self.uprj(x)
-        x = self.actv(x)
-        x = self.dprj(x)
+        x = self.ffwd(x)
         x = self.post_norm(x)
         return x
 
@@ -158,19 +187,21 @@ def get_prediction_head(config: "BertBlocksConfig") -> nn.Module:
 
     Supported prediction head types:
 
+        - `proj`: Projection prediction head.
         - `mlp`: Standard two-layer feedforward network
         - `glu`: Gated Linear Unit
 
     """
-    mlp_type = getattr(config, "mlp_type", "mlp")  # Default to mlp for backward compatibility
+    match config.head_type:
+        case "proj":
+            return ProjectionPredictionHead(config)
+        case "mlp":
+            return MLPPredictionHead(config)
+        case "glu":
+            return GLUPredictionHead(config)
+        case _:
+            supported_types = ["proj", "mlp", "glu"]
+            raise ValueError(f"Unknown head type '{config.head_type}'. Supported types: {', '.join(supported_types)}")
 
-    if mlp_type == "mlp":
-        return MLPPredictionHead(config)
-    elif mlp_type == "glu":
-        return GLUPredictionHead(config)
-    else:
-        supported_types = ["mlp", "glu"]
-        raise ValueError(f"Unknown MLP type '{mlp_type}'. Supported types: {', '.join(supported_types)}")
 
-
-__all__ = ["get_prediction_head", "MLPPredictionHead", "GLUPredictionHead", "Pooler"]
+__all__ = ["GLUPredictionHead", "MLPPredictionHead", "Pooler", "ProjectionPredictionHead", "get_prediction_head"]

@@ -10,14 +10,12 @@ from torch.nn.modules.activation import (
     SiLU,
 )
 
-from bertblocks.modeling.config import BertBlocksConfig
 
-
-def get_actv_fn(config: "BertBlocksConfig") -> "nn.Module":
+def get_actv_fn(actv_fn: str) -> "nn.Module":
     """Get the activation function specified in the configuration.
 
     Args:
-        config (BertBlocksConfig): Configuration object determining model hyperparameters.
+        actv_fn (str): Kind of activation function.
 
     Returns:
         nn.Module: An activation function module that can be called on tensors.
@@ -37,7 +35,7 @@ def get_actv_fn(config: "BertBlocksConfig") -> "nn.Module":
         - `prelu`: Parametric Rectified Linear Unit
 
     """
-    match config.actv_fn:
+    match actv_fn:
         case "relu":
             return ReLU()
         case "silu":
@@ -55,7 +53,10 @@ def get_actv_fn(config: "BertBlocksConfig") -> "nn.Module":
         case "prelu":
             return PReLU()
         case _:
-            raise ValueError(f"Unknown activation function {config.actv_fn}")
+            supported_actv_fn = ["relu", "silu", "gelu", "leakyrelu", "selu", "logsigmoid", "sigmoid", "prelu"]
+            raise ValueError(
+                f"Unknown activation function {actv_fn}", f"Supported activation functions: {supported_actv_fn}"
+            )
 
 
 __all__ = ["get_actv_fn"]

@@ -8,7 +8,7 @@ from torch.nn.modules.normalization import (
     RMSNorm,
 )
 
-from bertblocks.modeling.config import BertBlocksConfig
+from bertblocks.config import BertBlocksConfig
 
 
 class DynamicTanhNorm(nn.Module):
@@ -86,6 +86,7 @@ def get_norm(config: "BertBlocksConfig") -> "nn.Module":
 
     Args:
         config (BertBlocksConfig): Configuration object determining model hyperparameters.
+        layer_id (int, optional): Layer ID to index into per-layer config definitions. Unused for scalar config values.
 
     Returns:
         A normalization module (nn.Module) that can normalize tensors.
@@ -105,7 +106,8 @@ def get_norm(config: "BertBlocksConfig") -> "nn.Module":
     match config.norm_fn:
         case "group":
             try:
-                return GroupNorm(config.norm_params["group_size"], config.hidden_size, config.norm_eps)
+                group_size = config.norm_params["group_size"]
+                return GroupNorm(group_size, config.hidden_size, config.norm_eps)
             except KeyError:
                 raise ValueError("When using GroupNorm, `group_size` must be specified in `config.norm_params`.")
         case "layer":
@@ -114,12 +116,14 @@ def get_norm(config: "BertBlocksConfig") -> "nn.Module":
             return RMSNorm(config.hidden_size, config.norm_eps)
         case "deep":
             try:
-                return DeepNorm(config.norm_params["alpha"], config.hidden_size, config.norm_eps)
+                alpha = config.norm_params["alpha"]
+                return DeepNorm(alpha, config.hidden_size, config.norm_eps)
             except KeyError:
                 raise ValueError("When using DeepNorm, `alpha` must be specified in `config.norm_params`.")
         case "dynamictanh":
             try:
-                return DynamicTanhNorm(config.norm_params["alpha"], config.hidden_size)
+                alpha = config.norm_params["alpha"]
+                return DynamicTanhNorm(alpha, config.hidden_size)
             except KeyError:
                 raise ValueError("When using DynamicTanhNorm, `alpha` must be specified in `config.norm_params`.")
         case _:
