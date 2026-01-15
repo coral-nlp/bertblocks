@@ -1,15 +1,9 @@
-import logging
 from typing import Literal
 
 import datasets
-import lightning as L
-import pandas as pd
 import torchmetrics
-from tqdm import tqdm
 
 from bertblocks.benchmarks.base import TaskModule
-
-logging.getLogger("lightning.pytorch.utilities.rank_zero").setLevel(logging.FATAL)
 
 
 class SuperGLEBerTaskModule(TaskModule):
@@ -513,84 +507,7 @@ TASK_MODULES = [
     UPPos,
     MassiveSeq,
     GermevalOpinions,
-    ## PAWSX,
+    PAWSX,
     MLQA,
     GermanQuad,
 ]
-
-
-def run_eval(
-    pretrained_model_name_or_path: str,
-    max_seq_length: int = 512,
-    max_epochs: int = 10,
-    learning_rate: float = 1e-5,
-    weight_decay: float = 1e-6,
-    train_batch_size: int = 128,
-    eval_batch_size: int = 128,
-) -> pd.DataFrame:
-    """Run the evaluation experiment."""
-    results = []
-    pbar = tqdm(total=len(TASK_MODULES))
-    for task_cls in TASK_MODULES:
-        pbar.set_description(task_cls.__name__)
-        trainer = L.Trainer(
-            logger=False,
-            max_epochs=max_epochs,
-            num_sanity_val_steps=0,
-            enable_checkpointing=False,
-            enable_model_summary=False,
-            enable_progress_bar=False,
-        )
-        task = task_cls(
-            pretrained_model_name_or_path=pretrained_model_name_or_path,
-            pretrained_tokenizer_name_or_path="bert-base-uncased",
-            max_seq_length=max_seq_length,
-            learning_rate=learning_rate,
-            weight_decay=weight_decay,
-            train_batch_size=train_batch_size,
-            eval_batch_size=eval_batch_size,
-        )
-        trainer.fit(task)
-        metrics = trainer.test(task)
-        for k, v in metrics[0].items():
-            results.append(
-                {
-                    "Name": task.task_name,
-                    "Group": task.task_group,
-                    "Type": task.task_type,
-                    "Metric": k,
-                    "Score": v,
-                }
-            )
-        del trainer
-        del task
-        pbar.update(1)
-    return pd.DataFrame(results)
-
-
-if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser(description="SuperGLEBer Benchmark")
-    parser.add_argument("model", type=str, help="Name or path of pretrained model")
-    parser.add_argument("--max_seq_len", "-ms", type=int, required=False, help="Maximum sequence length", default=512)
-    parser.add_argument("--max_epochs", "-me", type=int, required=False, help="Maximum train epochs", default=10)
-    parser.add_argument("--learning_rate", "-lr", type=float, required=False, help="Learning rate", default=1e-5)
-    parser.add_argument("--weight_decay", "-wd", type=float, required=False, help="Weight decay", default=1e-6)
-    parser.add_argument("--train_batch_size", "-bt", type=int, required=False, help="Batch size", default=128)
-    parser.add_argument("--eval_batch_size", "-be", type=int, required=False, help="Batch size", default=128)
-    parser.add_argument("--output", "-o", type=str, required=False, help="Output path", default=None)
-
-    args = parser.parse_args()
-    df = run_eval(
-        args.model,
-        args.max_seq_len,
-        args.max_epochs,
-        args.learning_rate,
-        args.weight_decay,
-        args.train_batch_size,
-        args.eval_batch_size,
-    )
-    print(df)
-    if args.output is not None:
-        df.to_csv(args.output, index=False)
