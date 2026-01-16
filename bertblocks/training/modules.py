@@ -418,7 +418,9 @@ class BertBlocksPretrainingModule(L.LightningModule):
         # Patch model config with tokenizer info if given
         if self.hparams.pretrained_tokenizer_name_or_path is not None:
             tokenizer = AutoTokenizer.from_pretrained(self.hparams.pretrained_tokenizer_name_or_path)
-            self.model_config.vocab_size = tokenizer._tokenizer.get_vocab_size(with_added_tokens=True)  # tokenizer.vocab_size
+            self.model_config.vocab_size = tokenizer._tokenizer.get_vocab_size(
+                with_added_tokens=True
+            )  # tokenizer.vocab_size
             self.pad_token_id = tokenizer.pad_token_id
             self.model_config.pad_token_id = tokenizer.pad_token_id
             self.mask_token_id = tokenizer.mask_token_id
