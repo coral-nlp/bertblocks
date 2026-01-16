@@ -64,11 +64,12 @@ class SequenceClassificationCollator:
         if self.multi_labels is None:
             out["labels"] = torch.LongTensor([item[self.label_column] for item in batch])
         else:
-            labels = np.zeros(shape=(len(batch), self.multi_labels), dtype=np.int64)
+            # Multi-label: BCE loss expects float labels
+            labels = np.zeros(shape=(len(batch), self.multi_labels), dtype=np.float32)
             for i, item in enumerate(batch):
                 for j in item[self.label_column]:
                     labels[i, j] = 1
-            out["labels"] = torch.LongTensor(labels)
+            out["labels"] = torch.FloatTensor(labels)
         return {k: v for k, v in out.items() if k in ["input_ids", "attention_mask", "labels"]}
 
 

@@ -125,8 +125,8 @@ class HotelAspect(SuperGLEBerTaskModule):
     task_type = "classification"
     text_column = "text"
     label_column = "labels"
-    metric = torchmetrics.F1Score(task="multiclass", average="micro", num_classes=14)
-    num_classes = 14
+    metric = torchmetrics.F1Score(task="multiclass", average="micro", num_classes=15)
+    num_classes = 15
 
 
 class MassiveIntents(SuperGLEBerTaskModule):

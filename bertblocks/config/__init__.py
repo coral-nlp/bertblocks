@@ -279,15 +279,12 @@ class BertBlocksConfig(PretrainedConfig):
 
         # Dependent parameters
         self._unpadding = self._attn_implementation == "flash_attention_2"
-        rope_dim = self.block_pos_enc_kwargs["rope_dim"] \
-            if "rope_dim" in self.block_pos_enc_kwargs \
+        rope_dim = (
+            self.block_pos_enc_kwargs["rope_dim"]
+            if "rope_dim" in self.block_pos_enc_kwargs
             else self.hidden_size // self.num_attention_heads
-        self.block_pos_enc_kwargs.update(
-            {
-                "rope_dim": rope_dim,
-                "max_seq_len": self.max_sequence_length
-            }
         )
+        self.block_pos_enc_kwargs.update({"rope_dim": rope_dim, "max_seq_len": self.max_sequence_length})
 
     @staticmethod
     def _validate(
@@ -364,7 +361,7 @@ class BertBlocksConfig(PretrainedConfig):
 
         if attention_gate not in [None, "elementwise", "headwise"]:
             raise ValueError(
-                f'invalid attention_gate: expected one of ["elementwise", "headwise"] or None, ' f"got {attention_gate}"
+                f'invalid attention_gate: expected one of ["elementwise", "headwise"] or None, got {attention_gate}'
             )
 
         if not 0.0 <= hidden_dropout_prob <= 1.0:
