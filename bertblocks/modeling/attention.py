@@ -70,6 +70,10 @@ class Attention(nn.Module):
         # Private inits
         self._rotary_enc = self._get_rope(config, layer_id=layer_id)
         self._backend = get_attention(config)
+        if config.block_pos_enc_kind == "alibi":
+            self.register_buffer("_slopes", AlibiPositionalEncoding.get_slopes(self.num_heads))
+        else:
+            self._slopes = None
 
     def _get_rope(self, config: "BertBlocksConfig", layer_id: int) -> "RotaryPositionalEncoding | None":
         """Initialize rotary positional encoding if needed.
@@ -120,12 +124,14 @@ class Attention(nn.Module):
 
         if qkv.dim() == 2:  # Unpadded: [s, qkv_dim]
             q = rearrange(qkv[..., :q_dim], "s (h d) -> s h d", h=self.num_heads, d=self.head_dim)
-            k = rearrange(qkv[..., q_dim:q_dim + kv_dim], "s (h d) -> s h d", h=self.num_kv_heads, d=self.head_dim)
-            v = rearrange(qkv[..., q_dim + kv_dim:], "s (h d) -> s h d", h=self.num_kv_heads, d=self.head_dim)
+            k = rearrange(qkv[..., q_dim : q_dim + kv_dim], "s (h d) -> s h d", h=self.num_kv_heads, d=self.head_dim)
+            v = rearrange(qkv[..., q_dim + kv_dim :], "s (h d) -> s h d", h=self.num_kv_heads, d=self.head_dim)
         else:  # Padded: [b, s, qkv_dim]
             q = rearrange(qkv[..., :q_dim], "b s (h d) -> b s h d", h=self.num_heads, d=self.head_dim)
-            k = rearrange(qkv[..., q_dim:q_dim + kv_dim], "b s (h d) -> b s h d", h=self.num_kv_heads, d=self.head_dim)
-            v = rearrange(qkv[..., q_dim + kv_dim:], "b s (h d) -> b s h d", h=self.num_kv_heads, d=self.head_dim)
+            k = rearrange(
+                qkv[..., q_dim : q_dim + kv_dim], "b s (h d) -> b s h d", h=self.num_kv_heads, d=self.head_dim
+            )
+            v = rearrange(qkv[..., q_dim + kv_dim :], "b s (h d) -> b s h d", h=self.num_kv_heads, d=self.head_dim)
 
         return q, k, v
 
@@ -185,7 +191,7 @@ class Attention(nn.Module):
                 v,
                 cu_seqlens,
                 max_seq_len,
-                alibi_slopes=AlibiPositionalEncoding.get_slopes(self.num_heads, device=q.device),
+                alibi_slopes=self._slopes,
                 local_attention=self.local_attention,
                 dropout_p=self.dropout_p if self.training else 0.0,
                 deterministic=self.deterministic,

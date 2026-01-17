@@ -171,9 +171,7 @@ class BertBlocksModel(BertBlocksPreTrainedModel):
         self.post_init()
         self.local_attention = config.local_attention
         self.alibi = (
-            AlibiPositionalEncoding(config.num_attention_heads, device="cpu")
-            if config.block_pos_enc_kind == "alibi"
-            else None
+            AlibiPositionalEncoding(config.num_attention_heads) if config.block_pos_enc_kind == "alibi" else None
         )
 
     @property
