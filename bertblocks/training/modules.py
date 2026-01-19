@@ -142,6 +142,12 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
                 streaming=not self.hparams.shuffle,  # We can't stream if we're shuffling
             )
 
+        if self.trainer.world_size > 1:
+            self.dataset = self.dataset.shard(
+                num_shards=self.trainer.world_size,
+                index=self.trainer.global_rank
+            )
+
         if self.hparams.split_char or self.hparams.split_len:
             self.dataset.map(
                 functools.partial(
