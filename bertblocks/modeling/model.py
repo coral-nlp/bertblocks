@@ -4,6 +4,7 @@ from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
 from einops import rearrange, repeat
+from transformers import GenerationMixin
 
 from bertblocks.modeling.norms import get_norm
 from bertblocks.modeling.scale import LayerScaler
@@ -763,7 +764,7 @@ class BertBlocksForQuestionAnswering(BertBlocksForTasksBase):
         )
 
 
-class BertBlocksForMaskedDiffusion(BertBlocksForMaskedLM):
+class BertBlocksForMaskedDiffusion(BertBlocksForMaskedLM, GenerationMixin):
     """Implementation of a masked diffusion model.
 
     Closely follows https://github.com/kuleshov-group/mdlm
@@ -832,10 +833,11 @@ class BertBlocksForMaskedDiffusion(BertBlocksForMaskedLM):
             # Binary mask indicating masked tokens in batch
             mask = input_ids == self.mask_token_id
             # Compute cross entropy between predictions and labels
-            loss = F.cross_entropy(logits.view(-1, self.config.vocab_size), labels.view(-1), reduction="none")
-            loss = loss.view(labels.shape)
-            # Average over masked token positions
-            loss = loss[mask].sum() / mask.sum()
+            loss = F.cross_entropy(logits.view(-1, self.config.vocab_size), labels.view(-1), reduction="none").view(
+                labels.shape
+            )
+            # Average over masked token positions; avoid div by 0
+            loss = (loss * mask).sum() / mask.sum().clamp(min=1)
         else:
             logits = output.logits
             loss = None
