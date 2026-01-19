@@ -828,18 +828,20 @@ class BertBlocksForMaskedDiffusion(BertBlocksForMaskedLM, GenerationMixin):
         )
 
         if labels is not None:
+            # Binary mask indicating unmasked tokens in batch (that should not contribute to the loss)
+            masked_labels = labels.clone()
+            masked_labels[input_ids != self.mask_token_id] = -100
+            # Compute loss
+            logits = output.logits.clone()
+            loss = F.cross_entropy(
+                output.logits.view(-1, self.config.vocab_size),
+                masked_labels.view(-1),
+                ignore_index=-100,
+                reduction="mean",
+            )
+        else:
             # Remove the possibility of predicting a mask token
             logits = self._process_logits(input_ids=input_ids, logits=output.logits)
-            # Binary mask indicating masked tokens in batch
-            mask = input_ids == self.mask_token_id
-            # Compute cross entropy between predictions and labels
-            loss = F.cross_entropy(logits.view(-1, self.config.vocab_size), labels.view(-1), reduction="none").view(
-                labels.shape
-            )
-            # Average over masked token positions; avoid div by 0
-            loss = (loss * mask).sum() / mask.sum().clamp(min=1)
-        else:
-            logits = output.logits
             loss = None
 
         return MaskedLMOutput(
