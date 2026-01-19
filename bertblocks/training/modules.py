@@ -501,8 +501,6 @@ class BertBlocksPretrainingModule(L.LightningModule):
             torch.Tensor: MLM loss for backpropagation.
 
         """
-        if self.hparams.compile_model:
-            torch.compiler.cudagraph_mark_step_begin()
         output = self.model(**batch)
         self.log("loss/train", output.loss, prog_bar=True)
         return output.loss

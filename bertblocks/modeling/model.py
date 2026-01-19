@@ -4,6 +4,7 @@ from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
 from einops import rearrange, repeat
+from transformers import GenerationMixin
 
 from bertblocks.modeling.norms import get_norm
 from bertblocks.modeling.scale import LayerScaler
@@ -171,9 +172,7 @@ class BertBlocksModel(BertBlocksPreTrainedModel):
         self.post_init()
         self.local_attention = config.local_attention
         self.alibi = (
-            AlibiPositionalEncoding(config.num_attention_heads, device="cpu")
-            if config.block_pos_enc_kind == "alibi"
-            else None
+            AlibiPositionalEncoding(config.num_attention_heads) if config.block_pos_enc_kind == "alibi" else None
         )
 
     @property
@@ -765,7 +764,7 @@ class BertBlocksForQuestionAnswering(BertBlocksForTasksBase):
         )
 
 
-class BertBlocksForMaskedDiffusion(BertBlocksForMaskedLM):
+class BertBlocksForMaskedDiffusion(BertBlocksForMaskedLM, GenerationMixin):
     """Implementation of a masked diffusion model.
 
     Closely follows https://github.com/kuleshov-group/mdlm
@@ -829,17 +828,20 @@ class BertBlocksForMaskedDiffusion(BertBlocksForMaskedLM):
         )
 
         if labels is not None:
+            # Binary mask indicating unmasked tokens in batch (that should not contribute to the loss)
+            masked_labels = labels.clone()
+            masked_labels[input_ids != self.mask_token_id] = -100
+            # Compute loss
+            logits = output.logits.clone()
+            loss = F.cross_entropy(
+                output.logits.view(-1, self.config.vocab_size),
+                masked_labels.view(-1),
+                ignore_index=-100,
+                reduction="mean",
+            )
+        else:
             # Remove the possibility of predicting a mask token
             logits = self._process_logits(input_ids=input_ids, logits=output.logits)
-            # Binary mask indicating masked tokens in batch
-            mask = input_ids == self.mask_token_id
-            # Compute cross entropy between predictions and labels
-            loss = F.cross_entropy(logits.view(-1, self.config.vocab_size), labels.view(-1), reduction="none")
-            loss = loss.view(labels.shape)
-            # Average over masked token positions
-            loss = loss[mask].sum() / mask.sum()
-        else:
-            logits = output.logits
             loss = None
 
         return MaskedLMOutput(
