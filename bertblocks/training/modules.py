@@ -375,7 +375,7 @@ class BertBlocksPretrainingModule(L.LightningModule):
         scheduler_training_kind: Literal["constant", "linear", "cosine", "exponential"] = "constant",
         scheduler_training_steps: int = -1,
         scheduler_training_decay: float = 1.0,
-        scheduler_cooldown_kind: Literal["constant", "linear", "cosine", "exponential"] = "linear",
+        scheduler_cooldown_kind: Literal["constant", "linear", "inverse-sqrt", "cosine", "exponential"] = "linear",
         scheduler_cooldown_steps: int = 0,
         scheduler_cooldown_decay: float = 0.0,
         objective: Literal["mlm", "enhanced_mlm", "diffusion"] = "mlm",
@@ -405,7 +405,7 @@ class BertBlocksPretrainingModule(L.LightningModule):
                 phase forever).
             scheduler_training_decay (float, optional): Decay value for phase. Usage depends on scheduler kind chosen
                 for training phase. Defaults to 1 (no decay with constant kind).
-            scheduler_cooldown_kind (Literal["constant", "linear", "exponential", "cosine"], optional): scheduler kind
+            scheduler_cooldown_kind (Literal["constant", "linear", "inverse-sqrt", "exponential", "cosine"], optional): scheduler kind
                 for the cooldown phase. Defaults to "constant".
             scheduler_cooldown_steps (int, optional): Number of steps in cooldown phase. Defaults to 0 (no cooldown).
             scheduler_cooldown_decay (float, optional): Decay value for phase. Usage depends on scheduler kind chosen
