@@ -145,7 +145,7 @@ class SinusoidalPositionalEncoding(nn.Module):
         """
         if cu_seqlens is not None:
             # Unpadded sequence format - create position IDs for each sequence
-            total_seq_len = cu_seqlens[-1].item()
+            total_seq_len = cu_seqlens[-1]
             seq_ids = torch.zeros(total_seq_len, device=cu_seqlens.device, dtype=cu_seqlens.dtype)
             seq_ids[cu_seqlens[1:-1]] = 1
             seq_ids = seq_ids.cumsum(dim=0)
@@ -176,7 +176,7 @@ class LearnedPositionalEncoding(nn.Module):
 
     @staticmethod
     def _get_position_ids_from_cu_seqlens(cu_seqlens: "torch.Tensor") -> "torch.Tensor":
-        total_seq_len = cu_seqlens[-1].item()
+        total_seq_len = cu_seqlens[-1]
         # Tensor with sequence ids for each position
         seq_ids = torch.zeros(total_seq_len, device=cu_seqlens.device, dtype=cu_seqlens.dtype)
         seq_ids[cu_seqlens[1:-1]] = 1

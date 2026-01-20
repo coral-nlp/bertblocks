@@ -860,7 +860,7 @@ class BertBlocksForMaskedDiffusion(BertBlocksForMaskedLM, GenerationMixin):
         Returns:
             torch.Tensor, shape [*batch_dims]: Fully masked tensor.
         """
-        return self.mask_token_id * torch.ones(*batch_dims, dtype=torch.int64)
+        return torch.full(batch_dims, self.mask_token_id, dtype=torch.int64, device=self.device)
 
     def _sample_categorical(self, categorical_probs: torch.Tensor) -> torch.Tensor:
         """Sample from categorical distribution using Gumbel-max trick.
@@ -926,7 +926,7 @@ class BertBlocksForMaskedDiffusion(BertBlocksForMaskedLM, GenerationMixin):
         # Initialize sequence
         if input_ids is None:
             # Unconditional generation: start from all MASK tokens
-            x, prefix_mask = self._prior((num_samples, target_length)).to(self.device), None
+            x, prefix_mask = self._prior((num_samples, target_length)), None
         else:
             # Conditional generation: use provided prefix
             x, prefix_mask = self.prepare_inputs_for_generation(attention_mask, input_ids, target_length)
@@ -981,7 +981,7 @@ class BertBlocksForMaskedDiffusion(BertBlocksForMaskedLM, GenerationMixin):
         if seq_len < target_length:
             # Extend to target length if needed
             # Pad input_ids with MASK tokens
-            padding = self._prior((batch_size, target_length - seq_len)).to(self.device)
+            padding = self._prior((batch_size, target_length - seq_len))
             x = torch.cat([input_ids, padding], dim=1)
             # Extend prefix_mask with False (denoise padded positions)
             mask_padding = torch.zeros(batch_size, target_length - seq_len, dtype=torch.bool, device=self.device)

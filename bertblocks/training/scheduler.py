@@ -3,18 +3,18 @@ from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
     from torch.optim import Optimizer
-    from torch.optim.lr_scheduler import LRScheduler, LambdaLR
+    from torch.optim.lr_scheduler import LambdaLR, LRScheduler
 
 import torch
-from torch.optim.lr_scheduler import ConstantLR, CosineAnnealingLR, ExponentialLR, LinearLR, LambdaLR
+from torch.optim.lr_scheduler import ConstantLR, CosineAnnealingLR, ExponentialLR, LambdaLR, LinearLR
 
 
 class InverseSqrtScheduler(LambdaLR):
-    """A scheduler that applies inverse sqrt scaling as a function of the steps ("1-sqrt cooldown").
-    Learning rate is scaled (down) `1 - sqrt(current_step/total_steps)`.
+    """A scheduler that applies inverse sqrt scaling.
 
-    This scheduler is intended for cooldown phases. It has been reported to be superior to linear cooldown and
-    is presented as an alternative to cosine decay.
+     Scaling is a function of the steps ("1-sqrt cooldown"), where learning rate is scaled (down)
+     `1 - sqrt(current_step/total_steps)`. This scheduler is intended for cooldown phases. It has been reported to be
+     superior to linear cooldown and is presented as an alternative to cosine decay.
 
     Args:
         optimizer: The optimizer to use.
@@ -26,12 +26,14 @@ class InverseSqrtScheduler(LambdaLR):
         - Scaling Laws and Compute-Optimal Training Beyond Fixed Training Durations
           (https://arxiv.org/abs/2405.18392)
     """
-    def __init__(self, optimizer, cooldown_steps, last_epoch=-1):
+
+    def __init__(self, optimizer: "torch.optim.Optimizer", cooldown_steps: int, last_epoch: int = -1) -> None:
         super().__init__(optimizer, self.lr_lambda, last_epoch=last_epoch)
 
         self.cooldown_steps = cooldown_steps
 
-    def lr_lambda(self, current_step):
+    def lr_lambda(self, current_step: int) -> float:
+        """Adjust the learning rate based on cooldown steps."""
         if current_step == 0:
             return 1.0
 
@@ -84,10 +86,7 @@ def get_scheduler(
     schedulers.append(get_single_scheduler(optimizer, training_kind, training_steps, training_decay))
 
     if cooldown_steps > 0:
-        schedulers.append(get_single_scheduler(optimizer,
-                                               cooldown_kind,
-                                               cooldown_steps,
-                                               cooldown_decay))
+        schedulers.append(get_single_scheduler(optimizer, cooldown_kind, cooldown_steps, cooldown_decay))
         milestones.append(warmup_steps + training_steps)
 
     return torch.optim.lr_scheduler.SequentialLR(
@@ -115,7 +114,6 @@ def get_single_scheduler(
     Returns:
         The specified scheduler.
     """
-
     match kind:
         case "constant":
             return ConstantLR(optimizer, factor=decay, total_iters=num_steps)
