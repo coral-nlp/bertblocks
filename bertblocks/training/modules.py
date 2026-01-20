@@ -143,10 +143,7 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
             )
 
         if self.trainer.world_size > 1:
-            self.dataset = self.dataset.shard(
-                num_shards=self.trainer.world_size,
-                index=self.trainer.global_rank
-            )
+            self.dataset = self.dataset.shard(num_shards=self.trainer.world_size, index=self.trainer.global_rank)
 
         if self.hparams.split_char or self.hparams.split_len:
             self.dataset.map(
@@ -379,6 +376,7 @@ class BertBlocksPretrainingModule(L.LightningModule):
         scheduler_cooldown_steps: int = 0,
         scheduler_cooldown_decay: float = 0.0,
         objective: Literal["mlm", "enhanced_mlm", "diffusion"] = "mlm",
+        gradient_checkpointing: bool = False,
         model_config_kwargs: "dict[str, Any] | None" = None,
         model_kwargs: "dict[str, Any] | None" = None,
     ):
@@ -405,13 +403,15 @@ class BertBlocksPretrainingModule(L.LightningModule):
                 phase forever).
             scheduler_training_decay (float, optional): Decay value for phase. Usage depends on scheduler kind chosen
                 for training phase. Defaults to 1 (no decay with constant kind).
-            scheduler_cooldown_kind (Literal["constant", "linear", "inverse-sqrt", "exponential", "cosine"], optional): scheduler kind
-                for the cooldown phase. Defaults to "constant".
+            scheduler_cooldown_kind (Literal["constant", "linear", "inverse-sqrt", "exponential", "cosine"], optional):
+                scheduler kind for the cooldown phase. Defaults to "constant".
             scheduler_cooldown_steps (int, optional): Number of steps in cooldown phase. Defaults to 0 (no cooldown).
             scheduler_cooldown_decay (float, optional): Decay value for phase. Usage depends on scheduler kind chosen
                 for cooldown phase. Defaults to 0.0.
             objective: The training objective. Available options:
                 "mlm", "diffusion", "enhanced_mlm".
+            gradient_checkpointing (bool, optional): Whether to enable gradient checkpointing to reduce
+                activation memory at the cost of additional compute. Defaults to False.
             model_config_kwargs (dict[str, Any], optional): Optional dictionary of model configuration options passed
                 to BertBlocksConfig for instantiation.
             model_kwargs (dict[str, Any], optional): Optional dictionary of model-specific and objective-specific
@@ -436,6 +436,8 @@ class BertBlocksPretrainingModule(L.LightningModule):
             self.model_config.pad_token_id = 0
             self.mask_token_id = 0
         self.model = get_model_cls(objective)(self.model_config, **(model_kwargs or {}))
+        if self.hparams.gradient_checkpointing:
+            self.model.gradient_checkpointing_enable()
         if self.hparams.compile_model:
             torch.set_float32_matmul_precision("high")
             torch._dynamo.config.capture_dynamic_output_shape_ops = True
@@ -558,6 +560,7 @@ class BertBlocksFinetuningModule(L.LightningModule):
         scheduler_kwargs: dict[str, Any] | None = None,
         warmup_steps: int = 0,
         warmup_ratio: float = 0.0,
+        gradient_checkpointing: bool = False,
     ):
         """Initialize the BertBlocks finetuning module.
 
@@ -574,6 +577,8 @@ class BertBlocksFinetuningModule(L.LightningModule):
             scheduler_kwargs: Additional scheduler arguments.
             warmup_steps: Number of warmup steps (overrides warmup_ratio).
             warmup_ratio: Ratio of total steps to use for warmup.
+            gradient_checkpointing: Whether to enable gradient checkpointing to reduce
+                activation memory at the cost of additional compute.
         """
         super().__init__()
         self.save_hyperparameters()
@@ -594,6 +599,9 @@ class BertBlocksFinetuningModule(L.LightningModule):
         metric_dict = get_metrics_for_task(task, num_labels if num_labels is not None else 2)
         self.val_metrics = torchmetrics.MetricCollection(metric_dict, prefix="val/")
         self.test_metrics = self.val_metrics.clone(prefix="test/")
+
+        if gradient_checkpointing:
+            self.model.gradient_checkpointing_enable()
 
         if compile_model:
             torch.set_float32_matmul_precision("high")

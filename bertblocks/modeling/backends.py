@@ -9,7 +9,7 @@ if TYPE_CHECKING:
     from torch import Tensor
 
 import torch
-from einops import einsum, rearrange
+from einops import einsum, rearrange, repeat
 from transformers.modeling_utils import is_flash_attn_2_available
 
 if is_flash_attn_2_available():
@@ -45,7 +45,8 @@ class AttentionBackend(ABC):
             deterministic (bool): Whether to use deterministic attention.
 
         Returns:
-            tuple[Tensor, Tensor | None]: Output tensor [total_seq_len, num_heads * head_dim] and optional attention weights.
+            tuple[Tensor, Tensor | None]: Output tensor [total_seq_len, num_heads * head_dim] and optional attention
+                weights.
         """
         return self._forward_unpadded(
             q=q,
@@ -79,7 +80,8 @@ class AttentionBackend(ABC):
             deterministic (bool): Whether to use deterministic attention.
 
         Returns:
-            tuple[Tensor, Tensor | None]: Output tensor [batch_size, seq_len, num_heads * head_dim] and optional attention weights.
+            tuple[Tensor, Tensor | None]: Output tensor [batch_size, seq_len, num_heads * head_dim] and optional
+                attention weights.
         """
         return self._forward_padded(
             q=q,
@@ -137,15 +139,19 @@ class FlashBackend(AttentionBackend):
     ) -> "tuple[Tensor, Tensor]":
         """Flash attention forward pass without padding."""
         orig_dtype = q.dtype
-        alibi_slopes = alibi_slopes.to(torch.float32) if alibi_slopes is not None else None
-        cu_seqlens_int32 = cu_seqlens.to(torch.int32)
+        needs_cast = orig_dtype not in (torch.float16, torch.bfloat16)
+
+        if alibi_slopes is not None and alibi_slopes.dtype != torch.float32:
+            alibi_slopes = alibi_slopes.to(torch.float32)
+        if cu_seqlens.dtype != torch.int32:
+            cu_seqlens = cu_seqlens.to(torch.int32)
 
         x, _, w = flash_attn_varlen_func(
-            q.to(torch.bfloat16),
-            k.to(torch.bfloat16),
-            v.to(torch.bfloat16),
-            cu_seqlens_int32,
-            cu_seqlens_int32,
+            q.to(torch.bfloat16) if needs_cast else q,
+            k.to(torch.bfloat16) if needs_cast else k,
+            v.to(torch.bfloat16) if needs_cast else v,
+            cu_seqlens,
+            cu_seqlens,
             max_seq_len,
             max_seq_len,
             dropout_p=dropout_p,
@@ -157,8 +163,9 @@ class FlashBackend(AttentionBackend):
             return_attn_probs=True,
         )
 
-        x = x.to(orig_dtype)
-        w = w.to(orig_dtype) if w is not None else None
+        if needs_cast:
+            x = x.to(orig_dtype)
+            w = w.to(orig_dtype) if w is not None else None
         x = rearrange(x, "s h d -> s (h d)")
         return x, w
 
@@ -199,8 +206,8 @@ class SDPABackend(AttentionBackend):
         # Expand K/V heads if using GQA
         if num_kv_heads < num_heads:
             num_kv_groups = num_heads // num_kv_heads
-            k = k.repeat_interleave(num_kv_groups, dim=1)
-            v = v.repeat_interleave(num_kv_groups, dim=1)
+            k = repeat(k, "b h s d -> b (h g) s d", g=num_kv_groups)
+            v = repeat(v, "b h s d -> b (h g) s d", g=num_kv_groups)
 
         output = torch.nn.functional.scaled_dot_product_attention(
             q,
@@ -243,8 +250,8 @@ class EagerBackend(AttentionBackend):
         # Expand K/V heads if using GQA
         if num_kv_heads < num_heads:
             num_kv_groups = num_heads // num_kv_heads
-            k = k.repeat_interleave(num_kv_groups, dim=1)
-            v = v.repeat_interleave(num_kv_groups, dim=1)
+            k = repeat(k, "b h s d -> b (h g) s d", g=num_kv_groups)
+            v = repeat(v, "b h s d -> b (h g) s d", g=num_kv_groups)
 
         scores = einsum(q, k, "b h i d, b h j d -> b h i j") * (head_dim**-0.5)
 

@@ -139,6 +139,16 @@ class BertBlocksPreTrainedModel(PreTrainedModel):
         if isinstance(module, nn.Linear) and module.bias is not None:
             nn.init.zeros_(module.bias)
 
+    def _set_gradient_checkpointing(self, module: "nn.Module", value: bool = False) -> None:
+        """Enable or disable gradient checkpointing for encoder modules.
+
+        Args:
+            module: The module to configure.
+            value: Whether to enable gradient checkpointing.
+        """
+        if hasattr(module, "gradient_checkpointing"):
+            module.gradient_checkpointing = value
+
 
 class BertBlocksModel(BertBlocksPreTrainedModel):
     """Core BertBlocks model for encoding sequences.
@@ -829,16 +839,15 @@ class BertBlocksForMaskedDiffusion(BertBlocksForMaskedLM, GenerationMixin):
 
         if labels is not None:
             # Binary mask indicating unmasked tokens in batch (that should not contribute to the loss)
-            masked_labels = labels.clone()
-            masked_labels[input_ids != self.mask_token_id] = -100
+            masked_labels = torch.where(input_ids == self.mask_token_id, labels, -100)
             # Compute loss
-            logits = output.logits.clone()
             loss = F.cross_entropy(
                 output.logits.view(-1, self.config.vocab_size),
                 masked_labels.view(-1),
                 ignore_index=-100,
                 reduction="mean",
             )
+            logits = output.logits
         else:
             # Remove the possibility of predicting a mask token
             logits = self._process_logits(input_ids=input_ids, logits=output.logits)
