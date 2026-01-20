@@ -1,6 +1,6 @@
 """Lightning CLI Wrapper entrypoint."""
 
-from lightning.pytorch.callbacks import LearningRateMonitor, ThroughputMonitor
+from lightning.pytorch.callbacks import ThroughputMonitor
 from lightning.pytorch.cli import ArgsType, LightningCLI
 
 
@@ -14,10 +14,9 @@ def cli(args: ArgsType = None) -> None:
             "callbacks": [
                 ThroughputMonitor(
                     batch_size_fn=lambda batch: batch["input_ids"].size(0),
-                    length_fn=lambda batch: batch["input_ids"].size(1),
+                    length_fn=lambda batch: batch["input_ids"].numel(),
                     window_size=50,
-                ),
-                LearningRateMonitor(logging_interval="step", log_momentum=True, log_weight_decay=True),
+                )
             ],
         },
     )
