@@ -448,8 +448,14 @@ class MaskedDiffusionCollator(Collator):
         The maximum length of the tokenized sequences.
     pretokenized: bool
         Whether the batch is pretokenized.
-    prefix_length: int
-        The number of tokens to preserve at the start of each sequence.
+    sampling_eps: float
+        Minimum timestep for sampling, controls minimum masking probability.
+    noise_eps: float
+        Epsilon for the noise schedule, controls maximum masking probability (1 - noise_eps).
+    min_masked: int | None
+        Minimum number of masked tokens per sequence. If None, not enforced.
+    max_masked: int | None
+        Maximum number of masked tokens per sequence. If None, not enforced.
     """
 
     def __init__(
@@ -460,7 +466,10 @@ class MaskedDiffusionCollator(Collator):
         max_sequence_length: int = 256,
         pretokenized: bool | None = False,
         num_steps: int = 1000,
-        sampling_eps: float = 1e-3,
+        sampling_eps: float = 0.1,
+        noise_eps: float = 1e-3,
+        min_masked: int | None = None,
+        max_masked: int | None = None,
     ):
         super().__init__(
             tokenizer=tokenizer,
@@ -470,9 +479,11 @@ class MaskedDiffusionCollator(Collator):
         )
         self.vocab_size = tokenizer.vocab_size
         self.mask_token_id = mask_token_id
-        self.noise = LogLinearNoise()
+        self.noise = LogLinearNoise(eps=noise_eps)
         self.num_steps = num_steps
         self.sampling_eps = sampling_eps
+        self.min_masked = min_masked
+        self.max_masked = max_masked
 
     def _sample_t(self, batch_size: int, sampling_eps: float = 1e-3) -> torch.FloatTensor:
         """Sample timesteps for diffusion training with antithetic sampling.
@@ -491,19 +502,78 @@ class MaskedDiffusionCollator(Collator):
         timesteps = (1 - sampling_eps) * uniform_samples + sampling_eps
         return timesteps
 
-    def _apply_noise(self, input_ids: "torch.Tensor", noise_prob: "torch.Tensor") -> "torch.Tensor":
+    def _apply_noise(
+        self,
+        input_ids: "torch.Tensor",
+        noise_prob: "torch.Tensor",
+        attention_mask: "torch.Tensor | None" = None,
+    ) -> "torch.Tensor":
         """Apply noise to a given input ID tensor.
 
         Args:
           input_ids (torch.Tensor, shape [batch_size, seq_len]): input IDs to apply noise to.
           noise_prob (torch.Tensor, shape [batch_size, 1]): Level of noise to apply to each sequence.
+          attention_mask (torch.Tensor | None, shape [batch_size, seq_len]): Attention mask indicating
+              valid tokens (1) vs padding (0). If None, all positions are considered valid.
 
         Returns:
             torch.Tensor, shape [batch_size, seq_len]: Input IDs changed to mask tokens at random positions with
                 probability given by noise_level.
         """
-        noise_idx = torch.rand(*input_ids.shape, device=input_ids.device) < noise_prob
-        return torch.where(noise_idx, self.mask_token_id, input_ids)
+        batch_size, seq_len = input_ids.shape
+        device = input_ids.device
+
+        # Default attention_mask to all ones if not provided
+        if attention_mask is None:
+            valid_mask = torch.ones(batch_size, seq_len, dtype=torch.bool, device=device)
+        else:
+            valid_mask = attention_mask.bool()
+
+        # Initial probabilistic masking (only on valid positions)
+        rand_vals = torch.rand(batch_size, seq_len, device=device)
+        mask = (rand_vals < noise_prob) & valid_mask
+
+        # Mask additional tokens if needed
+        if self.min_masked is not None:
+            masked_count = mask.sum(dim=1, keepdim=True)
+            need = (self.min_masked - masked_count).clamp(min=0)
+            max_need = need.max().item()
+
+            if max_need > 0:
+                # Assign random priorities to unmasked valid positions (masked/padding get -inf)
+                priority = torch.rand(batch_size, seq_len, device=device)
+                priority = priority.masked_fill(mask | ~valid_mask, -float("inf"))
+
+                # Select top k positions per sequence by priority
+                _, top_indices = priority.topk(max_need, dim=1)
+
+                # Only mask the first k positions for each sequence
+                col_idx = torch.arange(max_need, device=device).unsqueeze(0)
+                additional_mask = col_idx < need
+                mask.scatter_(1, top_indices, additional_mask)
+
+        # Unmask excess tokens if needed
+        if self.max_masked is not None:
+            masked_count = mask.sum(dim=1, keepdim=True)
+            excess = (masked_count - self.max_masked).clamp(min=0)
+            max_excess = excess.max().item()
+
+            if max_excess > 0:
+                # Assign random priorities to masked positions (unmasked get -inf)
+                priority = torch.rand(batch_size, seq_len, device=device)
+                priority = priority.masked_fill(~mask, -float("inf"))
+
+                # Select top k masked positions per sequence by priority
+                _, top_indices = priority.topk(max_excess, dim=1)
+
+                # Only unmask the first k positions for each sequence
+                col_idx = torch.arange(max_excess, device=device).unsqueeze(0)
+                to_unmask = col_idx < excess
+                unmask_targets = torch.zeros_like(mask)
+                unmask_targets.scatter_(1, top_indices, to_unmask)
+                mask = mask & ~unmask_targets
+
+        return torch.where(mask, self.mask_token_id, input_ids)
 
     def compute_labels(self, tokenized: dict[str, Any]) -> Any:
         """Compute the denoising MLM labels for the given batch of tokenized inputs.
@@ -520,7 +590,8 @@ class MaskedDiffusionCollator(Collator):
         dalpha_t, alpha_t = self.noise(t)
         # Masking probability = 1 - alpha_t (fraction of tokens that should be MASK)
         noise_prob = (1 - alpha_t).unsqueeze(-1)
-        noised_input_ids = self._apply_noise(tokenized["input_ids"], noise_prob)
+        attention_mask = tokenized.get("attention_mask")
+        noised_input_ids = self._apply_noise(tokenized["input_ids"], noise_prob, attention_mask)
         tokenized["input_ids"] = noised_input_ids
         return tokenized
 
