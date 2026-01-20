@@ -67,7 +67,6 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
         pretrained_tokenizer_name_or_path: str,
         objective: Literal["mlm", "enhanced_mlm", "diffusion"] = "mlm",
         max_sequence_length: int | None = 512,
-        min_unmasked_count: int | None = 16,
         dataset: "torch.utils.data.Dataset" = None,
         dataset_name_or_path: str | list[str] | None = None,
         file_format: str | None = None,
