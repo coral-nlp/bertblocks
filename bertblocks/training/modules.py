@@ -123,7 +123,7 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
             **(self.hparams.collator_kwargs or {}),
         )
 
-    def prepare_data(self) -> None:
+    def setup(self, stage: str) -> None:
         """Prepare the dataset for training. Called once per node."""
         if os.path.isdir(self.hparams.dataset_name_or_path):
             # If local path, load from disk
