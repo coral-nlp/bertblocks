@@ -860,7 +860,7 @@ class BertBlocksForMaskedDiffusion(BertBlocksForMaskedLM, GenerationMixin):
             attentions=output.attentions,
         )
 
-    def _prior(self, *batch_dims: Sequence[int]) -> torch.Tensor:
+    def _prior(self, batch_dims: Sequence[int]) -> torch.Tensor:
         """Calculate the prior distribution, i.e., a fully masked tensor.
 
         Args:
@@ -898,6 +898,7 @@ class BertBlocksForMaskedDiffusion(BertBlocksForMaskedLM, GenerationMixin):
         num_steps: int = 100,
         temperature: float = 1.0,
         eps: float = 1e-5,
+        block_size: int | None = None,
     ) -> "torch.Tensor":
         """Generate samples using iterative denoising from noise to data.
 
@@ -917,17 +918,23 @@ class BertBlocksForMaskedDiffusion(BertBlocksForMaskedLM, GenerationMixin):
             num_steps (int, optional): Number of denoising steps (more = higher quality, slower). Defaults to 100.
             temperature (float, optional): Temperature parameter. Defaults to 1.0.
             eps (float, optional): Final noise level. Defaults to 1e-5.
+            block_size (int, optional): Size of blocks for block-wise denoising. If None, processes
+                the whole sequence in parallel. Block denoising processes the sequence left-to-right
+                in chunks, which can improve coherence for longer sequences.
 
         Returns:
             torch.Tensor (shape [batch_size, max_length] or [num_samples, max_length]): Generated token sequences.
 
         Examples:
             # Unconditional generation
-            >>> sequences = model.sample(num_samples=4, max_length=128)
+            >>> sequences = model.generate(num_samples=4, max_length=128)
 
             # Prefix-conditioned generation
             >>> inputs = tokenizer("The cat sat on", return_tensors="pt")
-            >>> sequences = model.sample(**inputs, max_length=128)
+            >>> sequences = model.generate(**inputs, max_length=128)
+
+            # Block denoising for longer sequences
+            >>> sequences = model.generate(**inputs, max_length=256, block_size=64)
         """
         # Determine target length
         target_length = max_length or self.max_seq_len
@@ -938,24 +945,37 @@ class BertBlocksForMaskedDiffusion(BertBlocksForMaskedLM, GenerationMixin):
             x, prefix_mask = self._prior((num_samples, target_length)), None
         else:
             # Conditional generation: use provided prefix
-            x, prefix_mask = self.prepare_inputs_for_generation(attention_mask, input_ids, target_length)
-
-        # Create schedule: [1.0, ..., eps]
-        timesteps = torch.linspace(1, eps, num_steps + 1, device=self.device)
-        step_size = (1 - eps) / num_steps
+            x, prefix_mask = self.prepare_inputs_for_generation(input_ids, attention_mask, target_length)
 
         # Store original prefix for restoration
-        if prefix_mask is not None:
-            original_prefix = x.clone()
+        original_prefix = x.clone() if prefix_mask is not None else None
 
-        # Iterative denoising loop
-        for t in timesteps[:-1]:  # All except last
-            time = repeat(t.unsqueeze(-1), "1 -> b 1", b=x.shape[0])
-            x = self._reverse_step(x, time, step_size)
+        # Block denoising setup
+        if block_size is None:
+            block_size = target_length  # Single block = whole sequence
+        num_blocks = math.ceil(target_length / block_size)
+        steps_per_block = max(1, num_steps // num_blocks)
 
-            # Restore prefix tokens after each step
-            if prefix_mask is not None:
-                x[prefix_mask] = original_prefix[prefix_mask]
+        for b in range(num_blocks):
+            block_start = b * block_size
+            block_end = min((b + 1) * block_size, target_length)
+
+            # Create block mask: positions in current block that can be updated
+            block_mask = torch.zeros(target_length, dtype=torch.bool, device=self.device)
+            block_mask[block_start:block_end] = True
+
+            # Create schedule for this block: [1.0, ..., eps]
+            timesteps = torch.linspace(1, eps, steps_per_block + 1, device=self.device)
+            step_size = (1 - eps) / steps_per_block
+
+            # Iterative denoising loop for this block
+            for t in timesteps[:-1]:  # All except last
+                time = repeat(t.unsqueeze(-1), "1 -> b 1", b=x.shape[0])
+                x = self._reverse_step(x, time, step_size, block_mask=block_mask)
+
+                # Restore prefix tokens after each step
+                if prefix_mask is not None:
+                    x[prefix_mask] = original_prefix[prefix_mask]
 
         # Final cleanup (greedy sample any remaining mask tokens)
         x = self._final_denoise(x, temperature=temperature)
@@ -963,6 +983,94 @@ class BertBlocksForMaskedDiffusion(BertBlocksForMaskedLM, GenerationMixin):
         # Restore prefix one last time
         if prefix_mask is not None:
             x[prefix_mask] = original_prefix[prefix_mask]
+
+        return x
+
+    @torch.no_grad()
+    def infill(
+        self,
+        input_ids: "torch.Tensor",
+        attention_mask: "torch.Tensor | None" = None,
+        num_steps: int = 100,
+        temperature: float = 1.0,
+        eps: float = 1e-5,
+        block_size: int | None = None,
+    ) -> "torch.Tensor":
+        """Fill masked positions in the input using iterative diffusion denoising.
+
+        Unlike `generate()` which extends a prefix, this method fills in MASK tokens
+        at arbitrary positions within the sequence. All non-MASK tokens are preserved.
+
+        Args:
+            input_ids (torch.Tensor, shape [batch_size, seq_len]): Input sequences containing
+                MASK tokens at positions to be filled. Non-MASK tokens will be preserved.
+            attention_mask (torch.Tensor, shape [batch_size, seq_len], optional): Mask indicating
+                which positions are valid (1) vs padding (0). If None, all positions are valid.
+            num_steps (int, optional): Number of denoising steps. Defaults to 100.
+            temperature (float, optional): Sampling temperature. Defaults to 1.0.
+            eps (float, optional): Final noise level. Defaults to 1e-5.
+            block_size (int, optional): Size of blocks for block-wise denoising. If None,
+                processes the whole sequence in parallel.
+
+        Returns:
+            torch.Tensor (shape [batch_size, seq_len]): Sequences with MASK positions filled.
+
+        Examples:
+            # Fill middle of sequence
+            >>> text = "The cat [MASK] [MASK] [MASK] the mat."
+            >>> inputs = tokenizer(text, return_tensors="pt")
+            >>> filled = model.infill(inputs["input_ids"])
+
+            # Block denoising for longer sequences
+            >>> filled = model.infill(inputs["input_ids"], block_size=64)
+        """
+        input_ids = input_ids.to(self.device)
+        batch_size, seq_len = input_ids.shape
+
+        # Create attention mask if not provided
+        if attention_mask is None:
+            attention_mask = torch.ones_like(input_ids)
+        attention_mask = attention_mask.to(self.device)
+
+        # Identify positions to preserve (non-MASK tokens within valid positions)
+        preserve_mask = (input_ids != self.mask_token_id) & attention_mask.bool()
+
+        # Store original for restoration
+        original = input_ids.clone()
+
+        # Working copy
+        x = input_ids.clone()
+
+        # Block denoising setup
+        if block_size is None:
+            block_size = seq_len
+        num_blocks = math.ceil(seq_len / block_size)
+        steps_per_block = max(1, num_steps // num_blocks)
+
+        for b in range(num_blocks):
+            block_start = b * block_size
+            block_end = min((b + 1) * block_size, seq_len)
+
+            # Create block mask
+            block_mask = torch.zeros(seq_len, dtype=torch.bool, device=self.device)
+            block_mask[block_start:block_end] = True
+
+            # Create schedule for this block
+            timesteps = torch.linspace(1, eps, steps_per_block + 1, device=self.device)
+            step_size = (1 - eps) / steps_per_block
+
+            for t in timesteps[:-1]:
+                time = repeat(t.unsqueeze(-1), "1 -> b 1", b=batch_size)
+                x = self._reverse_step(x, time, step_size, block_mask=block_mask)
+
+                # Restore preserved tokens after each step
+                x[preserve_mask] = original[preserve_mask]
+
+        # Final cleanup
+        x = self._final_denoise(x, temperature=temperature)
+
+        # Restore preserved tokens one last time
+        x[preserve_mask] = original[preserve_mask]
 
         return x
 
@@ -979,10 +1087,14 @@ class BertBlocksForMaskedDiffusion(BertBlocksForMaskedLM, GenerationMixin):
         input_ids = input_ids.to(self.device)
         # Create prefix mask (which positions to preserve)
         if attention_mask is None:
-            # If no mask provided, preserve all input tokens
-            prefix_mask = torch.ones(batch_size, seq_len, dtype=torch.bool, device=self.device)
+            # If no mask provided, we dont know what to preserve, so raise
+            raise ValueError("attention_mask is required for guided generation.")
         else:
             prefix_mask = attention_mask.bool().to(self.device)
+            # Exclude the last token (SEP) from the prefix to allow it to be denoised
+            seq_lengths = prefix_mask.sum(dim=1)
+            last_token_indices = seq_lengths - 1
+            prefix_mask[torch.arange(batch_size, device=self.device), last_token_indices] = False
             # Ensure attention_mask matches input_ids length
             assert (
                 prefix_mask.shape[1] == seq_len
@@ -1025,7 +1137,10 @@ class BertBlocksForMaskedDiffusion(BertBlocksForMaskedLM, GenerationMixin):
         return logits
 
     def _compute_transition_probs(
-        self, input_ids: "torch.Tensor", sigma: "torch.Tensor", temperature: float = 1.0
+        self,
+        input_ids: "torch.Tensor",
+        sigma: "torch.Tensor",
+        temperature: float = 1.0,
     ) -> "torch.Tensor":
         """Compute token-wise transition probabilities for discrete diffusion reverse process.
 
@@ -1044,8 +1159,8 @@ class BertBlocksForMaskedDiffusion(BertBlocksForMaskedLM, GenerationMixin):
         Returns:
             torch.Tensor (shape [batch_size, seq_len, vocab_size]): Tensor of transition probabilities for each token.
         """
-        # Implicit timestep conditioning through number of masked tokens, not explicitily passed as timestep embedding.
-        logits = self._forward(input_ids=input_ids).logits
+        # Implicit timestep conditioning through number of masked tokens
+        logits = self.forward(input_ids=input_ids).logits
         logits = self._process_logits(input_ids=input_ids, logits=logits, temperature=temperature)
         batch, seq, vocab = logits.shape
 
@@ -1099,13 +1214,21 @@ class BertBlocksForMaskedDiffusion(BertBlocksForMaskedLM, GenerationMixin):
 
         return transition_probs
 
-    def _reverse_step(self, input_ids: "torch.Tensor", timestep: "torch.Tensor", step_size: float) -> "torch.Tensor":
+    def _reverse_step(
+        self,
+        input_ids: "torch.Tensor",
+        timestep: "torch.Tensor",
+        step_size: float,
+        block_mask: "torch.Tensor | None" = None,
+    ) -> "torch.Tensor":
         """Perform a single reverse diffusion step through ancestral sampling.
 
         Args:
             input_ids (torch.Tensor, shape [batch_size, seq_len]): Input sequences.
             timestep (torch.Tensor, shape [batch_size, 1]): Time step for each sequence (t in [0,1]).
             step_size (float): Step size to move in time.
+            block_mask (torch.Tensor, shape [seq_len], optional): Boolean mask indicating which positions
+                are in the current block and can be updated. If None, all positions can be updated.
 
         Returns:
             torch.Tensor (shape [batch_size, seq_len]): Partially step-wise denoised sequences.
@@ -1124,21 +1247,35 @@ class BertBlocksForMaskedDiffusion(BertBlocksForMaskedLM, GenerationMixin):
         transition_probs = self._staggered_correction(transition_probs, dsigma)
         # Compute posterior
         posterior_distribution = transition_probs * self._transp_transition(input_ids, dsigma)
+
+        # Apply block mask: for positions outside the block, set distribution to one-hot on current token
+        # This ensures those positions remain unchanged during sampling
+        if block_mask is not None:
+            # Create one-hot distribution for current tokens
+            one_hot_current = F.one_hot(input_ids, num_classes=self.vocab_size).float()
+            # Expand block_mask to match posterior shape: [seq_len] -> [batch, seq_len, vocab]
+            block_mask_expanded = block_mask.unsqueeze(0).unsqueeze(-1).expand_as(posterior_distribution)
+            # Keep posterior for in-block positions, use one-hot for out-of-block
+            posterior_distribution = torch.where(block_mask_expanded, posterior_distribution, one_hot_current)
+
         # Sample using Gumbel-max trick (works with unnormalized probabilities)
         return self._sample_categorical(posterior_distribution)
 
-    def _final_denoise(self, input_ids: "torch.Tensor", temperature: float = 1.0) -> "torch.Tensor":
+    def _final_denoise(
+        self,
+        input_ids: "torch.Tensor",
+        temperature: float = 1.0,
+    ) -> "torch.Tensor":
         """Perform final greedy denoising step at near-zero noise to clean output.
 
         Args:
             input_ids (torch.Tensor, shape [batch_size, seq_len]): Input sequences.
-            timestep (torch.Tensor, shape [batch_size, 1]): Time step for each sequence (t in [0,1]).
+            temperature (float, optional): Sampling temperature. Defaults to 1.0.
 
         Returns:
             torch.Tensor (shape [batch_size, seq_len]): Final denoised sequences.
         """
-        # Infer final logits
-        logits = self._forward(input_ids).logits
+        logits = self.forward(input_ids).logits
         logits = self._process_logits(input_ids=input_ids, logits=logits, temperature=temperature)
 
         # For MASK positions, use model predictions, for non-MASK positions, keep current token

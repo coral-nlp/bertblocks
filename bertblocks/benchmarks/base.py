@@ -229,8 +229,7 @@ def _set_config_num_labels(config: AutoConfig, num_labels: int) -> None:
     """Set the number of labels on a config, handling both num_labels and num_classes attributes."""
     if hasattr(config, "num_labels"):
         config.num_labels = num_labels
-    else:
-        config.num_classes = num_labels
+    config.num_classes = num_labels
 
 
 class TaskModule(abc.ABC, L.LightningModule):
