@@ -1,4 +1,5 @@
 import math
+import warnings
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
@@ -80,13 +81,20 @@ def get_scheduler(
     schedulers = []
     milestones = []
     if warmup_steps > 0:
-        schedulers.append(get_single_scheduler(optimizer, warmup_kind, warmup_steps, warmup_decay))
+        schedulers.append(
+            get_single_scheduler(optimizer, warmup_kind, warmup_steps, warmup_decay, direction="increase")
+        )
         milestones.append(warmup_steps)
 
-    schedulers.append(get_single_scheduler(optimizer, training_kind, training_steps, training_decay))
+    schedulers.append(
+        get_single_scheduler(optimizer, training_kind, training_steps, training_decay, direction="decrease")
+    )
 
     if cooldown_steps > 0:
-        schedulers.append(get_single_scheduler(optimizer, cooldown_kind, cooldown_steps, cooldown_decay))
+        schedulers.append(
+            get_single_scheduler(optimizer, cooldown_kind, cooldown_steps, cooldown_decay, direction="decrease")
+        )
+        milestones.append(cooldown_steps)
         milestones.append(warmup_steps + training_steps)
 
     return torch.optim.lr_scheduler.SequentialLR(
@@ -101,6 +109,7 @@ def get_single_scheduler(
     kind: Literal["constant", "linear", "inverse-sqrt", "exponential", "cosine"] = "constant",
     num_steps: int = 0,
     decay: float = 0.0,
+    direction: Literal["increase", "decrease"] = "increase",
 ) -> "LRScheduler | None":
     """Return the corresponding instantiated scheduler for configuration provided.
 
@@ -110,6 +119,7 @@ def get_single_scheduler(
         num_steps: Number of steps to schedule. Defaults to 0.
         decay: Decay value, depending on kind of scheduler. If 'constant', is applied as factor; if 'linear', is
             applied as start_factor; if 'exponential', is applied as gamma; if 'cosine', is applied as eta_min.
+        direction: Direction of scheduler. Defaults to 'increase'.
 
     Returns:
         The specified scheduler.
@@ -118,12 +128,23 @@ def get_single_scheduler(
         case "constant":
             return ConstantLR(optimizer, factor=decay, total_iters=num_steps)
         case "linear":
-            return LinearLR(optimizer, start_factor=decay, total_iters=num_steps)
+            return LinearLR(
+                optimizer,
+                start_factor=decay if direction == "increase" else None,
+                end_factor=decay if direction == "decrease" else None,
+                total_iters=num_steps,
+            )
         case "exponential":
+            if direction == "increase":
+                warnings.warn("InverseSqrtScheduler is intended for cooldown only, but used for warmup!", stacklevel=2)
             return ExponentialLR(optimizer, gamma=decay)
         case "cosine":
+            if direction == "increase":
+                warnings.warn("CosineAnnealingLR is intended for cooldown only, but used for warmup!", stacklevel=2)
             return CosineAnnealingLR(optimizer, T_max=num_steps, eta_min=decay)
         case "inverse-sqrt":
+            if direction == "increase":
+                warnings.warn("InverseSqrtScheduler is intended for cooldown only, but used for warmup!", stacklevel=2)
             return InverseSqrtScheduler(optimizer, num_steps)
         case "_":
             raise ValueError(
