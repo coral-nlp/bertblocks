@@ -162,16 +162,6 @@ def process_tokens(
 
 ### Code Examples
 
-**Using einops:**
-```python
-# Good
-from einops import rearrange
-hidden = rearrange(x, 'b s h -> b h s')
-
-# Less preferred
-hidden = x.transpose(-1, -2)
-```
-
 **Using match statements:**
 ```python
 # Good
