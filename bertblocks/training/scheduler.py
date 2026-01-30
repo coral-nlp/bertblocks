@@ -130,8 +130,8 @@ def get_single_scheduler(
         case "linear":
             return LinearLR(
                 optimizer,
-                start_factor=decay if direction == "increase" else None,
-                end_factor=decay if direction == "decrease" else None,
+                start_factor=decay if direction == "increase" else 1.0,
+                end_factor=decay if direction == "decrease" else 1.0,
                 total_iters=num_steps,
             )
         case "exponential":
