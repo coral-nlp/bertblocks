@@ -494,7 +494,7 @@ class BertBlocksForMaskedLM(BertBlocksPreTrainedModel):
         if output.indices is not None:
             indices = output.indices
             seq_len = output.seq_len or 0
-            batch_size = output.batch_size or 0
+            batch_size = output.batch_size or 0  # Just to satisfy mypy, this will never trigger in practice
             return MaskedLMOutput(
                 loss=loss,
                 logits=pad_output(logits, indices, batch_size, seq_len, -torch.inf),

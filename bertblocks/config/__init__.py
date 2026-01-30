@@ -125,7 +125,6 @@ class BertBlocksConfig(PretrainedConfig):
             overfitting in downstream tasks. Must be between 0.0 and 1.0.
         attn_implementation: Which backend implementation of attention to use; can be "flash_attention_2" for
             FlashAttention2, "sdpa" torch, or "eager" for manual implementation. Defaults to SDPA.
-        compile: Whether to compile the model using torch.compile. Defaults to False.
         problem_type: The problem type for automatic loss selection (HuggingFace standard).
             Automatically selects appropriate loss functions: "regression" (MSE loss for
             continuous targets), "single_label_classification" (CrossEntropy loss for
@@ -149,7 +148,6 @@ class BertBlocksConfig(PretrainedConfig):
         mask_token_id: int = 1,
         num_blocks: int = 12,
         attn_implementation: AttentionBackend | None = None,
-        compile: bool = False,
         local_attention: tuple[int, int] = (-1, -1),
         global_attention_every_n_layers: int = 0,
         initializer_kind: Initializer = "trunc_normal",
@@ -275,7 +273,6 @@ class BertBlocksConfig(PretrainedConfig):
         self.classifier_dropout = classifier_dropout_prob
         # Implementation details
         self._attn_implementation = attn_implementation
-        self.compile = compile
         # Downstream task parameters
         self.problem_type = problem_type
         self.num_classes = num_classes
