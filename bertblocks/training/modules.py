@@ -439,7 +439,7 @@ class BertBlocksPretrainingModule(L.LightningModule):
             self.model.gradient_checkpointing_enable()
         if self.hparams.compile_model:
             torch.set_float32_matmul_precision("high")
-            # self.model = torch.compile(self.model, dynamic=True, mode="max-autotune")
+            self.model = torch.compile(self.model, dynamic=True)
 
     def configure_optimizers(self) -> tuple[list["torch.optim.Optimizer"], list[dict[str, Any]]]:
         """Configure optimizers and learning rate schedulers.

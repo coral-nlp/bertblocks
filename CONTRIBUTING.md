@@ -108,10 +108,7 @@ bertblocks/modeling/
 
 ## Code Style Guidelines
 
-### General Principles
-- **Write simple, readable code**
-- **Use `einops` over raw `torch` operations where possible**
-- **Use `match` statements over `elif` chains when appropriate**
+**Write simple, readable code**
 
 ### Naming Conventions
 - **Layer names should be self-explanatory**

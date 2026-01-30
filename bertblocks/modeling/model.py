@@ -4,7 +4,6 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
-from einops import rearrange, repeat
 from transformers import GenerationMixin
 
 from bertblocks.modeling.norms import get_norm
@@ -201,7 +200,6 @@ class BertBlocksModel(BertBlocksPreTrainedModel):
         self.alibi = (
             AlibiPositionalEncoding(config.num_attention_heads) if config.block_pos_enc_kind == "alibi" else None
         )
-        self.compile = True
 
     @property
     def dtype(self) -> "torch.dtype":
@@ -232,6 +230,7 @@ class BertBlocksModel(BertBlocksPreTrainedModel):
         self.embd.embd = value
 
     @torch.compiler.disable()
+    @torch.no_grad()
     def unpad_input(
         self, input_ids: "torch.Tensor", attention_mask: "torch.Tensor | None"
     ) -> tuple[Tensor, Tensor, Tensor, int]:
@@ -269,8 +268,7 @@ class BertBlocksModel(BertBlocksPreTrainedModel):
         batch_size, seq_len = input_ids.shape
 
         if self.unpadding:
-            with torch.no_grad():
-                input_ids, indices, cu_seqlens, max_seq_len = self.unpad_input(input_ids, attention_mask)
+            input_ids, indices, cu_seqlens, max_seq_len = self.unpad_input(input_ids, attention_mask)
             attention_mask = None
         else:
             indices, cu_seqlens, max_seq_len = None, None, None
@@ -291,26 +289,12 @@ class BertBlocksModel(BertBlocksPreTrainedModel):
                 else:
                     attention_mask = attention_mask.masked_fill(~local_mask, -float("inf"))
 
-        if self.compile:
-            attentions, hidden_states, x = self._forward_compiled(
-                input_ids,
-                attention_mask,
-                token_type_ids,
-                cu_seqlens,
-                max_seq_len,
-                output_attentions,
-                output_hidden_states,
-            )
-        else:
-            attentions, hidden_states, x = self._forward(
-                input_ids,
-                attention_mask,
-                token_type_ids,
-                cu_seqlens,
-                max_seq_len,
-                output_attentions,
-                output_hidden_states,
-            )
+        x = self.embd(input_ids, token_type_ids=token_type_ids, cu_seqlens=cu_seqlens)
+        x, hidden_states, attentions = self.encd(
+            x, attention_mask, cu_seqlens, max_seq_len, output_attentions, output_hidden_states
+        )
+        x = self.norm(x)
+        x = self.scaler(x)
 
         if self.pool is not None:
             pooler_output = self.pool(x)
@@ -335,39 +319,6 @@ class BertBlocksModel(BertBlocksPreTrainedModel):
                 batch_size=batch_size,
             )
 
-    def _forward(
-        self,
-        input_ids: Tensor,
-        attention_mask: Tensor | None = None,
-        token_type_ids: Tensor | None = None,
-        cu_seqlens: Tensor | None = None,
-        max_seq_len: int | None = None,
-        output_attentions: bool = False,
-        output_hidden_states: bool = False,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        x = self.embd(input_ids, token_type_ids=token_type_ids, cu_seqlens=cu_seqlens)
-        x, hidden_states, attentions = self.encd(
-            x, attention_mask, cu_seqlens, max_seq_len, output_attentions, output_hidden_states
-        )
-        x = self.norm(x)
-        x = self.scaler(x)
-        return attentions, hidden_states, x
-
-    @torch.compile(fullgraph=True, mode="max-autotune")
-    def _forward_compiled(
-        self,
-        input_ids: Tensor,
-        attention_mask: Tensor | None = None,
-        token_type_ids: Tensor | None = None,
-        cu_seqlens: Tensor | None = None,
-        max_seq_len: int | None = None,
-        output_attentions: bool = False,
-        output_hidden_states: bool = False,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        return self._forward(
-            input_ids, attention_mask, token_type_ids, cu_seqlens, max_seq_len, output_attentions, output_hidden_states
-        )
-
 
 class BertBlocksForTasksBase(BertBlocksPreTrainedModel):
     """Base class for all BertBlocks task-specific models.
@@ -390,8 +341,8 @@ class BertBlocksForTasksBase(BertBlocksPreTrainedModel):
         self, output: MaybeUnpaddedBaseModelOutput | MaybeUnpaddedBaseModelOutputWithPooling
     ) -> BaseModelOutput | BaseModelOutputWithPooling:
         indices = output.indices
-        seq_len = output.seq_len
-        batch_size = output.batch_size
+        seq_len = output.seq_len or 0
+        batch_size = output.batch_size or 0
 
         if indices is None:
             return output
@@ -537,16 +488,13 @@ class BertBlocksForMaskedLM(BertBlocksPreTrainedModel):
 
         loss = None
         if labels is not None:
-            if output.indices is not None:
-                labels = labels.flatten()[output.indices]
-            else:
-                labels = labels.flatten()
+            labels = labels.flatten()[output.indices] if output.indices is not None else labels.flatten()
             loss = self.loss_fn(logits.view(-1, self.vocab_size), labels)
 
         if output.indices is not None:
             indices = output.indices
-            seq_len = output.seq_len
-            batch_size = output.batch_size
+            seq_len = output.seq_len or 0
+            batch_size = output.batch_size or 0
             return MaskedLMOutput(
                 loss=loss,
                 logits=pad_output(logits, indices, batch_size, seq_len, -torch.inf),
@@ -643,16 +591,13 @@ class BertBlocksForEnhancedMaskedLM(BertBlocksForMaskedLM):
 
         loss = None
         if labels is not None:
-            if output.indices is not None:
-                labels = labels.flatten()[output.indices]
-            else:
-                labels = labels.flatten()
+            labels = labels.flatten()[output.indices] if output.indices is not None else labels.flatten()
             loss = self.loss_fn(logits.view(-1, self.vocab_size), labels)
 
         if output.indices is not None:
             indices = output.indices
-            seq_len = output.seq_len
-            batch_size = output.batch_size
+            seq_len = output.seq_len or 0
+            batch_size = output.batch_size or 0
             return MaskedLMOutput(
                 loss=loss,
                 logits=pad_output(logits, indices, batch_size, seq_len, -torch.inf),
@@ -1004,8 +949,8 @@ class BertBlocksForMaskedDiffusion(BertBlocksForMaskedLM, GenerationMixin):
 
         if output.indices is not None:
             indices = output.indices
-            seq_len = output.seq_len
-            batch_size = output.batch_size
+            seq_len = output.seq_len or 0
+            batch_size = output.batch_size or 0
             logits = pad_output(logits, indices, batch_size, seq_len, -torch.inf)
             hidden_states = (
                 [pad_output(h, indices, batch_size, seq_len, self.pad_token_id) for h in output.hidden_states]
@@ -1136,7 +1081,7 @@ class BertBlocksForMaskedDiffusion(BertBlocksForMaskedLM, GenerationMixin):
 
             # Iterative denoising loop for this block
             for t in timesteps[:-1]:  # All except last
-                time = repeat(t.unsqueeze(-1), "1 -> b 1", b=x.shape[0])
+                time = t.unsqueeze(-1).expand(x.shape[0], 1)  # 1 -> b 1
                 x = self._reverse_step(x, time, step_size, block_mask=block_mask)
 
                 # Restore prefix tokens after each step
@@ -1226,7 +1171,7 @@ class BertBlocksForMaskedDiffusion(BertBlocksForMaskedLM, GenerationMixin):
             step_size = (1 - eps) / steps_per_block
 
             for t in timesteps[:-1]:
-                time = repeat(t.unsqueeze(-1), "1 -> b 1", b=batch_size)
+                time = t.unsqueeze(-1).expand(batch_size, 1)  # 1 -> b 1
                 x = self._reverse_step(x, time, step_size, block_mask=block_mask)
 
                 # Restore preserved tokens after each step
@@ -1333,12 +1278,12 @@ class BertBlocksForMaskedDiffusion(BertBlocksForMaskedLM, GenerationMixin):
         # k = P(token = [MASK]) / P(token = ~[MASK]) = exp(- timestep) / (1 - exp(- timestep))
         # Probability ratio between masked and unmasked states == 1/k in log space; used as logit scaling factor
         log_k = -torch.log(torch.expm1(sigma))  # [batch, 1, 1], negative value
-        log_k = rearrange(log_k, "b 1 1 -> b")
+        log_k = log_k.squeeze(-1).squeeze(-1)  # b 1 1 -> b
 
         # score(x, t) = p_t(y) / p_t(x) = log p_t(y) - log p_t(x) = logits + log_k (log_k is already negative)
         # Case 1: Original token was [MASK]
         # Case 1.1: Predicted token is not [MASK] -> score = prob ratio
-        masked_log_score = logits + repeat(log_k, "b -> b 1 1")
+        masked_log_score = logits + log_k[:, None, None]  # b -> b 1 1
         # Case 1.2: Predicted token is [MASK] -> score = equilibrium = 0 (stay here)
         masked_log_score[:, :, self.mask_token_id] = 0
 
@@ -1346,12 +1291,12 @@ class BertBlocksForMaskedDiffusion(BertBlocksForMaskedLM, GenerationMixin):
         # Case 2.1: Predicted token is not original token and not mask token -> score = ... / 0 (never move here)
         unmasked_log_score = torch.full_like(logits, -torch.inf)
         # Case 2.2: Predicted token is original token -> score = equilibrium = 0 (stay here)
-        unmasked_log_score.scatter_(dim=-1, index=repeat(input_ids, "b s -> b s 1"), value=0.0)
+        unmasked_log_score.scatter_(dim=-1, index=input_ids.unsqueeze(-1), value=0.0)  # b s -> b s 1
         # Can 2.3: Predicted token is not original token, but is mask token -> score = 1/k (maybe move here)
-        unmasked_log_score[:, :, self.mask_token_id] = -repeat(log_k, "b -> b s", s=seq)
+        unmasked_log_score[:, :, self.mask_token_id] = -log_k[:, None].expand(-1, seq)  # b -> b s
 
         # Combine based on whether position is masked
-        is_masked = repeat((input_ids == self.mask_token_id), "b s -> b s v", v=vocab)
+        is_masked = (input_ids == self.mask_token_id).unsqueeze(-1).expand(-1, -1, vocab)  # b s -> b s v
         log_score = torch.where(is_masked, masked_log_score, unmasked_log_score)
         # Transfer from log space and return
         return log_score.exp()

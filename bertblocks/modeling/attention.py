@@ -1,7 +1,6 @@
 from typing import TYPE_CHECKING
 
 import torch
-from einops import rearrange
 
 if TYPE_CHECKING:
     from torch import Tensor
@@ -123,15 +122,15 @@ class Attention(nn.Module):
         kv_dim = self.num_kv_heads * self.head_dim
 
         if qkv.dim() == 2:  # Unpadded: [s, qkv_dim]
-            q = rearrange(qkv[..., :q_dim], "s (h d) -> s h d", h=self.num_heads, d=self.head_dim)
-            k = rearrange(qkv[..., q_dim : q_dim + kv_dim], "s (h d) -> s h d", h=self.num_kv_heads, d=self.head_dim)
-            v = rearrange(qkv[..., q_dim + kv_dim :], "s (h d) -> s h d", h=self.num_kv_heads, d=self.head_dim)
+            q = qkv[..., :q_dim].unflatten(-1, (self.num_heads, self.head_dim))  # s (h d) -> s h d
+            k = qkv[..., q_dim : q_dim + kv_dim].unflatten(-1, (self.num_kv_heads, self.head_dim))  # s (h d) -> s h d
+            v = qkv[..., q_dim + kv_dim :].unflatten(-1, (self.num_kv_heads, self.head_dim))  # s (h d) -> s h d
         else:  # Padded: [b, s, qkv_dim]
-            q = rearrange(qkv[..., :q_dim], "b s (h d) -> b s h d", h=self.num_heads, d=self.head_dim)
-            k = rearrange(
-                qkv[..., q_dim : q_dim + kv_dim], "b s (h d) -> b s h d", h=self.num_kv_heads, d=self.head_dim
-            )
-            v = rearrange(qkv[..., q_dim + kv_dim :], "b s (h d) -> b s h d", h=self.num_kv_heads, d=self.head_dim)
+            q = qkv[..., :q_dim].unflatten(-1, (self.num_heads, self.head_dim))  # b s (h d) -> b s h d
+            k = qkv[..., q_dim : q_dim + kv_dim].unflatten(
+                -1, (self.num_kv_heads, self.head_dim)
+            )  # b s (h d) -> b s h d
+            v = qkv[..., q_dim + kv_dim :].unflatten(-1, (self.num_kv_heads, self.head_dim))  # b s (h d) -> b s h d
 
         return q, k, v
 

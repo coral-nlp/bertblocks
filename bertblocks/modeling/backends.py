@@ -9,7 +9,6 @@ if TYPE_CHECKING:
     from torch import Tensor
 
 import torch
-from einops import einsum, rearrange, repeat
 from transformers.modeling_utils import is_flash_attn_2_available
 
 if is_flash_attn_2_available():
@@ -166,7 +165,7 @@ class FlashBackend(AttentionBackend):
         if needs_cast:
             x = x.to(orig_dtype)
             w = w.to(orig_dtype) if w is not None else None
-        x = rearrange(x, "s h d -> s (h d)")
+        x = x.flatten(-2)  # s h d -> s (h d)
         return x, w
 
     def _forward_padded(
@@ -199,15 +198,15 @@ class SDPABackend(AttentionBackend):
         num_kv_heads = k.shape[2]
 
         # Transpose to [b, h, s, d] for SDPA
-        q = rearrange(q, "b s h d -> b h s d")
-        k = rearrange(k, "b s h d -> b h s d")
-        v = rearrange(v, "b s h d -> b h s d")
+        q = q.transpose(1, 2)  # b s h d -> b h s d
+        k = k.transpose(1, 2)  # b s h d -> b h s d
+        v = v.transpose(1, 2)  # b s h d -> b h s d
 
         # Expand K/V heads if using GQA
         if num_kv_heads < num_heads:
             num_kv_groups = num_heads // num_kv_heads
-            k = repeat(k, "b h s d -> b (h g) s d", g=num_kv_groups)
-            v = repeat(v, "b h s d -> b (h g) s d", g=num_kv_groups)
+            k = k.repeat_interleave(num_kv_groups, dim=1)  # b h s d -> b (h g) s d
+            v = v.repeat_interleave(num_kv_groups, dim=1)  # b h s d -> b (h g) s d
 
         output = torch.nn.functional.scaled_dot_product_attention(
             q,
@@ -217,7 +216,7 @@ class SDPABackend(AttentionBackend):
             dropout_p=dropout_p,
             is_causal=False,
         )
-        output = rearrange(output, "b h s d -> b s (h d)")
+        output = output.transpose(1, 2).flatten(-2)  # b h s d -> b s (h d)
         return output, None
 
     def _forward_unpadded(self, *args, **kwargs):  # type: ignore
@@ -243,17 +242,17 @@ class EagerBackend(AttentionBackend):
         head_dim = q.shape[3]
 
         # Transpose to [b, h, s, d] for attention computation
-        q = rearrange(q, "b s h d -> b h s d")
-        k = rearrange(k, "b s h d -> b h s d")
-        v = rearrange(v, "b s h d -> b h s d")
+        q = q.transpose(1, 2)  # b s h d -> b h s d
+        k = k.transpose(1, 2)  # b s h d -> b h s d
+        v = v.transpose(1, 2)  # b s h d -> b h s d
 
         # Expand K/V heads if using GQA
         if num_kv_heads < num_heads:
             num_kv_groups = num_heads // num_kv_heads
-            k = repeat(k, "b h s d -> b (h g) s d", g=num_kv_groups)
-            v = repeat(v, "b h s d -> b (h g) s d", g=num_kv_groups)
+            k = k.repeat_interleave(num_kv_groups, dim=1)  # b h s d -> b (h g) s d
+            v = v.repeat_interleave(num_kv_groups, dim=1)  # b h s d -> b (h g) s d
 
-        scores = einsum(q, k, "b h i d, b h j d -> b h i j") * (head_dim**-0.5)
+        scores = torch.einsum("b h i d, b h j d -> b h i j", q, k) * (head_dim**-0.5)
 
         if attention_mask.dtype == torch.bool:
             # Regular boolean mask
@@ -270,8 +269,8 @@ class EagerBackend(AttentionBackend):
         if dropout_p > 0.0:
             attn_weights = torch.nn.functional.dropout(attn_weights, p=dropout_p)
 
-        output = einsum(attn_weights, v, "b h i j, b h j d -> b h i d")
-        output = rearrange(output, "b h s d -> b s (h d)")
+        output = torch.einsum("b h i j, b h j d -> b h i d", attn_weights, v)
+        output = output.transpose(1, 2).flatten(-2)  # b h s d -> b s (h d)
         return output, None
 
     def _forward_unpadded(self, *args, **kwargs):  # type: ignore

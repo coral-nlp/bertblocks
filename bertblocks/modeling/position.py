@@ -5,7 +5,6 @@ if TYPE_CHECKING:
     from torch import device, dtype
 
 import torch
-from einops import einsum, rearrange, repeat
 from torch import Tensor, nn
 from transformers.modeling_utils import is_flash_attn_2_available
 
@@ -65,7 +64,7 @@ else:
             return torch.cat((-x2, x1), dim=-1)
         else:
             x1, x2 = x[..., ::2], x[..., 1::2]
-            return rearrange(torch.stack((-x2, x1), dim=-1), "... d t -> ... (d t)", t=2)
+            return torch.stack((-x2, x1), dim=-1).flatten(-2)  # ... d t -> ... (d t)
 
     def apply_rotary(
         x: "Tensor",
@@ -91,8 +90,12 @@ else:
         if cu_seqlens is None:
             # Padded code path
             dim = cos.shape[-1] * 2
-            cos = repeat(cos, "... d -> ... 1 (2 d)" if not interleaved else "... d -> ... 1 (d 2)")
-            sin = repeat(sin, "... d -> ... 1 (2 d)" if not interleaved else "... d -> ... 1 (d 2)")
+            if not interleaved:
+                cos = torch.cat([cos, cos], dim=-1).unsqueeze(-2)  # ... d -> ... 1 (2 d)
+                sin = torch.cat([sin, sin], dim=-1).unsqueeze(-2)  # ... d -> ... 1 (2 d)
+            else:
+                cos = cos.repeat_interleave(2, dim=-1).unsqueeze(-2)  # ... d -> ... 1 (d 2)
+                sin = sin.repeat_interleave(2, dim=-1).unsqueeze(-2)  # ... d -> ... 1 (d 2)
             return torch.cat([x[..., :dim] * cos + rotate_half(x[..., :dim], interleaved) * sin, x[..., dim:]], dim=-1)
         else:
             # Unpadded path (we will likely have flash attention here?)
@@ -258,7 +261,7 @@ class AlibiPositionalEncoding(nn.Module):
         seqlen = attention_mask.shape[2]
         pos = torch.arange(seqlen, device=attention_mask.device)
         pos_diff = (pos.unsqueeze(0) - pos.unsqueeze(1)).abs()
-        alibi_bias = -1.0 * einsum(self.slopes, pos_diff, "h, i j -> h i j").unsqueeze(0)
+        alibi_bias = -1.0 * torch.einsum("h, i j -> h i j", self.slopes, pos_diff).unsqueeze(0)
 
         if attention_mask.dtype == torch.bool:
             attention_bias = torch.zeros_like(attention_mask, device=alibi_bias.device, dtype=alibi_bias.dtype)
