@@ -439,9 +439,7 @@ class BertBlocksPretrainingModule(L.LightningModule):
             self.model.gradient_checkpointing_enable()
         if self.hparams.compile_model:
             torch.set_float32_matmul_precision("high")
-            torch._dynamo.config.capture_dynamic_output_shape_ops = True
-            torch._dynamo.config.capture_scalar_outputs = True
-            self.model = torch.compile(self.model, dynamic=True)
+            # self.model = torch.compile(self.model, dynamic=True, mode="max-autotune")
 
     def configure_optimizers(self) -> tuple[list["torch.optim.Optimizer"], list[dict[str, Any]]]:
         """Configure optimizers and learning rate schedulers.
@@ -502,12 +500,14 @@ class BertBlocksPretrainingModule(L.LightningModule):
             torch.Tensor: MLM loss for backpropagation.
 
         """
+        torch.compiler.cudagraph_mark_step_begin()
         output = self.model(**batch)
         self.log("loss/train", output.loss, prog_bar=True)
         return output.loss
 
     def validation_step(self, batch: dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
         """Perform a single validation step."""
+        torch.compiler.cudagraph_mark_step_begin()
         output = self.model(**batch)
         self.log("loss/validation", output.loss, prog_bar=True)
         return output.loss
@@ -604,9 +604,7 @@ class BertBlocksFinetuningModule(L.LightningModule):
 
         if compile_model:
             torch.set_float32_matmul_precision("high")
-            torch._dynamo.config.capture_dynamic_output_shape_ops = True
-            torch._dynamo.config.capture_scalar_outputs = True
-            self.model = torch.compile(self.model, dynamic=True)
+            self.model = torch.compile(self.model, dynamic=True, mode="reduce-overhead")
 
     def configure_optimizers(self) -> "torch.optim.Optimizer | dict[str, Any]":
         """Configure optimizers and learning rate schedulers."""
@@ -665,12 +663,14 @@ class BertBlocksFinetuningModule(L.LightningModule):
 
     def training_step(self, batch: dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
         """Perform training step."""
+        torch.compiler.cudagraph_mark_step_begin()
         output = self.model(**batch)
         self.log("train/loss", output.loss, prog_bar=True)
         return output.loss
 
     def validation_step(self, batch: dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
         """Perform validation step."""
+        torch.compiler.cudagraph_mark_step_begin()
         output = self.model(**batch)
         self.log("val/loss", output.loss, prog_bar=True)
         self._update_metrics(output, batch, self.val_metrics)

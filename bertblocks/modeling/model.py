@@ -1,6 +1,7 @@
 import functools
 import math
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
 from einops import rearrange, repeat
@@ -15,7 +16,7 @@ if TYPE_CHECKING:
 
 import torch
 import torch.nn.functional as F
-from torch import nn
+from torch import Tensor, nn
 from transformers.modeling_outputs import (
     BaseModelOutput,
     BaseModelOutputWithPooling,
@@ -33,6 +34,22 @@ from bertblocks.modeling.head import Pooler, get_prediction_head
 from bertblocks.modeling.loss import get_loss_function
 from bertblocks.modeling.padding import pad_output, unpad_input
 from bertblocks.modeling.position import AlibiPositionalEncoding
+
+
+@dataclass
+class MaybeUnpaddedBaseModelOutput(BaseModelOutput):
+    cu_seqlens: torch.FloatTensor | None = None
+    indices: torch.FloatTensor | None = None
+    seq_len: int | None = None
+    batch_size: int | None = None
+
+
+@dataclass
+class MaybeUnpaddedBaseModelOutputWithPooling(BaseModelOutputWithPooling):
+    cu_seqlens: torch.FloatTensor | None = None
+    indices: torch.FloatTensor | None = None
+    seq_len: int | None = None
+    batch_size: int | None = None
 
 
 class BertBlocksPreTrainedModel(PreTrainedModel):
@@ -184,6 +201,7 @@ class BertBlocksModel(BertBlocksPreTrainedModel):
         self.alibi = (
             AlibiPositionalEncoding(config.num_attention_heads) if config.block_pos_enc_kind == "alibi" else None
         )
+        self.compile = True
 
     @property
     def dtype(self) -> "torch.dtype":
@@ -213,6 +231,13 @@ class BertBlocksModel(BertBlocksPreTrainedModel):
         """
         self.embd.embd = value
 
+    @torch.compiler.disable()
+    def unpad_input(
+        self, input_ids: "torch.Tensor", attention_mask: "torch.Tensor | None"
+    ) -> tuple[Tensor, Tensor, Tensor, int]:
+        """Unpad input tensors."""
+        return unpad_input(input_ids, attention_mask, self.pad_token_id)
+
     def forward(
         self,
         input_ids: "torch.Tensor",
@@ -220,7 +245,7 @@ class BertBlocksModel(BertBlocksPreTrainedModel):
         token_type_ids: "torch.Tensor | None" = None,
         output_attentions: "bool" = False,
         output_hidden_states: "bool" = False,
-    ) -> "BaseModelOutput | BaseModelOutputWithPooling":
+    ) -> "MaybeUnpaddedBaseModelOutput | MaybeUnpaddedBaseModelOutputWithPooling":
         """Forward pass of the BertBlocks model.
 
         Args:
@@ -241,11 +266,11 @@ class BertBlocksModel(BertBlocksPreTrainedModel):
                 - `attentions`: Attention weights from all layers (optional)
 
         """
-        B, S = input_ids.shape
+        batch_size, seq_len = input_ids.shape
 
         if self.unpadding:
             with torch.no_grad():
-                input_ids, indices, cu_seqlens, max_seq_len = unpad_input(input_ids, attention_mask, self.pad_token_id)
+                input_ids, indices, cu_seqlens, max_seq_len = self.unpad_input(input_ids, attention_mask)
             attention_mask = None
         else:
             indices, cu_seqlens, max_seq_len = None, None, None
@@ -266,34 +291,82 @@ class BertBlocksModel(BertBlocksPreTrainedModel):
                 else:
                     attention_mask = attention_mask.masked_fill(~local_mask, -float("inf"))
 
-        # Input embeddings
-        x = self.embd(input_ids, token_type_ids=token_type_ids, cu_seqlens=cu_seqlens)
+        if self.compile:
+            attentions, hidden_states, x = self._forward_compiled(
+                input_ids,
+                attention_mask,
+                token_type_ids,
+                cu_seqlens,
+                max_seq_len,
+                output_attentions,
+                output_hidden_states,
+            )
+        else:
+            attentions, hidden_states, x = self._forward(
+                input_ids,
+                attention_mask,
+                token_type_ids,
+                cu_seqlens,
+                max_seq_len,
+                output_attentions,
+                output_hidden_states,
+            )
 
+        if self.pool is not None:
+            pooler_output = self.pool(x)
+            return MaybeUnpaddedBaseModelOutputWithPooling(
+                last_hidden_state=x,
+                pooler_output=pooler_output,
+                hidden_states=hidden_states if output_hidden_states else None,
+                attentions=attentions if output_attentions else None,
+                cu_seqlens=cu_seqlens,
+                indices=indices,
+                seq_len=seq_len,
+                batch_size=batch_size,
+            )
+        else:
+            return MaybeUnpaddedBaseModelOutput(
+                last_hidden_state=x,
+                hidden_states=hidden_states if output_hidden_states else None,
+                attentions=attentions if output_attentions else None,
+                cu_seqlens=cu_seqlens,
+                indices=indices,
+                seq_len=seq_len,
+                batch_size=batch_size,
+            )
+
+    def _forward(
+        self,
+        input_ids: Tensor,
+        attention_mask: Tensor | None = None,
+        token_type_ids: Tensor | None = None,
+        cu_seqlens: Tensor | None = None,
+        max_seq_len: int | None = None,
+        output_attentions: bool = False,
+        output_hidden_states: bool = False,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        x = self.embd(input_ids, token_type_ids=token_type_ids, cu_seqlens=cu_seqlens)
         x, hidden_states, attentions = self.encd(
             x, attention_mask, cu_seqlens, max_seq_len, output_attentions, output_hidden_states
         )
         x = self.norm(x)
         x = self.scaler(x)
+        return attentions, hidden_states, x
 
-        if self.config._unpadding:
-            x = pad_output(x, indices, B, S)
-            if output_hidden_states:
-                hidden_states = [pad_output(h, indices, B, S, self.pad_token_id) for h in hidden_states]
-
-        if self.pool is not None:
-            pooler_output = self.pool(x)
-            return BaseModelOutputWithPooling(
-                last_hidden_state=x,
-                pooler_output=pooler_output,
-                hidden_states=hidden_states if output_hidden_states else None,
-                attentions=attentions if output_attentions else None,
-            )
-        else:
-            return BaseModelOutput(
-                last_hidden_state=x,
-                hidden_states=hidden_states if output_hidden_states else None,
-                attentions=attentions if output_attentions else None,
-            )
+    @torch.compile(fullgraph=True, mode="max-autotune")
+    def _forward_compiled(
+        self,
+        input_ids: Tensor,
+        attention_mask: Tensor | None = None,
+        token_type_ids: Tensor | None = None,
+        cu_seqlens: Tensor | None = None,
+        max_seq_len: int | None = None,
+        output_attentions: bool = False,
+        output_hidden_states: bool = False,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        return self._forward(
+            input_ids, attention_mask, token_type_ids, cu_seqlens, max_seq_len, output_attentions, output_hidden_states
+        )
 
 
 class BertBlocksForTasksBase(BertBlocksPreTrainedModel):
@@ -312,6 +385,42 @@ class BertBlocksForTasksBase(BertBlocksPreTrainedModel):
         super().__init__(config, *args, **kwargs)
         self.model = BertBlocksModel(config)
         self.head = get_prediction_head(config)
+
+    def pad_output(
+        self, output: MaybeUnpaddedBaseModelOutput | MaybeUnpaddedBaseModelOutputWithPooling
+    ) -> BaseModelOutput | BaseModelOutputWithPooling:
+        indices = output.indices
+        seq_len = output.seq_len
+        batch_size = output.batch_size
+
+        if indices is None:
+            return output
+
+        if isinstance(output, BaseModelOutputWithPooling):
+            return BaseModelOutputWithPooling(
+                last_hidden_state=pad_output(
+                    output.last_hidden_state, indices, batch_size, seq_len, self.model.pad_token_id
+                ),
+                pooler_output=output.pooler_output,
+                hidden_states=[
+                    pad_output(h, indices, batch_size, seq_len, self.pad_token_id) for h in output.hidden_states
+                ]
+                if output.hidden_states is not None
+                else None,
+                attentions=output.attentions,
+            )
+        else:
+            return BaseModelOutput(
+                last_hidden_state=pad_output(
+                    output.last_hidden_state, indices, batch_size, seq_len, self.model.pad_token_id
+                ),
+                hidden_states=[
+                    pad_output(h, indices, batch_size, seq_len, self.pad_token_id) for h in output.hidden_states
+                ]
+                if output.hidden_states is not None
+                else None,
+                attentions=output.attentions,
+            )
 
     def compute_loss(
         self,
@@ -417,7 +526,7 @@ class BertBlocksForMaskedLM(BertBlocksPreTrainedModel):
                 - `attentions`: Attention weights from all layers if requested
 
         """
-        output = self.model(
+        output: MaybeUnpaddedBaseModelOutput = self.model(
             input_ids,
             attention_mask=attention_mask,
             token_type_ids=token_type_ids,
@@ -428,16 +537,33 @@ class BertBlocksForMaskedLM(BertBlocksPreTrainedModel):
 
         loss = None
         if labels is not None:
-            labels = labels.flatten()  # (b d -> (b d))
-            logits = logits.flatten(0, 1)  # (b d v -> (b d) v)
-            loss = self.loss_fn(logits, labels)
+            if output.indices is not None:
+                labels = labels.flatten()[output.indices]
+            else:
+                labels = labels.flatten()
+            loss = self.loss_fn(logits.view(-1, self.vocab_size), labels)
 
-        return MaskedLMOutput(
-            loss=loss,
-            logits=logits,
-            hidden_states=output.hidden_states,
-            attentions=output.attentions,
-        )
+        if output.indices is not None:
+            indices = output.indices
+            seq_len = output.seq_len
+            batch_size = output.batch_size
+            return MaskedLMOutput(
+                loss=loss,
+                logits=pad_output(logits, indices, batch_size, seq_len, -torch.inf),
+                hidden_states=[
+                    pad_output(h, indices, batch_size, seq_len, self.pad_token_id) for h in output.hidden_states
+                ]
+                if output.hidden_states is not None
+                else None,
+                attentions=output.attentions,
+            )
+        else:
+            return MaskedLMOutput(
+                loss=loss,
+                logits=logits,
+                hidden_states=output.hidden_states,
+                attentions=output.attentions,
+            )
 
 
 class BertBlocksForEnhancedMaskedLM(BertBlocksForMaskedLM):
@@ -505,7 +631,7 @@ class BertBlocksForEnhancedMaskedLM(BertBlocksForMaskedLM):
                 - `attentions`: Attention weights from all layers if requested
 
         """
-        output = self.model(
+        output: MaybeUnpaddedBaseModelOutput = self.model(
             input_ids,
             attention_mask=attention_mask,
             token_type_ids=token_type_ids,
@@ -517,16 +643,33 @@ class BertBlocksForEnhancedMaskedLM(BertBlocksForMaskedLM):
 
         loss = None
         if labels is not None:
-            labels = labels.flatten()  # (b d -> (b d))
-            logits = logits.flatten(0, 1)  # (b d v -> (b d) v)
-            loss = self.loss_fn(logits, labels)
+            if output.indices is not None:
+                labels = labels.flatten()[output.indices]
+            else:
+                labels = labels.flatten()
+            loss = self.loss_fn(logits.view(-1, self.vocab_size), labels)
 
-        return MaskedLMOutput(
-            loss=loss,
-            logits=logits,
-            hidden_states=output.hidden_states,
-            attentions=output.attentions,
-        )
+        if output.indices is not None:
+            indices = output.indices
+            seq_len = output.seq_len
+            batch_size = output.batch_size
+            return MaskedLMOutput(
+                loss=loss,
+                logits=pad_output(logits, indices, batch_size, seq_len, -torch.inf),
+                hidden_states=[
+                    pad_output(h, indices, batch_size, seq_len, self.pad_token_id) for h in output.hidden_states
+                ]
+                if output.hidden_states is not None
+                else None,
+                attentions=output.attentions,
+            )
+        else:
+            return MaskedLMOutput(
+                loss=loss,
+                logits=logits,
+                hidden_states=output.hidden_states,
+                attentions=output.attentions,
+            )
 
 
 class BertBlocksForSequenceClassification(BertBlocksForTasksBase):
@@ -592,6 +735,7 @@ class BertBlocksForSequenceClassification(BertBlocksForTasksBase):
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
         )
+        output = self.pad_output(output)
 
         cls_features = output.last_hidden_state[:, 0, :]  # Regular CLS token extraction
         logits = self.classifier(self.head(cls_features))
@@ -669,6 +813,7 @@ class BertBlocksForTokenClassification(BertBlocksForTasksBase):
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
         )
+        output = self.pad_output(output)
         logits = self.classifier(self.head(output.last_hidden_state))
 
         loss = self.compute_loss(logits, labels, self.problem_type)
@@ -744,6 +889,7 @@ class BertBlocksForQuestionAnswering(BertBlocksForTasksBase):
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
         )
+        output = self.pad_output(output)
         logits = self.classifier(self.head(output.last_hidden_state))
 
         start_logits, end_logits = logits.split(1, dim=-1)
@@ -829,34 +975,54 @@ class BertBlocksForMaskedDiffusion(BertBlocksForMaskedLM, GenerationMixin):
         if attention_mask is None:
             attention_mask = torch.ones_like(input_ids)
 
-        output: MaskedLMOutput = super().forward(
-            input_ids=input_ids,
+        output: MaybeUnpaddedBaseModelOutput = self.model(
+            input_ids,
             attention_mask=attention_mask,
             token_type_ids=token_type_ids,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
         )
+        logits = self.decoder(self.head(output.last_hidden_state))
 
         if labels is not None:
             # Binary mask indicating unmasked tokens in batch (that should not contribute to the loss)
-            masked_labels = torch.where(input_ids == self.mask_token_id, labels, -100)
-            # Compute loss
+            if output.indices is not None:
+                unpadded_input_ids = input_ids.flatten()[output.indices]
+                unpadded_labels = labels.flatten()[output.indices]
+                masked_labels = torch.where(unpadded_input_ids == self.mask_token_id, unpadded_labels, -100)
+            else:
+                masked_labels = torch.where(input_ids == self.mask_token_id, labels, -100)
+            # Compute loss on unpadded sequences
             loss = F.cross_entropy(
-                output.logits.view(-1, self.config.vocab_size),
+                logits.view(-1, self.config.vocab_size),
                 masked_labels.view(-1),
                 ignore_index=-100,
                 reduction="mean",
             )
-            logits = output.logits
         else:
-            # Remove the possibility of predicting a mask token
-            logits = self._process_logits(input_ids=input_ids, logits=output.logits)
             loss = None
+
+        if output.indices is not None:
+            indices = output.indices
+            seq_len = output.seq_len
+            batch_size = output.batch_size
+            logits = pad_output(logits, indices, batch_size, seq_len, -torch.inf)
+            hidden_states = (
+                [pad_output(h, indices, batch_size, seq_len, self.pad_token_id) for h in output.hidden_states]
+                if output.hidden_states is not None
+                else None
+            )
+        else:
+            hidden_states = output.hidden_states
+
+        if loss is None:
+            # Remove the possibility of predicting a mask token
+            logits = self._process_logits(input_ids=input_ids, logits=logits)
 
         return MaskedLMOutput(
             loss=loss,
             logits=logits,
-            hidden_states=output.hidden_states,
+            hidden_states=hidden_states,
             attentions=output.attentions,
         )
 
