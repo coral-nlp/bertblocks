@@ -28,6 +28,7 @@ from bertblocks.modeling.norms import DeepNorm, DynamicTanhNorm, GroupNorm, Laye
 from bertblocks.training.metrics import get_metrics_for_task
 from bertblocks.training.objectives import get_collator_cls
 from bertblocks.training.optimizer import get_optimizer
+from bertblocks.training.packing import SequencePacker, get_sequence_packer_cls
 from bertblocks.training.scheduler import get_scheduler
 from bertblocks.training.utils import chunk_examples
 
@@ -80,6 +81,9 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
         pretokenized: bool | None = False,
         num_workers: int | None = 0,
         collator_kwargs: dict[str, Any] | None = None,
+        sequence_packing: Literal["none", "greedy", "sorted"] = "none",
+        packing_token_budget: int | None = None,
+        packing_buffer_size: int = 4096,
     ) -> None:
         """Initialize the pretraining data module.
 
@@ -110,6 +114,13 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
             num_workers (int | None): Number of workers for data loading. Defaults to 0.
             collator_kwargs (dict[str, Any] | None): Additional keyword arguments for the data collator.
                 For example, the mlm_probability.
+            sequence_packing (Literal["none", "greedy"]): Sequence packing strategy.
+                "none" disables packing, "greedy" accumulates sequences in order until the token
+                budget is reached.
+            packing_token_budget (int | None): Target total number of tokens per packed batch.
+                Defaults to max_sequence_length * train_batch_size.
+            packing_buffer_size (int): Maximum number of unpacked sequences to buffer internally
+                during packing. Defaults to 4096.
 
         """
         super().__init__()
@@ -154,22 +165,30 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
                 )
             )
 
-    def train_dataloader(self) -> DataLoader:
+    def train_dataloader(self) -> SequencePacker:
         """Create the training data loader.
 
         Returns:
-            DataLoader: PyTorch DataLoader configured for MLM training
-                with the specified batch size, collation function, and
-                data loading parameters.
-
+            SequencePacker wrapping a DataLoader, configured for pretraining.
         """
-        return DataLoader(
+        loader = DataLoader(
             self.dataset,
             collate_fn=self.collator,
             shuffle=self.hparams.shuffle,
             batch_size=self.hparams.train_batch_size,
             num_workers=self.hparams.num_workers,
             pin_memory=True,
+        )
+        token_budget = self.hparams.packing_token_budget or (
+            self.hparams.max_sequence_length * self.hparams.train_batch_size
+        )
+        pad_token_id = self.collator.tokenizer.pad_token_id or 0
+        packer_cls = get_sequence_packer_cls(self.hparams.sequence_packing)
+        return packer_cls(
+            dataloader=loader,
+            token_budget=token_budget,
+            pad_token_id=pad_token_id,
+            buffer_size=self.hparams.packing_buffer_size,
         )
 
 
@@ -501,6 +520,9 @@ class BertBlocksPretrainingModule(L.LightningModule):
 
         """
         torch.compiler.cudagraph_mark_step_begin()
+        if "attention_mask" in batch:
+            self.log("packing/tokens_per_batch", batch["attention_mask"].float().sum())
+            self.log("packing/sequences_per_batch", float(batch["attention_mask"].shape[0]))
         output = self.model(**batch)
         self.log("loss/train", output.loss, prog_bar=True)
         return output.loss
