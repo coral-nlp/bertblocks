@@ -28,7 +28,7 @@ from bertblocks.modeling.norms import DeepNorm, DynamicTanhNorm, GroupNorm, Laye
 from bertblocks.training.metrics import get_metrics_for_task
 from bertblocks.training.objectives import get_collator_cls
 from bertblocks.training.optimizer import get_optimizer
-from bertblocks.training.packing import SequencePacker, get_sequence_packer_cls
+from bertblocks.training.packing import PackedDataset
 from bertblocks.training.scheduler import get_scheduler
 from bertblocks.training.utils import chunk_examples
 
@@ -81,9 +81,9 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
         pretokenized: bool | None = False,
         num_workers: int | None = 0,
         collator_kwargs: dict[str, Any] | None = None,
-        sequence_packing: Literal["none", "greedy", "sorted"] = "none",
-        packing_token_budget: int | None = None,
+        packing: bool = False,
         packing_buffer_size: int = 4096,
+        packing_lookahead: int = 0,
     ) -> None:
         """Initialize the pretraining data module.
 
@@ -114,13 +114,11 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
             num_workers (int | None): Number of workers for data loading. Defaults to 0.
             collator_kwargs (dict[str, Any] | None): Additional keyword arguments for the data collator.
                 For example, the mlm_probability.
-            sequence_packing (Literal["none", "greedy"]): Sequence packing strategy.
-                "none" disables packing, "greedy" accumulates sequences in order until the token
-                budget is reached.
-            packing_token_budget (int | None): Target total number of tokens per packed batch.
-                Defaults to max_sequence_length * train_batch_size.
+            packing (bool): Enable sequence packing.
             packing_buffer_size (int): Maximum number of unpacked sequences to buffer internally
                 during packing. Defaults to 4096.
+            packing_lookahead (int): Number if items to descend into the buffer before aborting search for fitting
+                sequences during greedy packing. Defaults to 0 (no lookahead).
 
         """
         super().__init__()
@@ -136,24 +134,21 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
 
     def setup(self, stage: str) -> None:
         """Prepare the dataset for training. Called once per node."""
+        streaming = not self.hparams.shuffle
+
         if os.path.isdir(self.hparams.dataset_name_or_path):
-            # If local path, load from disk
             self.dataset = load_dataset(
                 self.hparams.file_format or "json",
                 data_dir=self.hparams.dataset_name_or_path,
                 split=self.hparams.data_split or "train",
-                streaming=not self.hparams.shuffle,  # We can't stream if we're shuffling
+                streaming=streaming,
             )
         else:
-            # If not local path, try HF
             self.dataset = load_dataset(
                 self.hparams.dataset_name_or_path,
                 split=self.hparams.data_split or "train",
-                streaming=not self.hparams.shuffle,  # We can't stream if we're shuffling
+                streaming=streaming,
             )
-
-        if self.trainer.world_size > 1:
-            self.dataset = self.dataset.shard(num_shards=self.trainer.world_size, index=self.trainer.global_rank)
 
         if self.hparams.split_char or self.hparams.split_len:
             self.dataset.map(
@@ -164,31 +159,53 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
                     split_len=self.hparams.split_len,
                 )
             )
+        if streaming and self.trainer.world_size > 1:
+            self.dataset = self.dataset.shard(num_shards=self.trainer.world_size, index=self.trainer.global_rank)
 
-    def train_dataloader(self) -> SequencePacker:
+        if self.hparams.packing:
+            self.dataset = PackedDataset(
+                dataset=self.dataset,
+                tokenizer=self.collator.tokenizer,
+                max_length=self.hparams.max_sequence_length,
+                token_budget=self.hparams.max_sequence_length * self.hparams.train_batch_size,
+                text_column=self.hparams.text_column or "text",
+                pretokenized=self.hparams.pretokenized,
+                buffer_size=self.hparams.packing_buffer_size,
+                lookahead=self.hparams.lookahead,
+            )
+            # Collator receives pretokenized variable-length tensors from PackedDataset
+            self.collator.pretokenized = True
+
+    def train_dataloader(self) -> DataLoader:
         """Create the training data loader.
 
         Returns:
-            SequencePacker wrapping a DataLoader, configured for pretraining.
+            DataLoader configured for pretraining, optionally with packed batches.
         """
-        loader = DataLoader(
+        if self.hparams.packing:
+            # Each item from the packed dataset is already a group of pretokenized samples.
+            # DataLoader with batch_size=1 wraps it in a list; the collator unwraps.
+            collator = self.collator
+
+            def packed_collate(batch: list) -> dict:
+                # batch is a list of 1 group of packed seqs (batch_size=1)
+                return collator(batch[0])
+
+            return DataLoader(
+                self.dataset,
+                batch_size=1,
+                collate_fn=packed_collate,
+                num_workers=self.hparams.num_workers,
+                pin_memory=True,
+            )
+
+        return DataLoader(
             self.dataset,
             collate_fn=self.collator,
             shuffle=self.hparams.shuffle,
             batch_size=self.hparams.train_batch_size,
             num_workers=self.hparams.num_workers,
             pin_memory=True,
-        )
-        token_budget = self.hparams.packing_token_budget or (
-            self.hparams.max_sequence_length * self.hparams.train_batch_size
-        )
-        pad_token_id = self.collator.tokenizer.pad_token_id or 0
-        packer_cls = get_sequence_packer_cls(self.hparams.sequence_packing)
-        return packer_cls(
-            dataloader=loader,
-            token_budget=token_budget,
-            pad_token_id=pad_token_id,
-            buffer_size=self.hparams.packing_buffer_size,
         )
 
 

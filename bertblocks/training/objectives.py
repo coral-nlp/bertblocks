@@ -2,6 +2,7 @@ from abc import ABC, abstractmethod
 from typing import Any, Literal
 
 import torch
+from torch.nn.utils.rnn import pad_sequence
 from transformers import DataCollatorForLanguageModeling, PreTrainedTokenizerBase
 
 from bertblocks.modeling.utils import LogLinearNoise
@@ -25,6 +26,7 @@ class Collator(ABC):
         label_column: str | None = None,
         max_sequence_length: int | None = 256,
         pretokenized: bool | None = False,
+        padding: Literal["max_length", "longest"] = "max_length",
     ) -> None:
         """Initialize the data collator.
 
@@ -34,6 +36,7 @@ class Collator(ABC):
             label_column (str): Name of the column containing label data in the dataset. Defaults to "label".
             max_sequence_length (int | None): Maximum sequence length after tokenization. Defaults to 256.
             pretokenized (bool | None): Whether the input data is already tokenized. Defaults to False.
+            padding (Literal["max_length", "longest"]): Padding strategy. Defaults to "max_length".
         """
         super().__init__()
         self.tokenizer = tokenizer
@@ -41,6 +44,7 @@ class Collator(ABC):
         self.label_column = label_column
         self.max_sequence_length = max_sequence_length
         self.pretokenized = pretokenized
+        self.padding = padding
         self.special_tokens = torch.tensor(self.tokenizer.all_special_ids)
         self.batch_keys = ["input_ids", "attention_mask", "labels"]
 
@@ -57,17 +61,29 @@ class Collator(ABC):
         if not self.pretokenized:
             tokenized = self.tokenizer(
                 [item[self.text_column] for item in batch],
-                padding="max_length",
+                padding=self.padding,
                 truncation=True,
                 max_length=self.max_sequence_length,
                 return_tensors="pt",
                 return_special_tokens_mask=True,
             )
         else:
-            tokenized = batch
+            pad_id = self.tokenizer.pad_token_id or 0
+            input_ids = [
+                item["input_ids"]
+                if isinstance(item["input_ids"], torch.Tensor)
+                else torch.tensor(item["input_ids"], dtype=torch.long)
+                for item in batch
+            ]
+            attention_mask = [
+                item["attention_mask"]
+                if isinstance(item["attention_mask"], torch.Tensor)
+                else torch.tensor(item["attention_mask"], dtype=torch.long)
+                for item in batch
+            ]
             tokenized = {
-                "input_ids": torch.stack([item["input_ids"] for item in tokenized]),
-                "attention_mask": torch.stack([item["attention_mask"] for item in tokenized]),
+                "input_ids": pad_sequence(input_ids, batch_first=True, padding_value=pad_id),
+                "attention_mask": pad_sequence(attention_mask, batch_first=True, padding_value=0),
             }
         if self.label_column:
             tokenized.update({"labels": [item[self.label_column] for item in batch]})
