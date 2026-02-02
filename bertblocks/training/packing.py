@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
+    from torch.utils.data import Dataset
     from transformers import PreTrainedTokenizerBase
 
 from collections import deque
@@ -19,7 +20,7 @@ class PackedDataset(IterableDataset):
     collator must run in pre-tokenized mode.
 
     Args:
-        dataset (IterableDataset): The underlying dataset to wrap (map-style or iterable).
+        dataset (Dataset): The underlying dataset to wrap (map-style or iterable).
         tokenizer (PreTrainedTokenizerBase): HuggingFace tokenizer for tokenizing raw text.
         max_length (int): Maximum sequence length (for truncation).
         token_budget (int): Maximum total tokens per packed group.
@@ -31,7 +32,7 @@ class PackedDataset(IterableDataset):
 
     def __init__(
         self,
-        dataset: "IterableDataset",
+        dataset: "Dataset",
         tokenizer: "PreTrainedTokenizerBase",
         max_length: int,
         token_budget: int,
@@ -40,7 +41,7 @@ class PackedDataset(IterableDataset):
         buffer_size: int = 4096,
         lookahead: int = 0,
     ) -> None:
-        self.dataset_iter = iter(dataset)
+        self.dataset = dataset
         self.tokenizer = tokenizer
         self.max_length = max_length
         self.token_budget = token_budget
@@ -48,29 +49,29 @@ class PackedDataset(IterableDataset):
         self.pretokenized = pretokenized
         self.buffer_size = buffer_size
         self.lookahead = lookahead
-        self.buffer: deque[dict[str, torch.Tensor]] = deque()
 
     def __iter__(self) -> "Iterator[list[dict[str, Any]]]":
         """Buffer-based packing for streaming datasets."""
-        self.buffer = deque()
+        dataset_iter = iter(self.dataset)
+        buffer: deque[dict[str, torch.Tensor]] = deque()
         data_exhausted = False
 
         def fill_buffer() -> None:
             nonlocal data_exhausted
-            while len(self.buffer) < self.buffer_size and not data_exhausted:
+            while len(buffer) < self.buffer_size and not data_exhausted:
                 try:
-                    sample = next(self.dataset_iter)
+                    sample = next(dataset_iter)
                 except StopIteration:
                     data_exhausted = True
                     return
                 tokenized = self._tokenize(sample)
-                self.buffer.append(tokenized)
+                buffer.append(tokenized)
 
         while True:
             fill_buffer()
-            if not self.buffer:
+            if not buffer:
                 break
-            yield self._batch_from_buffer()
+            yield self._batch_from_buffer(buffer)
 
     def _tokenize(self, sample: "dict[str, str | torch.Tensor]") -> "dict[str, torch.Tensor]":
         """Tokenize a single sample, returning input_ids and attention_mask."""
@@ -97,14 +98,14 @@ class PackedDataset(IterableDataset):
             "attention_mask": encoded["attention_mask"].squeeze(0),
         }
 
-    def _batch_from_buffer(self) -> "list[dict[str, torch.Tensor]]":
+    def _batch_from_buffer(self, buffer: deque) -> "list[dict[str, torch.Tensor]]":
         """Fill one batch from the tokenized buffer, greedily picking items that fit within the token budget."""
         selected: list[dict[str, torch.Tensor]] = []
         deferred: list[dict[str, torch.Tensor]] = []
         total_seq_len = 0
 
-        while self.buffer:
-            candidate = self.buffer.popleft()
+        while buffer:
+            candidate = buffer.popleft()
             candidate_len = len(candidate["input_ids"])
             if total_seq_len + candidate_len > self.token_budget:
                 # This ain't it chief, back to the queue
@@ -119,5 +120,5 @@ class PackedDataset(IterableDataset):
                 total_seq_len += candidate_len
 
         # Deferred sequences go back to the front to start the next batch
-        self.buffer.extendleft(deferred)
+        buffer.extendleft(deferred)
         return selected

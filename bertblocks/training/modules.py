@@ -1,9 +1,11 @@
+import warnings
 from typing import TYPE_CHECKING, Any, Literal
+
+import datasets
 
 if TYPE_CHECKING:
     from torchmetrics import MetricCollection
 
-import functools
 import os.path
 from pathlib import Path
 
@@ -30,7 +32,6 @@ from bertblocks.training.objectives import get_collator_cls
 from bertblocks.training.optimizer import get_optimizer
 from bertblocks.training.packing import PackedDataset
 from bertblocks.training.scheduler import get_scheduler
-from bertblocks.training.utils import chunk_examples
 
 
 class EmptyDataset(Dataset):
@@ -67,23 +68,24 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
         self,
         pretrained_tokenizer_name_or_path: str,
         objective: Literal["mlm", "enhanced_mlm", "diffusion"] = "mlm",
-        max_sequence_length: int | None = 512,
+        max_sequence_length: int = 512,
         dataset: "torch.utils.data.Dataset" = None,
         dataset_name_or_path: str | list[str] | None = None,
         file_format: str | None = None,
         data_split: str | None = None,
-        text_column: str | None = "text",
-        split_char: str | None = None,
-        split_len: int | None = None,
-        shuffle: bool | None = False,
-        train_batch_size: int | None = 32,
-        val_batch_size: int | None = 32,
-        pretokenized: bool | None = False,
-        num_workers: int | None = 0,
+        text_column: str = "text",
+        streaming: bool = False,
+        shuffle: bool = False,
+        num_shards: int | None = None,
+        train_batch_size: int = 32,
+        val_batch_size: int = 32,
+        pretokenized: bool = False,
+        num_workers: int = 0,
         collator_kwargs: dict[str, Any] | None = None,
         packing: bool = False,
         packing_buffer_size: int = 4096,
         packing_lookahead: int = 0,
+        shuffle_buffer_size: int = 10_000,
     ) -> None:
         """Initialize the pretraining data module.
 
@@ -92,34 +94,32 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
                 to use for text processing.
             objective (Literal["mlm", "enhanced_mlm", "diffusion"]): The training objective. Available options:
                 "mlm", "enhanced_mlm", "diffusion".
-            max_sequence_length (int | None): Maximum sequence length for tokenization.
+            max_sequence_length (int, optional): Maximum sequence length for tokenization.
                 Longer sequences will be truncated. Defaults to 512.
             dataset (torch.utils.data.Dataset, optional): Instantiated dataset to use. For train only, does not support
                 splits. Defaults to None. Either `dataset` or `dataset_name_or_path` must be provided, but only one
                 of them.
-            dataset_name_or_path (str | list[str] | None): Dataset name or path to load via huggingface datasets.
+            dataset_name_or_path (str | list[str], optional): Dataset name or path to load via huggingface datasets.
                 Defaults to None. Either `dataset` or `dataset_name_or_path` must be provided, but only one
                 of them.
             data_split (str, optional): Dataset split to use for pretraining. Defaults to 'train'. Only used if data is
                 specifie via `dataset_name_or_path`.
             text_column (str, optional): Text column name pretrain with. Defaults to 'text'.
-            split_char (str, optional): Character to split examples at. Only one of `split_char` and `split_len`
-                should be specified. Defaults to None.
-            split_len (int, optional): Number of characters to split examples at. Only one of `split_char` and
-                `split_len` should be specified. Defaults to None.
-            shuffle (bool, optional): Whether to shuffle the dataset before pretraining. Defaults to False.
-            train_batch_size (int | None): Batch size for training. Defaults to 32.
-            val_batch_size (int | None): Batch size for validation. Defaults to 32.
-            pretokenized (bool | None): Whether input is pre-tokenized. Defaults to False.
-            num_workers (int | None): Number of workers for data loading. Defaults to 0.
-            collator_kwargs (dict[str, Any] | None): Additional keyword arguments for the data collator.
+            streaming (bool, optional): Whether to use streaming data. Defaults to False.
+            shuffle (bool, optional): Whether to shuffle the dataset before pretraining. Shuffling is only supported
+                for non-streaming datasets and only when not using sequence packing. Defaults to False.
+            num_shards (int, optional): Number of shards to partition the dataset into. Defaults to None (no sharding).
+            train_batch_size (int, optional): Batch size for training. Defaults to 32.
+            val_batch_size (int, optional): Batch size for validation. Defaults to 32.
+            pretokenized (bool, optional): Whether input is pre-tokenized. Defaults to False.
+            num_workers (int, optional): Number of workers for data loading. Defaults to 0.
+            collator_kwargs (dict[str, Any], optional): Additional keyword arguments for the data collator.
                 For example, the mlm_probability.
-            packing (bool): Enable sequence packing.
-            packing_buffer_size (int): Maximum number of unpacked sequences to buffer internally
+            packing (bool, optional): Enable sequence packing.
+            packing_buffer_size (int, optional): Maximum number of unpacked sequences to buffer internally
                 during packing. Defaults to 4096.
-            packing_lookahead (int): Number if items to descend into the buffer before aborting search for fitting
-                sequences during greedy packing. Defaults to 0 (no lookahead).
-
+            packing_lookahead (int, optional): Number if items to descend into the buffer before aborting search for
+                fitting sequences during greedy packing. Defaults to 0 (no lookahead).
         """
         super().__init__()
         self.save_hyperparameters()
@@ -134,32 +134,21 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
 
     def setup(self, stage: str) -> None:
         """Prepare the dataset for training. Called once per node."""
-        streaming = not self.hparams.shuffle
-
         if os.path.isdir(self.hparams.dataset_name_or_path):
-            self.dataset = load_dataset(
+            self.dataset: datasets.Dataset | datasets.IterableDataset = load_dataset(
                 self.hparams.file_format or "json",
                 data_dir=self.hparams.dataset_name_or_path,
                 split=self.hparams.data_split or "train",
-                streaming=streaming,
+                streaming=self.hparams.streaming,
             )
         else:
             self.dataset = load_dataset(
                 self.hparams.dataset_name_or_path,
                 split=self.hparams.data_split or "train",
-                streaming=streaming,
+                streaming=self.hparams.streaming,
             )
 
-        if self.hparams.split_char or self.hparams.split_len:
-            self.dataset.map(
-                functools.partial(
-                    chunk_examples,
-                    column=self.hparams.column_text,
-                    split_char=self.hparams.split_char,
-                    split_len=self.hparams.split_len,
-                )
-            )
-        if streaming and self.trainer.world_size > 1:
+        if self.trainer.world_size > 1:
             self.dataset = self.dataset.shard(num_shards=self.trainer.world_size, index=self.trainer.global_rank)
 
         if self.hparams.packing:
@@ -171,7 +160,7 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
                 text_column=self.hparams.text_column or "text",
                 pretokenized=self.hparams.pretokenized,
                 buffer_size=self.hparams.packing_buffer_size,
-                lookahead=self.hparams.lookahead,
+                lookahead=self.hparams.packing_lookahead,
             )
             # Collator receives pretokenized variable-length tensors from PackedDataset
             self.collator.pretokenized = True
@@ -182,30 +171,22 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
         Returns:
             DataLoader configured for pretraining, optionally with packed batches.
         """
-        if self.hparams.packing:
-            # Each item from the packed dataset is already a group of pretokenized samples.
-            # DataLoader with batch_size=1 wraps it in a list; the collator unwraps.
-            collator = self.collator
-
-            def packed_collate(batch: list) -> dict:
-                # batch is a list of 1 group of packed seqs (batch_size=1)
-                return collator(batch[0])
-
-            return DataLoader(
-                self.dataset,
-                batch_size=1,
-                collate_fn=packed_collate,
-                num_workers=self.hparams.num_workers,
-                pin_memory=True,
+        if (self.hparams.shuffle and self.hparams.streaming) or (self.hparams.shuffle and self.hparams.packing):
+            warnings.warn(
+                "Shuffling is not supported for streamed or packed datasets. Falling back to"
+                " unshuffled mode. You may need to pre-shuffle your data to get correct results.",
+                stacklevel=2,
             )
+            shuffle = False
+        else:
+            shuffle = self.hparams.shuffle
 
         return DataLoader(
             self.dataset,
             collate_fn=self.collator,
-            shuffle=self.hparams.shuffle,
-            batch_size=self.hparams.train_batch_size,
+            shuffle=shuffle,
+            batch_size=self.hparams.train_batch_size if not self.hparams.packing else None,  # The packing handles this
             num_workers=self.hparams.num_workers,
-            pin_memory=True,
         )
 
 
@@ -411,6 +392,7 @@ class BertBlocksPretrainingModule(L.LightningModule):
         scheduler_cooldown_steps: int = 0,
         scheduler_cooldown_decay: float = 0.0,
         objective: Literal["mlm", "enhanced_mlm", "diffusion"] = "mlm",
+        packing_token_budget: int | None = None,
         gradient_checkpointing: bool = False,
         model_config_kwargs: "dict[str, Any] | None" = None,
         model_kwargs: "dict[str, Any] | None" = None,
@@ -445,6 +427,8 @@ class BertBlocksPretrainingModule(L.LightningModule):
                 for cooldown phase. Defaults to 0.0.
             objective: The training objective. Available options:
                 "mlm", "diffusion", "enhanced_mlm".
+            packing_token_budget: Total token budget per batch; used to enable efficiency logging when sequence packing
+                is activated. Defaults to None.
             gradient_checkpointing (bool, optional): Whether to enable gradient checkpointing to reduce
                 activation memory at the cost of additional compute. Defaults to False.
             model_config_kwargs (dict[str, Any], optional): Optional dictionary of model configuration options passed
@@ -475,6 +459,10 @@ class BertBlocksPretrainingModule(L.LightningModule):
             self.model.gradient_checkpointing_enable()
         if self.hparams.compile_model:
             torch.set_float32_matmul_precision("high")
+
+    def configure_model(self) -> None:
+        """Compile the model after DDP setup so each rank has its own CUDA context."""
+        if self.hparams.compile_model:
             self.model = torch.compile(self.model, dynamic=True)
 
     def configure_optimizers(self) -> tuple[list["torch.optim.Optimizer"], list[dict[str, Any]]]:
@@ -537,9 +525,10 @@ class BertBlocksPretrainingModule(L.LightningModule):
 
         """
         torch.compiler.cudagraph_mark_step_begin()
-        if "attention_mask" in batch:
-            self.log("packing/tokens_per_batch", batch["attention_mask"].float().sum())
-            self.log("packing/sequences_per_batch", float(batch["attention_mask"].shape[0]))
+        self.log("packing/tokens_per_batch", batch["attention_mask"].float().sum())
+        self.log("packing/sequences_per_batch", float(batch["attention_mask"].shape[0]))
+        if self.hparams.packing_token_budget is not None:
+            self.log("packing/efficiency", batch["attention_mask"].float().sum() / self.hparams.packing_token_budget)
         output = self.model(**batch)
         self.log("loss/train", output.loss, prog_bar=True)
         return output.loss

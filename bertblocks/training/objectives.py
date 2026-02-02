@@ -2,7 +2,6 @@ from abc import ABC, abstractmethod
 from typing import Any, Literal
 
 import torch
-from torch.nn.utils.rnn import pad_sequence
 from transformers import DataCollatorForLanguageModeling, PreTrainedTokenizerBase
 
 from bertblocks.modeling.utils import LogLinearNoise
@@ -24,9 +23,8 @@ class Collator(ABC):
         tokenizer: PreTrainedTokenizerBase,
         text_column: str = "text",
         label_column: str | None = None,
-        max_sequence_length: int | None = 256,
-        pretokenized: bool | None = False,
-        padding: Literal["max_length", "longest"] = "max_length",
+        max_sequence_length: int = 1024,
+        pretokenized: bool = False,
     ) -> None:
         """Initialize the data collator.
 
@@ -34,9 +32,8 @@ class Collator(ABC):
             tokenizer (PreTrainedTokenizerBase): Huggingface tokenizer to use for text processing.
             text_column (str): Name of the column containing text data in the dataset. Defaults to "text".
             label_column (str): Name of the column containing label data in the dataset. Defaults to "label".
-            max_sequence_length (int | None): Maximum sequence length after tokenization. Defaults to 256.
+            max_sequence_length (int): Maximum sequence length after tokenization. Defaults to 1024.
             pretokenized (bool | None): Whether the input data is already tokenized. Defaults to False.
-            padding (Literal["max_length", "longest"]): Padding strategy. Defaults to "max_length".
         """
         super().__init__()
         self.tokenizer = tokenizer
@@ -44,7 +41,6 @@ class Collator(ABC):
         self.label_column = label_column
         self.max_sequence_length = max_sequence_length
         self.pretokenized = pretokenized
-        self.padding = padding
         self.special_tokens = torch.tensor(self.tokenizer.all_special_ids)
         self.batch_keys = ["input_ids", "attention_mask", "labels"]
 
@@ -61,7 +57,7 @@ class Collator(ABC):
         if not self.pretokenized:
             tokenized = self.tokenizer(
                 [item[self.text_column] for item in batch],
-                padding=self.padding,
+                padding="max_length",
                 truncation=True,
                 max_length=self.max_sequence_length,
                 return_tensors="pt",
@@ -82,8 +78,18 @@ class Collator(ABC):
                 for item in batch
             ]
             tokenized = {
-                "input_ids": pad_sequence(input_ids, batch_first=True, padding_value=pad_id),
-                "attention_mask": pad_sequence(attention_mask, batch_first=True, padding_value=0),
+                "input_ids": torch.stack(
+                    [
+                        torch.nn.functional.pad(ids, (0, self.max_sequence_length - len(ids)), value=pad_id)
+                        for ids in input_ids
+                    ]
+                ),
+                "attention_mask": torch.stack(
+                    [
+                        torch.nn.functional.pad(mask, (0, self.max_sequence_length - len(mask)), value=0)
+                        for mask in attention_mask
+                    ]
+                ),
             }
         if self.label_column:
             tokenized.update({"labels": [item[self.label_column] for item in batch]})
@@ -131,9 +137,9 @@ class MaskedLanguageModelingCollator(Collator):
         self,
         tokenizer: "PreTrainedTokenizerBase",
         text_column: str = "text",
-        max_sequence_length: int | None = 256,
-        pretokenized: bool | None = False,
-        mlm_probability: float | None = 0.3,
+        max_sequence_length: int = 1024,
+        pretokenized: bool = False,
+        mlm_probability: float = 0.3,
     ):
         super().__init__(
             tokenizer=tokenizer,
@@ -208,8 +214,8 @@ class TokenClassificationCollator(Collator):
         tokenizer: "PreTrainedTokenizerBase",
         text_column: str = "text",
         label_column: str = "labels",
-        max_sequence_length: int | None = 512,
-        pretokenized: bool | None = False,
+        max_sequence_length: int = 1024,
+        pretokenized: bool = False,
     ):
         super().__init__(
             tokenizer=tokenizer,
@@ -281,8 +287,8 @@ class SequenceClassificationCollator(Collator):
         tokenizer: "PreTrainedTokenizerBase",
         text_column: str = "text",
         label_column: str = "label",
-        max_sequence_length: int | None = 512,
-        pretokenized: bool | None = False,
+        max_sequence_length: int = 1024,
+        pretokenized: bool = False,
     ):
         super().__init__(
             tokenizer=tokenizer,
@@ -334,8 +340,8 @@ class QuestionAnsweringCollator(Collator):
         text_column: str = "question",  # Override default for QA
         label_column: str = "answers",  # Override default for QA
         context_column: str = "context",
-        max_sequence_length: int | None = 512,
-        pretokenized: bool | None = False,
+        max_sequence_length: int = 1024,
+        pretokenized: bool = False,
         doc_stride: int = 128,
     ):
         super().__init__(
@@ -479,8 +485,8 @@ class MaskedDiffusionCollator(Collator):
         tokenizer: "PreTrainedTokenizerBase",
         text_column: str = "text",
         mask_token_id: int = 0,
-        max_sequence_length: int = 256,
-        pretokenized: bool | None = False,
+        max_sequence_length: int = 1024,
+        pretokenized: bool = False,
         num_steps: int = 1000,
         sampling_eps: float = 0.1,
         noise_eps: float = 1e-3,
