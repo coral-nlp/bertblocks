@@ -1,0 +1,111 @@
+# lightning.pytorch==2.0.0
+seed_everything: 153201820 # For reproducibility
+trainer:
+  accelerator: "gpu"
+  precision: "bf16-mixed"
+  default_root_dir: "./checkpoints"
+  accumulate_grad_batches: 96 # 4.608 effective size
+  gradient_clip_val: 1.0
+  callbacks:
+    - class_path: lightning.pytorch.callbacks.ModelCheckpoint
+      init_args:
+        filename: "gecco-base-{epoch}"
+        every_n_epochs: 1
+        enable_version_counter: true
+    - class_path: lightning.pytorch.callbacks.LearningRateMonitor
+      init_args:
+        logging_interval: "step"
+        log_momentum: true
+        log_weight_decay: true
+  logger:
+    - class_path: lightning.pytorch.loggers.WandbLogger
+      init_args:
+        project: "gecco-lm"
+        entity: "lgienapp"
+        log_model: true
+  max_epochs: 10 # 10 times the whole dataset, each pass will perform limit_train_batches/accumulate_grad_batches updates
+  limit_train_batches: 500_000 # 20B tokens, 18432 tokens per batch, spread across 2 GPUs ~100k minibatches
+  log_every_n_steps: 1
+model:
+  class_path: bertblocks.training.modules.BertBlocksPretrainingModule
+  init_args:
+    optimizer_class: "adamw"
+    optimizer_quantized: true
+    optimizer_kwargs:
+      betas:
+        - 0.9
+        - 0.98
+      eps: 1e-10
+    compile_model: true
+    learning_rate: 8e-4
+    weight_decay: 1e-4
+    scheduler_warmup_steps: 1000
+    scheduler_warmup_decay: 0.1
+    scheduler_warmup_kind: "linear"
+    scheduler_training_kind: "constant"
+    scheduler_training_steps: 12000
+    scheduler_cooldown_kind: "linear"
+    scheduler_cooldown_steps: 1001
+    scheduler_cooldown_decay: 0.1
+    pretrained_tokenizer_name_or_path: ${data.init_args.pretrained_tokenizer_name_or_path}
+    model_config_kwargs:
+      max_sequence_length: ${data.init_args.max_sequence_length}
+      mask_token_id: 3
+      pad_token_id: 4
+      num_blocks: 22
+      attn_implementation: "flash_attention_2"
+      initializer_kind: "trunc_normal"
+      initializer_range: 0.02
+      initializer_cutoff_factor: 3.0
+      initializer_gain: 1.0
+      add_token_type_emb: false
+      type_vocab_size: 1
+      head_type: "glu"
+      include_final_norm: true
+      residual_first_layer: false
+      emb_dropout_prob: 0.1
+      actv_fn: "silu"
+      num_attention_heads: 12
+      num_kv_heads: 12
+      attention_gate: "headwise"
+      hidden_size: 768
+      intermediate_size: 1152
+      emb_pos_enc_kind: "none"
+      block_pos_enc_kind: "alibi"
+      mlp_type: "glu"
+      mlp_in_bias: false
+      mlp_out_bias: false
+      attn_proj_bias: false
+      attn_out_bias: false
+      norm_kind: "pre"
+      norm_fn: "rms"
+      norm_eps: 1e-6
+      norm_bias: false
+      norm_scaling: true
+      norm_qk: true
+      hidden_dropout_prob: 0.1
+      attn_dropout_prob: 0.1
+    objective: ${data.init_args.objective}
+    packing_token_budget: 18432
+data:
+  class_path: bertblocks.training.modules.BertBlocksPretrainingDataModule
+  init_args:
+    objective: diffusion
+    collator_kwargs:
+      mask_token_id: ${model.init_args.model_config_kwargs.mask_token_id}
+      sampling_eps: 0.1
+      noise_eps: 0.1
+      min_masked: 1
+      max_masked: 992
+    dataset_name_or_path: "/var/tmp/gienapp/gecco-ablation-dataset"
+    file_format: "parquet"
+    pretrained_tokenizer_name_or_path: lgienapp/gecco-tokenizer
+    max_sequence_length: 1024
+    train_batch_size: 24
+    val_batch_size: 24
+    packing: True
+    packing_buffer_size: 8192
+    packing_lookahead: 256
+    num_workers: 8
+    shuffle: false
+    streaming: true

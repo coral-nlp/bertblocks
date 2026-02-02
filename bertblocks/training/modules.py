@@ -457,8 +457,8 @@ class BertBlocksPretrainingModule(L.LightningModule):
         self.model = get_model_cls(objective)(self.model_config, **(model_kwargs or {}))
         if self.hparams.gradient_checkpointing:
             self.model.gradient_checkpointing_enable()
-        if self.hparams.compile_model:
-            torch.set_float32_matmul_precision("high")
+
+        torch.set_float32_matmul_precision("high")
 
     def configure_model(self) -> None:
         """Compile the model after DDP setup so each rank has its own CUDA context."""
