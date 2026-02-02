@@ -85,6 +85,7 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
         packing: bool = False,
         packing_buffer_size: int = 4096,
         packing_lookahead: int = 0,
+        packing_pad_to_budget: bool = False,
         shuffle_buffer_size: int = 10_000,
     ) -> None:
         """Initialize the pretraining data module.
@@ -120,6 +121,9 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
                 during packing. Defaults to 4096.
             packing_lookahead (int, optional): Number if items to descend into the buffer before aborting search for
                 fitting sequences during greedy packing. Defaults to 0 (no lookahead).
+            packing_pad_to_budget (bool, optional): When True, each packed batch is padded with a dummy sequence to
+                exactly fill the token budget, producing a fixed unpadded length every step and eliminating
+                ``torch.compile`` recompilation from dynamic shapes. Defaults to False.
         """
         super().__init__()
         self.save_hyperparameters()
@@ -161,6 +165,7 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
                 pretokenized=self.hparams.pretokenized,
                 buffer_size=self.hparams.packing_buffer_size,
                 lookahead=self.hparams.packing_lookahead,
+                pad_to_budget=self.hparams.packing_pad_to_budget,
             )
             # Collator receives pretokenized variable-length tensors from PackedDataset
             self.collator.pretokenized = True
@@ -392,7 +397,6 @@ class BertBlocksPretrainingModule(L.LightningModule):
         scheduler_cooldown_steps: int = 0,
         scheduler_cooldown_decay: float = 0.0,
         objective: Literal["mlm", "enhanced_mlm", "diffusion"] = "mlm",
-        packing_token_budget: int | None = None,
         gradient_checkpointing: bool = False,
         model_config_kwargs: "dict[str, Any] | None" = None,
         model_kwargs: "dict[str, Any] | None" = None,
@@ -427,8 +431,6 @@ class BertBlocksPretrainingModule(L.LightningModule):
                 for cooldown phase. Defaults to 0.0.
             objective: The training objective. Available options:
                 "mlm", "diffusion", "enhanced_mlm".
-            packing_token_budget: Total token budget per batch; used to enable efficiency logging when sequence packing
-                is activated. Defaults to None.
             gradient_checkpointing (bool, optional): Whether to enable gradient checkpointing to reduce
                 activation memory at the cost of additional compute. Defaults to False.
             model_config_kwargs (dict[str, Any], optional): Optional dictionary of model configuration options passed
@@ -461,9 +463,14 @@ class BertBlocksPretrainingModule(L.LightningModule):
         torch.set_float32_matmul_precision("high")
 
     def configure_model(self) -> None:
-        """Compile the model after DDP setup so each rank has its own CUDA context."""
+        """Compile the model core after DDP setup so each rank has its own CUDA context.
+
+        Only the inner compute path (embed -> encode -> norm -> scale) is compiled.
+        Unpadding and output assembly remain outside the compiler scope to avoid
+        dynamic shape issues from varying batch dimensions.
+        """
         if self.hparams.compile_model:
-            self.model = torch.compile(self.model, dynamic=True)
+            self.model.model._forward = torch.compile(self.model.model._forward, dynamic=True)  # type: ignore
 
     def configure_optimizers(self) -> tuple[list["torch.optim.Optimizer"], list[dict[str, Any]]]:
         """Configure optimizers and learning rate schedulers.
@@ -527,8 +534,6 @@ class BertBlocksPretrainingModule(L.LightningModule):
         torch.compiler.cudagraph_mark_step_begin()
         self.log("packing/tokens_per_batch", batch["attention_mask"].float().sum())
         self.log("packing/sequences_per_batch", float(batch["attention_mask"].shape[0]))
-        if self.hparams.packing_token_budget is not None:
-            self.log("packing/efficiency", batch["attention_mask"].float().sum() / self.hparams.packing_token_budget)
         output = self.model(**batch)
         self.log("loss/train", output.loss, prog_bar=True)
         return output.loss
@@ -632,7 +637,7 @@ class BertBlocksFinetuningModule(L.LightningModule):
 
         if compile_model:
             torch.set_float32_matmul_precision("high")
-            self.model = torch.compile(self.model, dynamic=True, mode="reduce-overhead")
+            self.model = torch.compile(self.model, dynamic=True)
 
     def configure_optimizers(self) -> "torch.optim.Optimizer | dict[str, Any]":
         """Configure optimizers and learning rate schedulers."""

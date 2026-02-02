@@ -235,7 +235,30 @@ class BertBlocksModel(BertBlocksPreTrainedModel):
         self, input_ids: "torch.Tensor", attention_mask: "torch.Tensor | None"
     ) -> tuple[Tensor, Tensor, Tensor, int]:
         """Unpad input tensors."""
-        return unpad_input(input_ids, attention_mask, self.pad_token_id)
+        return unpad_input(input_ids, attention_mask, self.pad_token_id, align_to=self.config.unpad_align_to)
+
+    def _forward(
+        self,
+        input_ids: "torch.Tensor",
+        attention_mask: "torch.Tensor | None",
+        cu_seqlens: "torch.Tensor | None",
+        max_seq_len: "int | None",
+        token_type_ids: "torch.Tensor | None",
+        output_attentions: bool,
+        output_hidden_states: bool,
+    ) -> "tuple[torch.Tensor, torch.Tensor | None, list[torch.Tensor] | None, tuple[torch.Tensor, ...] | None]":
+        """Core compute path (embed -> encode -> norm -> scale).
+
+        Extracted into inner function to be able to compile separately from unpadding.
+        """
+        x = self.embd(input_ids, token_type_ids=token_type_ids, cu_seqlens=cu_seqlens)
+        x, hidden_states, attentions = self.encd(
+            x, attention_mask, cu_seqlens, max_seq_len, output_attentions, output_hidden_states
+        )
+        x = self.norm(x)
+        x = self.scaler(x)
+        pooler_output = self.pool(x) if self.pool is not None else None
+        return x, pooler_output, hidden_states, attentions
 
     def forward(
         self,
@@ -289,15 +312,17 @@ class BertBlocksModel(BertBlocksPreTrainedModel):
                 else:
                     attention_mask = attention_mask.masked_fill(~local_mask, -float("inf"))
 
-        x = self.embd(input_ids, token_type_ids=token_type_ids, cu_seqlens=cu_seqlens)
-        x, hidden_states, attentions = self.encd(
-            x, attention_mask, cu_seqlens, max_seq_len, output_attentions, output_hidden_states
+        x, pooler_output, hidden_states, attentions = self._forward(
+            input_ids,
+            attention_mask,
+            cu_seqlens,
+            max_seq_len,
+            token_type_ids,
+            output_attentions,
+            output_hidden_states,
         )
-        x = self.norm(x)
-        x = self.scaler(x)
 
-        if self.pool is not None:
-            pooler_output = self.pool(x)
+        if pooler_output is not None:
             return MaybeUnpaddedBaseModelOutputWithPooling(
                 last_hidden_state=x,
                 pooler_output=pooler_output,
@@ -489,6 +514,9 @@ class BertBlocksForMaskedLM(BertBlocksPreTrainedModel):
         loss = None
         if labels is not None:
             labels = labels.flatten()[output.indices] if output.indices is not None else labels.flatten()
+            align_pad = logits.shape[0] - labels.shape[0]
+            if align_pad > 0:
+                labels = torch.nn.functional.pad(labels, (0, align_pad), value=-100)
             loss = self.loss_fn(logits.view(-1, self.vocab_size), labels)
 
         if output.indices is not None:
@@ -592,6 +620,9 @@ class BertBlocksForEnhancedMaskedLM(BertBlocksForMaskedLM):
         loss = None
         if labels is not None:
             labels = labels.flatten()[output.indices] if output.indices is not None else labels.flatten()
+            align_pad = logits.shape[0] - labels.shape[0]
+            if align_pad > 0:
+                labels = torch.nn.functional.pad(labels, (0, align_pad), value=-100)
             loss = self.loss_fn(logits.view(-1, self.vocab_size), labels)
 
         if output.indices is not None:
@@ -935,6 +966,10 @@ class BertBlocksForMaskedDiffusion(BertBlocksForMaskedLM, GenerationMixin):
                 unpadded_input_ids = input_ids.flatten()[output.indices]
                 unpadded_labels = labels.flatten()[output.indices]
                 masked_labels = torch.where(unpadded_input_ids == self.mask_token_id, unpadded_labels, -100)
+                # Pad labels to match alignment-padded logits (extra positions are ignored via -100)
+                align_pad = logits.shape[0] - masked_labels.shape[0]
+                if align_pad > 0:
+                    masked_labels = torch.nn.functional.pad(masked_labels, (0, align_pad), value=-100)
             else:
                 masked_labels = torch.where(input_ids == self.mask_token_id, labels, -100)
             # Compute loss on unpadded sequences

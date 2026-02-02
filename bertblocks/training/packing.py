@@ -28,6 +28,11 @@ class PackedDataset(IterableDataset):
         pretokenized (bool): Whether input data is already tokenized.
         buffer_size (int): Number of samples to buffer for packing.
         lookahead (int): How many samples to look into the buffer to find a matching sample before returning the batch.
+        pad_to_budget (bool): When True, append a dummy padding sequence to each packed batch so that the total
+            token count equals exactly ``token_budget``. This produces a fixed unpadded length every step,
+            eliminating ``torch.compile`` recompilation from dynamic shapes. The dummy tokens use the tokenizer's
+            pad token ID with ``attention_mask=1`` so they survive unpadding; they receive ``-100`` labels from the
+            collator and do not contribute to the loss. Defaults to False.
     """
 
     def __init__(
@@ -40,6 +45,7 @@ class PackedDataset(IterableDataset):
         pretokenized: bool = False,
         buffer_size: int = 4096,
         lookahead: int = 0,
+        pad_to_budget: bool = False,
     ) -> None:
         self.dataset = dataset
         self.tokenizer = tokenizer
@@ -49,6 +55,7 @@ class PackedDataset(IterableDataset):
         self.pretokenized = pretokenized
         self.buffer_size = buffer_size
         self.lookahead = lookahead
+        self.pad_to_budget = pad_to_budget
 
     def __iter__(self) -> "Iterator[list[dict[str, Any]]]":
         """Buffer-based packing for streaming datasets."""
@@ -121,4 +128,15 @@ class PackedDataset(IterableDataset):
 
         # Deferred sequences go back to the front to start the next batch
         buffer.extendleft(deferred)
+
+        if self.pad_to_budget and total_seq_len < self.token_budget:
+            fill_len = self.token_budget - total_seq_len
+            pad_id = self.tokenizer.pad_token_id or 0
+            selected.append(
+                {
+                    "input_ids": torch.full((fill_len,), pad_id, dtype=torch.long),
+                    "attention_mask": torch.ones(fill_len, dtype=torch.long),
+                }
+            )
+
         return selected
