@@ -3,7 +3,7 @@
 #SBATCH --gres=gpu:hopper:2 # 2x H100 80GB
 #SBATCH --ntasks-per-node=2 # All located on the same host
 #SBATCH --cpus-per-task=8   # 2x8 = 16 cores total (make num_workers match this)
-#SBATCH --mem=128GB         # 128GB total (thats plenty of headroom)
+#SBATCH --mem=128GB         # 128GB total
 #SBATCH --time=47:00:00     # We have a max job time of 48:00:00 on the cluster
 #SBATCH --output=logs/%x-%j.out
 #SBATCH --error=logs/%x-%j.err

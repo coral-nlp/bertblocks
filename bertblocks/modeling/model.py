@@ -229,13 +229,13 @@ class BertBlocksModel(BertBlocksPreTrainedModel):
         """
         self.embd.embd = value
 
-    @torch.compiler.disable()
+    @torch.compiler.disable(recursive=True)
     @torch.no_grad()
     def unpad_input(
         self, input_ids: "torch.Tensor", attention_mask: "torch.Tensor | None"
     ) -> tuple[Tensor, Tensor, Tensor, int]:
         """Unpad input tensors."""
-        return unpad_input(input_ids, attention_mask, self.pad_token_id, align_to=self.config.unpad_align_to)
+        return unpad_input(input_ids, attention_mask, self.pad_token_id)
 
     def _forward(
         self,
@@ -247,9 +247,9 @@ class BertBlocksModel(BertBlocksPreTrainedModel):
         output_attentions: bool,
         output_hidden_states: bool,
     ) -> "tuple[torch.Tensor, torch.Tensor | None, list[torch.Tensor] | None, tuple[torch.Tensor, ...] | None]":
-        """Core compute path (embed -> encode -> norm -> scale).
+        """Core compute path (embed -> encode -> norm -> scale -> pool).
 
-        Extracted into inner function to be able to compile separately from unpadding.
+        Extracted into inner function to be able to compile as full graph separately from unpadding.
         """
         x = self.embd(input_ids, token_type_ids=token_type_ids, cu_seqlens=cu_seqlens)
         x, hidden_states, attentions = self.encd(
@@ -514,9 +514,6 @@ class BertBlocksForMaskedLM(BertBlocksPreTrainedModel):
         loss = None
         if labels is not None:
             labels = labels.flatten()[output.indices] if output.indices is not None else labels.flatten()
-            align_pad = logits.shape[0] - labels.shape[0]
-            if align_pad > 0:
-                labels = torch.nn.functional.pad(labels, (0, align_pad), value=-100)
             loss = self.loss_fn(logits.view(-1, self.vocab_size), labels)
 
         if output.indices is not None:
@@ -620,9 +617,6 @@ class BertBlocksForEnhancedMaskedLM(BertBlocksForMaskedLM):
         loss = None
         if labels is not None:
             labels = labels.flatten()[output.indices] if output.indices is not None else labels.flatten()
-            align_pad = logits.shape[0] - labels.shape[0]
-            if align_pad > 0:
-                labels = torch.nn.functional.pad(labels, (0, align_pad), value=-100)
             loss = self.loss_fn(logits.view(-1, self.vocab_size), labels)
 
         if output.indices is not None:
@@ -966,13 +960,8 @@ class BertBlocksForMaskedDiffusion(BertBlocksForMaskedLM, GenerationMixin):
                 unpadded_input_ids = input_ids.flatten()[output.indices]
                 unpadded_labels = labels.flatten()[output.indices]
                 masked_labels = torch.where(unpadded_input_ids == self.mask_token_id, unpadded_labels, -100)
-                # Pad labels to match alignment-padded logits (extra positions are ignored via -100)
-                align_pad = logits.shape[0] - masked_labels.shape[0]
-                if align_pad > 0:
-                    masked_labels = torch.nn.functional.pad(masked_labels, (0, align_pad), value=-100)
             else:
                 masked_labels = torch.where(input_ids == self.mask_token_id, labels, -100)
-            # Compute loss on unpadded sequences
             loss = F.cross_entropy(
                 logits.view(-1, self.config.vocab_size),
                 masked_labels.view(-1),

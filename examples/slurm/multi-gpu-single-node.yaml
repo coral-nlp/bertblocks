@@ -4,7 +4,8 @@ trainer:
   accelerator: "gpu"
   precision: "bf16-mixed"
   default_root_dir: "./checkpoints"
-  accumulate_grad_batches: 96 # 4.608 effective size
+  # 4.608 effective size; we roughly end up with ~48 seqs/batch after packing per GPU x 2 GPUs
+  accumulate_grad_batches: 96
   gradient_clip_val: 1.0
   callbacks:
     - class_path: lightning.pytorch.callbacks.ModelCheckpoint
@@ -100,8 +101,8 @@ data:
     file_format: "parquet"
     pretrained_tokenizer_name_or_path: lgienapp/gecco-tokenizer
     max_sequence_length: 1024
-    train_batch_size: 24
-    val_batch_size: 24
+    train_batch_size: 16
+    val_batch_size: 16
     packing: True
     packing_buffer_size: 8192
     packing_lookahead: 256

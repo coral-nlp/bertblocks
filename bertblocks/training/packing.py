@@ -9,6 +9,7 @@ if TYPE_CHECKING:
 from collections import deque
 
 import torch
+import torch.distributed as dist
 from torch.utils.data import IterableDataset
 
 
@@ -18,6 +19,10 @@ class PackedDataset(IterableDataset):
     Each yielded item is a list of pretokenized sequences (`input_ids` and `attention_mask`) whose combined token count
     fits within the token budget. Packing is done on-the-fly from a buffer. Tokenization happens here so the downstream
     collator must run in pre-tokenized mode.
+
+    In distributed training, different ranks may produce different numbers of packed batches depending on how
+    sequences pack together. When ``world_size > 1``, this dataset synchronizes across ranks after each batch
+    and stops all ranks together when any rank exhausts its data, preventing DDP hangs.
 
     Args:
         dataset (Dataset): The underlying dataset to wrap (map-style or iterable).
@@ -33,6 +38,10 @@ class PackedDataset(IterableDataset):
             eliminating ``torch.compile`` recompilation from dynamic shapes. The dummy tokens use the tokenizer's
             pad token ID with ``attention_mask=1`` so they survive unpadding; they receive ``-100`` labels from the
             collator and do not contribute to the loss. Defaults to False.
+        world_size (int): Number of distributed ranks. When > 1, enables cross-rank synchronization
+            to ensure all ranks stop together. Defaults to 1 (no sync).
+        device (torch.device | str | None): Device for synchronization tensors. Only used when world_size > 1.
+            Defaults to "cuda".
     """
 
     def __init__(
@@ -46,6 +55,8 @@ class PackedDataset(IterableDataset):
         buffer_size: int = 4096,
         lookahead: int = 0,
         pad_to_budget: bool = False,
+        world_size: int = 1,
+        device: "torch.device | str | None" = None,
     ) -> None:
         self.dataset = dataset
         self.tokenizer = tokenizer
@@ -56,9 +67,11 @@ class PackedDataset(IterableDataset):
         self.buffer_size = buffer_size
         self.lookahead = lookahead
         self.pad_to_budget = pad_to_budget
+        self.world_size = world_size
+        self.device = device or "cuda"
 
     def __iter__(self) -> "Iterator[list[dict[str, Any]]]":
-        """Buffer-based packing for streaming datasets."""
+        """Buffer-based packing with optional distributed synchronization."""
         dataset_iter = iter(self.dataset)
         buffer: deque[dict[str, torch.Tensor]] = deque()
         data_exhausted = False
@@ -76,8 +89,18 @@ class PackedDataset(IterableDataset):
 
         while True:
             fill_buffer()
-            if not buffer:
-                break
+
+            if self.world_size > 1:
+                # Sync across all ranks: continue only if ALL ranks have data
+                has_data = len(buffer) > 0
+                has_data_tensor = torch.tensor([has_data], dtype=torch.int32, device=self.device)
+                dist.all_reduce(has_data_tensor, op=dist.ReduceOp.MIN)
+                if has_data_tensor.item() == 0:
+                    break
+            else:
+                if not buffer:
+                    break
+
             yield self._batch_from_buffer(buffer)
 
     def _tokenize(self, sample: "dict[str, str | torch.Tensor]") -> "dict[str, torch.Tensor]":

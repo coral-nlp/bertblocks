@@ -166,6 +166,7 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
                 buffer_size=self.hparams.packing_buffer_size,
                 lookahead=self.hparams.packing_lookahead,
                 pad_to_budget=self.hparams.packing_pad_to_budget,
+                world_size=self.trainer.world_size,
             )
             # Collator receives pretokenized variable-length tensors from PackedDataset
             self.collator.pretokenized = True
