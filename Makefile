@@ -34,7 +34,7 @@ test: ## Run tests
 	uv run pytest tests
 
 test-cov: ## Run tests with coverage
-	uv run pytest tests --cov-report=term-missing --cov-report=html
+	uv run pytest tests --cov=bertblocks.modeling --cov-report=term-missing --cov-report=html
 
 
 clean: ## Clean up build artifacts
