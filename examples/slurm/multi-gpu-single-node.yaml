@@ -5,7 +5,7 @@ trainer:
   precision: "bf16-mixed"
   default_root_dir: "./checkpoints"
   # 4.608 effective size; we roughly end up with ~48 seqs/batch after packing per GPU x 2 GPUs
-  accumulate_grad_batches: 96
+  accumulate_grad_batches: 48
   gradient_clip_val: 1.0
   callbacks:
     - class_path: lightning.pytorch.callbacks.ModelCheckpoint
@@ -25,7 +25,6 @@ trainer:
         entity: "lgienapp"
         log_model: true
   max_epochs: 10 # 10 times the whole dataset, each pass will perform limit_train_batches/accumulate_grad_batches updates
-  limit_train_batches: 500_000 # 20B tokens, 18432 tokens per batch, spread across 2 GPUs ~100k minibatches
   log_every_n_steps: 1
 model:
   class_path: bertblocks.training.modules.BertBlocksPretrainingModule
@@ -55,6 +54,7 @@ model:
       pad_token_id: 4
       num_blocks: 22
       attn_implementation: "flash_attention_2"
+      unpad_align_to: 64
       initializer_kind: "trunc_normal"
       initializer_range: 0.02
       initializer_cutoff_factor: 3.0
@@ -100,12 +100,13 @@ data:
     dataset_name_or_path: "/var/tmp/gienapp/gecco-ablation-dataset"
     file_format: "parquet"
     pretrained_tokenizer_name_or_path: lgienapp/gecco-tokenizer
-    max_sequence_length: 1024
-    train_batch_size: 16
-    val_batch_size: 16
-    packing: True
+    max_sequence_length: 512
+    train_batch_size: 48
+    val_batch_size: 48
+    packing: true
     packing_buffer_size: 8192
     packing_lookahead: 256
+    packing_pad_to_budget: true
     num_workers: 8
-    shuffle: false
-    streaming: true
+    shuffle: true
+    streaming: false

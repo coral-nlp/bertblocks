@@ -30,7 +30,7 @@ from bertblocks.modeling.norms import DeepNorm, DynamicTanhNorm, GroupNorm, Laye
 from bertblocks.training.metrics import get_metrics_for_task
 from bertblocks.training.objectives import get_collator_cls
 from bertblocks.training.optimizer import get_optimizer
-from bertblocks.training.packing import PackedDataset
+from bertblocks.training.packing import DistributedStoppingDataLoader, PackedDataset
 from bertblocks.training.scheduler import get_scheduler
 
 
@@ -166,7 +166,6 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
                 buffer_size=self.hparams.packing_buffer_size,
                 lookahead=self.hparams.packing_lookahead,
                 pad_to_budget=self.hparams.packing_pad_to_budget,
-                world_size=self.trainer.world_size,
             )
             # Collator receives pretokenized variable-length tensors from PackedDataset
             self.collator.pretokenized = True
@@ -187,13 +186,20 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
         else:
             shuffle = self.hparams.shuffle
 
-        return DataLoader(
+        dataloader = DataLoader(
             self.dataset,
             collate_fn=self.collator,
             shuffle=shuffle,
             batch_size=self.hparams.train_batch_size if not self.hparams.packing else None,  # The packing handles this
             num_workers=self.hparams.num_workers,
         )
+
+        # Wrap with distributed stopping for packing in multi-GPU training.
+        # This syncs in the main process (not workers), so num_workers > 0 is fine.
+        if self.hparams.packing and self.trainer.world_size > 1:
+            dataloader = DistributedStoppingDataLoader(dataloader, device="cuda")
+
+        return dataloader
 
 
 class BertBlocksFinetuningDataModule(L.LightningDataModule):

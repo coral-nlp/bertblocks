@@ -34,5 +34,8 @@ srun \
             --config $CONFIG \
             --trainer.devices=2 \
             --trainer.strategy=ddp \
-            --trainer.num_nodes=1
+            --trainer.num_nodes=1 \
+            --trainer.accumulate_grad_batches=24 \
+            --data.init_args.train_batch_size=32 \
+            --data.init_args.max_sequence_length=512 \
     "
