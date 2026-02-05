@@ -53,6 +53,8 @@ class DistributedStoppingDataLoader:
     ) -> None:
         self.dataloader = dataloader
         self.device = device
+        # Pre-allocate the sync tensor
+        self.has_data_tensor = torch.tensor([0], dtype=torch.int32, device=self.device)
 
     def __iter__(self) -> "Iterator":
         """Iterate with cross-rank synchronization.
@@ -63,25 +65,25 @@ class DistributedStoppingDataLoader:
         iterator = iter(self.dataloader)
 
         while True:
-            # Try to get next batch
             try:
                 batch = next(iterator)
-                has_data = True
+                has_data = 1
             except StopIteration:
-                has_data = False
+                has_data = 0
                 batch = None
 
-            # Sync: all ranks continue only if ALL have data
-            has_data_tensor = torch.tensor([has_data], dtype=torch.int32, device=self.device)
-            dist.all_reduce(has_data_tensor, op=dist.ReduceOp.MIN)
-            if has_data_tensor.item() == 0:
+            # Reset the persistent tensor
+            self.has_data_tensor.fill_(has_data)
+
+            # Perform reduction on the persistent tensor
+            dist.all_reduce(self.has_data_tensor, op=dist.ReduceOp.MIN)
+
+            # If any rank has no data, return
+            if self.has_data_tensor.item() == 0:
                 return
 
+            # All ranks still have data, continue yielding
             yield batch
-
-    def __len__(self) -> int:
-        """Return the length of the underlying dataloader if available."""
-        return len(self.dataloader)
 
 
 class PackedDataset(IterableDataset):

@@ -539,8 +539,13 @@ class BertBlocksPretrainingModule(L.LightningModule):
 
         """
         torch.compiler.cudagraph_mark_step_begin()
-        self.log("packing/tokens_per_batch", batch["attention_mask"].float().sum())
-        self.log("packing/sequences_per_batch", float(batch["attention_mask"].shape[0]))
+        self.log("packing/tokens_per_batch", (batch["attention_mask"] != -1).float().sum())
+        self.log(
+            "packing/sequences_per_batch",
+            float(batch["attention_mask"].max()) + 1  # Packed sequences
+            if (batch["attention_mask"] == -1).any()
+            else float(batch["attention_mask"].shape[0]),  # Unpacked sequences
+        )
         output = self.model(**batch)
         self.log("loss/train", output.loss, prog_bar=True)
         return output.loss

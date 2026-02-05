@@ -12,26 +12,30 @@ def _unpad_packed_input(
     """
     # Flatten to process all sequences at once
     flat_mask = attention_mask.view(-1)
-    flat_inputs = inputs.view(-1, *inputs.shape[2:]) if inputs.dim() > 2 else inputs.view(-1)
 
-    # Filter out padding tokens (mask == -1)
+    # Handle both [B, S] and [B, S, H] inputs
+    if inputs.dim() > 2:
+        B, S, H = inputs.shape
+        flat_inputs = inputs.reshape(B * S, H).contiguous()
+    else:
+        flat_inputs = inputs.reshape(-1).contiguous()
+
+    # Extract valid tokens (mask >= 0)
     valid_mask = flat_mask >= 0
     indices = torch.nonzero(valid_mask, as_tuple=False).flatten()
+
+    # Create a new contiguous tensor, which is safer for Flash Attention
     unpadded_inputs = flat_inputs[indices]
     valid_seq_indices = flat_mask[indices]
 
-    # Compute cumulative sequence lengths from sequence indices
-    # Count tokens per sequence
-    max_seq_idx = valid_seq_indices.max().item() if len(valid_seq_indices) > 0 else -1
-    num_sequences = max_seq_idx + 1
+    if len(valid_seq_indices) == 0:
+        return unpadded_inputs, indices, torch.tensor([0], device=inputs.device), 0
 
-    seqlens = torch.zeros(num_sequences, dtype=torch.long, device=attention_mask.device)
-    for seq_idx in range(num_sequences):
-        seqlens[seq_idx] = (valid_seq_indices == seq_idx).sum()
-
-    max_seqlen_in_batch = int(seqlens.max().item()) if num_sequences > 0 else 0
-    cu_seqlens = torch.nn.functional.pad(torch.cumsum(seqlens, dim=0), (1, 0))
-
+    # Count occurrences of each sequence ID using bincount
+    seqlens = torch.bincount(valid_seq_indices)
+    max_seqlen_in_batch = int(seqlens.max().item())
+    cu_seqlens = torch.zeros(len(seqlens) + 1, dtype=torch.int32, device=inputs.device)
+    torch.cumsum(seqlens, dim=0, out=cu_seqlens[1:])
     return unpadded_inputs, indices, cu_seqlens, max_seqlen_in_batch
 
 
