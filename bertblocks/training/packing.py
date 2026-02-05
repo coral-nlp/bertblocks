@@ -13,6 +13,24 @@ import torch.distributed as dist
 from torch.utils.data import DataLoader, IterableDataset
 
 
+def is_packed_batch(attention_mask: "torch.Tensor | None") -> bool:
+    """Detect if attention mask uses packed sequence index format.
+
+    Packed format uses sequence indices (0, 1, 2, ...) with -1 for padding,
+    while standard format uses binary 0/1 values.
+
+    Args:
+        attention_mask: Attention mask tensor to check, or None.
+
+    Returns:
+        True if packed format, False if standard format or None.
+    """
+    if attention_mask is None:
+        return False
+    # Packed format has values > 1 (sequence indices) or -1 (padding marker)
+    return (attention_mask > 1).any() or (attention_mask < 0).any()  # type: ignore
+
+
 class DistributedStoppingDataLoader:
     """Wrapper around a DataLoader that synchronizes stopping across distributed ranks.
 
@@ -67,10 +85,14 @@ class DistributedStoppingDataLoader:
 
 
 class PackedDataset(IterableDataset):
-    """An iterable dataset that tokenizes and packs samples into groups.
+    """An iterable dataset that tokenizes and packs samples into flat tensors.
 
-    Each yielded item is a list of pretokenized sequences (``input_ids`` and ``attention_mask``) whose combined token
-    count fits within the token budget. Packing is done on-the-fly from a buffer. Tokenization happens here so the
+    Each yielded item is a dict with flat tensors of shape (token_budget,):
+    - ``input_ids``: concatenated token IDs from all packed sequences
+    - ``attention_mask``: sequence indices (0, 1, 2, ...) indicating which sequence each token belongs to.
+      Padding tokens are marked with -1.
+
+    Packing is done on-the-fly from a buffer. Tokenization happens here so the
     downstream collator must run in pre-tokenized mode.
 
     Note:
@@ -86,11 +108,8 @@ class PackedDataset(IterableDataset):
         pretokenized (bool): Whether input data is already tokenized.
         buffer_size (int): Number of samples to buffer for packing.
         lookahead (int): How many samples to look into the buffer to find a matching sample before returning the batch.
-        pad_to_budget (bool): When True, append a dummy padding sequence to each packed batch so that the total
-            token count equals exactly ``token_budget``. This produces a fixed unpadded length every step,
-            eliminating ``torch.compile`` recompilation from dynamic shapes. The dummy tokens use the tokenizer's
-            pad token ID with ``attention_mask=1`` so they survive unpadding; they receive ``-100`` labels from the
-            collator and do not contribute to the loss. Defaults to False.
+        pad_to_budget (bool): No longer used. All batches are now padded to ``token_budget`` with padding tokens
+            marked as -1 in the attention_mask for efficient filtering. Kept for backward compatibility.
     """
 
     def __init__(
@@ -116,7 +135,7 @@ class PackedDataset(IterableDataset):
         self.pad_to_budget = pad_to_budget
 
     def __iter__(self) -> "Iterator[list[dict[str, Any]]]":
-        """Buffer-based packing iterator."""
+        """Buffer-based packing iterator that yields flat packed tensors."""
         dataset_iter = iter(self.dataset)
         buffer: deque[dict[str, torch.Tensor]] = deque()
         data_exhausted = False
@@ -164,7 +183,13 @@ class PackedDataset(IterableDataset):
         }
 
     def _batch_from_buffer(self, buffer: deque) -> "list[dict[str, torch.Tensor]]":
-        """Fill one batch from the tokenized buffer, greedily picking items that fit within the token budget."""
+        """Fill one batch from the tokenized buffer, greedily picking items that fit within the token budget.
+
+        Returns a list containing a single dict with flattened tensors:
+        - input_ids: [token_budget] concatenated token IDs from all packed sequences
+        - attention_mask: [token_budget] sequence indices (0, 1, 2, ...) indicating which sequence each token belongs
+            to. Padding tokens are marked with -1.
+        """
         selected: list[dict[str, torch.Tensor]] = []
         deferred: list[dict[str, torch.Tensor]] = []
         total_seq_len = 0
@@ -187,14 +212,30 @@ class PackedDataset(IterableDataset):
         # Deferred sequences go back to the front to start the next batch
         buffer.extendleft(deferred)
 
-        if self.pad_to_budget and total_seq_len < self.token_budget:
-            fill_len = self.token_budget - total_seq_len
-            pad_id = self.tokenizer.pad_token_id or 0
-            selected.append(
-                {
-                    "input_ids": torch.full((fill_len,), pad_id, dtype=torch.long),
-                    "attention_mask": torch.ones(fill_len, dtype=torch.long),
-                }
-            )
+        # Concatenate all sequences into flat tensors with sequence-indexed attention mask
+        input_ids_list = []
+        attention_mask_list = []
 
-        return selected
+        for seq_idx, item in enumerate(selected):
+            input_ids_list.append(item["input_ids"])
+            # Use sequence index instead of 0/1 mask
+            attention_mask_list.append(torch.full((len(item["input_ids"]),), seq_idx, dtype=torch.long))
+
+        # Pad to token_budget if needed
+        pad_id = self.tokenizer.pad_token_id or 0
+        if total_seq_len < self.token_budget:
+            fill_len = self.token_budget - total_seq_len
+            input_ids_list.append(torch.full((fill_len,), pad_id, dtype=torch.long))
+            # Mark padding tokens with -1 in the attention mask
+            attention_mask_list.append(torch.full((fill_len,), -1, dtype=torch.long))
+
+        # Return in list and add batch dimension (batch_size=1) for compatibility with collator logic
+        return [
+            {
+                "input_ids": torch.cat(input_ids_list).unsqueeze(0),
+                "attention_mask": torch.cat(attention_mask_list).unsqueeze(0),
+            }
+        ]
+
+
+__all__ = ["is_packed_batch", "DistributedStoppingDataLoader", "PackedDataset"]

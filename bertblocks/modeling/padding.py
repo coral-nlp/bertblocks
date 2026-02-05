@@ -1,16 +1,73 @@
 import torch
 
 
-def unpad_input(
+def _unpad_packed_input(
     inputs: "torch.Tensor",
+    attention_mask: "torch.Tensor",
+) -> "tuple[torch.Tensor, torch.Tensor, torch.Tensor, int]":
+    """Remove padding from packed input sequences.
+
+    Handles packed sequence format where attention_mask contains sequence indices
+    (0, 1, 2, ...) with -1 marking padding tokens.
+    """
+    # Flatten to process all sequences at once
+    flat_mask = attention_mask.view(-1)
+    flat_inputs = inputs.view(-1, *inputs.shape[2:]) if inputs.dim() > 2 else inputs.view(-1)
+
+    # Filter out padding tokens (mask == -1)
+    valid_mask = flat_mask >= 0
+    indices = torch.nonzero(valid_mask, as_tuple=False).flatten()
+    unpadded_inputs = flat_inputs[indices]
+    valid_seq_indices = flat_mask[indices]
+
+    # Compute cumulative sequence lengths from sequence indices
+    # Count tokens per sequence
+    max_seq_idx = valid_seq_indices.max().item() if len(valid_seq_indices) > 0 else -1
+    num_sequences = max_seq_idx + 1
+
+    seqlens = torch.zeros(num_sequences, dtype=torch.long, device=attention_mask.device)
+    for seq_idx in range(num_sequences):
+        seqlens[seq_idx] = (valid_seq_indices == seq_idx).sum()
+
+    max_seqlen_in_batch = int(seqlens.max().item()) if num_sequences > 0 else 0
+    cu_seqlens = torch.nn.functional.pad(torch.cumsum(seqlens, dim=0), (1, 0))
+
+    return unpadded_inputs, indices, cu_seqlens, max_seqlen_in_batch
+
+
+def _unpad_standard_input(
+    input_ids: "torch.Tensor", attention_mask: "torch.Tensor"
+) -> "tuple[torch.Tensor, torch.Tensor, torch.Tensor, int]":
+    """Remove padding from standard (non-packed) input sequences."""
+    seqlens_in_batch = attention_mask.sum(dim=-1)
+    indices = torch.nonzero(attention_mask.flatten(), as_tuple=False).flatten()
+    max_seqlen_in_batch = int(seqlens_in_batch.max().item())
+    cu_seqlens = torch.nn.functional.pad(torch.cumsum(seqlens_in_batch, dim=0), (1, 0))
+
+    if input_ids.dim() == 2:
+        unpadded_inputs = input_ids.flatten()[indices]
+    else:
+        batch, seqlen, *rest = input_ids.shape
+        shape = batch * seqlen
+        unpadded_inputs = input_ids.view(shape, *rest)[indices]
+
+    return unpadded_inputs, indices, cu_seqlens, max_seqlen_in_batch
+
+
+def unpad_input(
+    input_ids: "torch.Tensor",
     attention_mask: "torch.Tensor | None",
     pad_token_id: int | None = None,
 ) -> "tuple[torch.Tensor, torch.Tensor, torch.Tensor, int]":
     """Remove padding from input sequences.
 
+    Automatically detects and handles both standard (binary 0/1) and packed (sequence-indexed)
+    attention mask formats.
+
     Args:
-        inputs (torch.Tensor, shape [batch, seqlen, ...]): tensor of token IDs.
-        attention_mask (torch.Tensor | None, shape [batch, seqlen]): boolean token mask, optional.
+        input_ids (torch.Tensor, shape [batch, seqlen, ...]): tensor of token IDs.
+        attention_mask (torch.Tensor | None, shape [batch, seqlen]): token mask.
+            Can be binary (standard) or sequence-indexed (packed).
         pad_token_id (int | None): id of the padding token to remove, optional. Only used if attention_mask is None.
             If both are None, assumes full inputs.
 
@@ -22,25 +79,16 @@ def unpad_input(
             - `cu_seqlens` (torch.Tensor, [batch + 1,]): the cumulative sequence lengths
             - `max_seqlen_in_batch` (int): the maximum unpadded sequence length encountered in the batch
     """
-    if attention_mask is None:
-        if pad_token_id is not None:
-            attention_mask = inputs != pad_token_id
-        else:
-            attention_mask = torch.ones(inputs.shape, device=inputs.device)
-
-    seqlens_in_batch = attention_mask.sum(dim=-1)
-    indices = torch.nonzero(attention_mask.flatten(), as_tuple=False).flatten()
-    max_seqlen_in_batch = int(seqlens_in_batch.max().item())
-    cu_seqlens = torch.nn.functional.pad(torch.cumsum(seqlens_in_batch, dim=0), (1, 0))
-
-    if inputs.dim() == 2:
-        unpadded_inputs = inputs.flatten()[indices]
+    # Detect and route to packed format handler if needed
+    if attention_mask is not None and ((attention_mask > 1).any() or (attention_mask < 0).any()):
+        return _unpad_packed_input(input_ids, attention_mask)
     else:
-        batch, seqlen, *rest = inputs.shape
-        shape = batch * seqlen
-        unpadded_inputs = inputs.view(shape, *rest)[indices]
-
-    return unpadded_inputs, indices, cu_seqlens, max_seqlen_in_batch
+        if attention_mask is None:
+            if pad_token_id is not None:
+                attention_mask = input_ids != pad_token_id
+            else:
+                attention_mask = torch.ones(input_ids.shape, device=input_ids.device)
+        return _unpad_standard_input(attention_mask, input_ids)
 
 
 def pad_output(

@@ -100,9 +100,9 @@ data:
     dataset_name_or_path: "/var/tmp/gienapp/gecco-ablation-dataset"
     file_format: "parquet"
     pretrained_tokenizer_name_or_path: lgienapp/gecco-tokenizer
-    max_sequence_length: 512
-    train_batch_size: 48
-    val_batch_size: 48
+    max_sequence_length: 1024
+    train_batch_size: 16
+    val_batch_size: 16
     packing: true
     packing_buffer_size: 8192
     packing_lookahead: 256

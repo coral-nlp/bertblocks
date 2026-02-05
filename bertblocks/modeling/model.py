@@ -295,6 +295,11 @@ class BertBlocksModel(BertBlocksPreTrainedModel):
             attention_mask = None
         else:
             indices, cu_seqlens, max_seq_len = None, None, None
+            if attention_mask is not None and ((attention_mask > 1).any() or (attention_mask < 0).any()):
+                raise ValueError(
+                    "Unpadding is required for packed inputs. Either run the model in unpadding mode, or"
+                    " turn off sequence packing."
+                )
             attention_mask = (
                 torch.ones_like(input_ids, dtype=torch.bool) if attention_mask is None else attention_mask.bool()
             )

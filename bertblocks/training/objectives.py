@@ -2,9 +2,11 @@ from abc import ABC, abstractmethod
 from typing import Any, Literal
 
 import torch
-from transformers import DataCollatorForLanguageModeling, PreTrainedTokenizerBase
+from torch import Tensor
+from transformers import PreTrainedTokenizerBase
 
 from bertblocks.modeling.utils import LogLinearNoise
+from bertblocks.training.packing import is_packed_batch
 
 
 class Collator(ABC):
@@ -33,7 +35,7 @@ class Collator(ABC):
             text_column (str): Name of the column containing text data in the dataset. Defaults to "text".
             label_column (str): Name of the column containing label data in the dataset. Defaults to "label".
             max_sequence_length (int): Maximum sequence length after tokenization. Defaults to 1024.
-            pretokenized (bool | None): Whether the input data is already tokenized. Defaults to False.
+            pretokenized (bool): Whether the input data is already tokenized. Defaults to False.
         """
         super().__init__()
         self.tokenizer = tokenizer
@@ -43,6 +45,16 @@ class Collator(ABC):
         self.pretokenized = pretokenized
         self.special_tokens = torch.tensor(self.tokenizer.all_special_ids)
         self.batch_keys = ["input_ids", "attention_mask", "labels"]
+
+    def _get_valid_token_mask(self, input_ids: Tensor, attention_mask: Tensor) -> Tensor:
+        # Create valid token mask
+        if is_packed_batch(attention_mask):
+            # Packed format: valid tokens have attention_mask >= 0
+            valid_mask = (attention_mask >= 0) & torch.isin(input_ids, self.special_tokens, invert=True)
+        else:
+            # Standard format: valid tokens have attention_mask == 1
+            valid_mask = attention_mask.bool() & torch.isin(input_ids, self.special_tokens, invert=True)
+        return valid_mask
 
     def __call__(self, batch: list[dict[str, Any]]) -> dict[str, Any]:
         """Process a batch of examples.
@@ -54,16 +66,11 @@ class Collator(ABC):
         Returns:
             dict[str, Any]: Processed batch dictionary suitable for model input.
         """
-        if not self.pretokenized:
-            tokenized = self.tokenizer(
-                [item[self.text_column] for item in batch],
-                padding="max_length",
-                truncation=True,
-                max_length=self.max_sequence_length,
-                return_tensors="pt",
-                return_special_tokens_mask=True,
-            )
-        else:
+        if self.pretokenized and is_packed_batch(batch[0].get("attention_mask")):
+            # Packed format, always pretokenized
+            tokenized = batch[0]
+        elif self.pretokenized:
+            # Pretokenized, standard format
             pad_id = self.tokenizer.pad_token_id or 0
             input_ids = [
                 item["input_ids"]
@@ -91,6 +98,19 @@ class Collator(ABC):
                     ]
                 ),
             }
+        else:
+            if not isinstance(batch[0].get(self.text_column), str):
+                raise ValueError("Expected raw string input when not running in pretokenized mode.")
+            # Raw, standard format
+            tokenized = self.tokenizer(
+                [item[self.text_column] for item in batch],
+                padding="max_length",
+                truncation=True,
+                max_length=self.max_sequence_length,
+                return_tensors="pt",
+                return_special_tokens_mask=True,
+            )
+
         if self.label_column:
             tokenized.update({"labels": [item[self.label_column] for item in batch]})
         tokenized_with_labels = self.compute_labels(tokenized)
@@ -113,12 +133,7 @@ class Collator(ABC):
 class MaskedLanguageModelingCollator(Collator):
     """Data collator for masked language modeling pretraining.
 
-    This collator handles tokenization (if needed) and applies dynamic masking
-    to create MLM training examples. It uses HuggingFace's DataCollatorForLanguageModeling
-    under the hood but adds support for custom tokenization and preprocessing.
-
-    The collator can work with both pre-tokenized and raw text data, and ensures
-    consistent padding and masking across batches.
+    Applies masking to create MLM training examples.
 
     Args:
         tokenizer (PreTrainedTokenizerBase): Huggingface tokenizer to use for
@@ -147,16 +162,17 @@ class MaskedLanguageModelingCollator(Collator):
             max_sequence_length=max_sequence_length,
             pretokenized=pretokenized,
         )
-        self.mlm_collator = DataCollatorForLanguageModeling(
-            tokenizer=self.tokenizer,
-            mlm=True,
-            mlm_probability=mlm_probability,
-            pad_to_multiple_of=64,
-            return_tensors="pt",
-        )
+        self.mlm_probability = mlm_probability
+        self.mask_token_id = tokenizer.mask_token_id
+        self.vocab_size = tokenizer.vocab_size
 
     def compute_labels(self, tokenized: dict[str, Any]) -> Any:
         """Compute the MLM labels for the given batch of tokenized inputs.
+
+        Applies masking following the BERT MLM strategy for tokens sampled with MLM probability:
+        - 80% of the time: replace token with [MASK]
+        - 10% of the time: replace token with random token
+        - 10% of the time: keep token unchanged
 
         Args:
             tokenized (dict[str, Any]): The tokenized inputs for the batch.
@@ -164,9 +180,33 @@ class MaskedLanguageModelingCollator(Collator):
         Returns:
             dict[str, Any]: The computed MLM labels for the batch.
         """
-        return self.mlm_collator(
-            [{k: v[i] for k, v in tokenized.items()} for i in range(tokenized["input_ids"].shape[0])]
-        )  # type: ignore
+        input_ids = tokenized["input_ids"]
+        # Create labels (clone of original input_ids)
+        labels = input_ids.clone()
+
+        # Create mask for tokens that can be masked, excluding special tokens and padding tokens
+        maskable = self._get_valid_token_mask(input_ids, tokenized["attention_mask"])
+
+        # Sample which tokens to mask using mlm_probability
+        probability_matrix = torch.full(input_ids.shape, self.mlm_probability)
+        masked_indices = torch.bernoulli(probability_matrix).bool() & maskable
+
+        # Set labels for non-masked tokens to -100 (ignored in loss)
+        labels[~masked_indices] = -100
+
+        # 80% of the time, replace with [MASK]
+        indices_replaced = torch.bernoulli(torch.full(input_ids.shape, 0.8)).bool() & masked_indices
+        input_ids[indices_replaced] = self.mask_token_id
+
+        # 10% of the time, replace with random token
+        indices_random = torch.bernoulli(torch.full(input_ids.shape, 0.5)).bool() & masked_indices & ~indices_replaced
+        random_words = torch.randint(self.vocab_size, input_ids.shape, dtype=torch.long, device=input_ids.device)
+        input_ids[indices_random] = random_words[indices_random]
+
+        # 10% of the time, keep unchanged (already in input_ids)
+        tokenized["input_ids"] = input_ids
+        tokenized["labels"] = labels
+        return tokenized
 
 
 class EnhancedMaskedLanguageModelingCollator(Collator):
@@ -185,11 +225,8 @@ class EnhancedMaskedLanguageModelingCollator(Collator):
         Returns:
             dict[str, Any]: The computed labels for the batch.
         """
-        labels = torch.where(
-            tokenized["attention_mask"].bool() & torch.isin(tokenized["input_ids"], self.special_tokens, invert=True),
-            tokenized["input_ids"],
-            -100,
-        )
+        valid_mask = self._get_valid_token_mask(tokenized["input_ids"], tokenized["attention_mask"])
+        labels = torch.where(valid_mask, tokenized["input_ids"], -100)
         tokenized["labels"] = labels
         return tokenized
 
@@ -536,7 +573,8 @@ class MaskedDiffusionCollator(Collator):
           input_ids (torch.Tensor, shape [batch_size, seq_len]): input IDs to apply noise to.
           noise_prob (torch.Tensor, shape [batch_size, 1]): Level of noise to apply to each sequence.
           attention_mask (torch.Tensor | None, shape [batch_size, seq_len]): Attention mask indicating
-              valid tokens (1) vs padding (0). If None, all positions are considered valid.
+              valid tokens. Can be binary (0/1) or packed (sequence indices with -1 for padding).
+              If None, all positions are considered valid.
 
         Returns:
             torch.Tensor, shape [batch_size, seq_len]: Input IDs changed to mask tokens at random positions with
@@ -545,11 +583,12 @@ class MaskedDiffusionCollator(Collator):
         batch_size, seq_len = input_ids.shape
         device = input_ids.device
 
-        # Default attention_mask to all ones if not provided
+        # Handle different attention mask formats
         if attention_mask is None:
             valid_mask = torch.ones(batch_size, seq_len, dtype=torch.bool, device=device)
         else:
-            valid_mask = attention_mask.bool()
+            # Detect packed format
+            valid_mask = attention_mask >= 0 if is_packed_batch(attention_mask) else attention_mask.bool()
 
         # Initial probabilistic masking (only on valid positions)
         rand_vals = torch.rand(batch_size, seq_len, device=device)

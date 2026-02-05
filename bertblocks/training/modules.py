@@ -190,7 +190,7 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
             self.dataset,
             collate_fn=self.collator,
             shuffle=shuffle,
-            batch_size=self.hparams.train_batch_size if not self.hparams.packing else None,  # The packing handles this
+            batch_size=self.hparams.train_batch_size if not self.hparams.packing else None,  # Packing handles batches
             num_workers=self.hparams.num_workers,
         )
 
