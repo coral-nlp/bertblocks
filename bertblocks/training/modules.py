@@ -477,6 +477,8 @@ class BertBlocksPretrainingModule(L.LightningModule):
         dynamic shape issues from varying batch dimensions.
         """
         if self.hparams.compile_model:
+            if self.trainer.world_size > 1:
+                torch._dynamo.config.optimize_ddp = True
             self.model.model._forward = torch.compile(self.model.model._forward, dynamic=True)  # type: ignore
 
     def configure_optimizers(self) -> tuple[list["torch.optim.Optimizer"], list[dict[str, Any]]]:
