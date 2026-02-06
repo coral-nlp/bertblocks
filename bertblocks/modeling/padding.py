@@ -92,7 +92,7 @@ def unpad_input(
                 attention_mask = input_ids != pad_token_id
             else:
                 attention_mask = torch.ones(input_ids.shape, device=input_ids.device)
-        return _unpad_standard_input(attention_mask, input_ids)
+        return _unpad_standard_input(input_ids, attention_mask)
 
 
 def pad_output(

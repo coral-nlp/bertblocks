@@ -72,18 +72,24 @@ class DistributedStoppingDataLoader:
                 has_data = 0
                 batch = None
 
-            # Reset the persistent tensor
+            # Set the tensor to current local state
             self.has_data_tensor.fill_(has_data)
 
-            # Perform reduction on the persistent tensor
+            # Perform sync across all ranks
             dist.all_reduce(self.has_data_tensor, op=dist.ReduceOp.MIN)
 
-            # If any rank has no data, return
+            # If any rank has no data, stop all ranks together
             if self.has_data_tensor.item() == 0:
+                # Synchronize all ranks before exiting to prevent deadlocks when starting the next epoch
+                dist.barrier()
                 return
 
             # All ranks still have data, continue yielding
             yield batch
+
+    def __len__(self) -> int:
+        """Return length of underlying dataloader if it has one."""
+        return len(self.dataloader)
 
 
 class PackedDataset(IterableDataset):
@@ -126,7 +132,14 @@ class PackedDataset(IterableDataset):
         lookahead: int = 0,
         pad_to_budget: bool = False,
     ) -> None:
-        self.dataset = dataset
+        worker_info = torch.utils.data.get_worker_info()
+        if worker_info is not None:
+            # Multiple worker processes; shard so each receives a unique subset of data
+            self.dataset = dataset.shard(num_shards=worker_info.num_workers, index=worker_info.id)
+        else:
+            # Single worker in main thread; no sharding necessary
+            self.dataset = dataset
+
         self.tokenizer = tokenizer
         self.max_length = max_length
         self.token_budget = token_budget

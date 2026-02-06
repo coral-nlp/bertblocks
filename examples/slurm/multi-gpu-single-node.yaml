@@ -6,7 +6,7 @@ trainer:
   default_root_dir: "./checkpoints"
   # 4.608 effective size; we roughly end up with ~96 seqs/batch after packing per GPU; x2 GPUs = 192
   accumulate_grad_batches: 24
-  gradient_clip_val: 1.0
+  gradient_clip_val: 5.0
   callbacks:
     - class_path: lightning.pytorch.callbacks.ModelCheckpoint
       init_args:

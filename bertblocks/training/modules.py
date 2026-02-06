@@ -152,6 +152,9 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
                 streaming=self.hparams.streaming,
             )
 
+        if (self.hparams.packing and self.hparams.shuffle) and not self.hparams.streaming:
+            self.dataset = self.dataset.shuffle().flatten_indices()
+
         if self.trainer.world_size > 1:
             self.dataset = self.dataset.shard(num_shards=self.trainer.world_size, index=self.trainer.global_rank)
 
@@ -176,6 +179,12 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
         Returns:
             DataLoader configured for pretraining, optionally with packed batches.
         """
+        if self.hparams.streaming and self.hparams.packing and self.trainer.max_epochs > 1:
+            warnings.warn(
+                "Streamed datasets cannot be packed over multiple epochs. The training process will hang after"
+                " epoch 0. Deactivate streaming, or manually start from a checkpoint after each epoch.",
+                stacklevel=2,
+            )
         if (self.hparams.shuffle and self.hparams.streaming) or (self.hparams.shuffle and self.hparams.packing):
             warnings.warn(
                 "Shuffling is not supported for streamed or packed datasets. Falling back to"
@@ -186,12 +195,15 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
         else:
             shuffle = self.hparams.shuffle
 
+        # Note: With num_workers > 0, worker processes persist across epochs by default; however, we want to recreate
+        # workers (and their dataset copies) each epoch since otherwise sequence packing might behave weirdly.
         dataloader = DataLoader(
             self.dataset,
             collate_fn=self.collator,
             shuffle=shuffle,
             batch_size=self.hparams.train_batch_size if not self.hparams.packing else None,  # Packing handles batches
             num_workers=self.hparams.num_workers,
+            persistent_workers=False if self.hparams.num_workers > 0 else None,  # Recreate workers in distributed
         )
 
         # Wrap with distributed stopping for packing in multi-GPU training.
@@ -542,6 +554,7 @@ class BertBlocksPretrainingModule(L.LightningModule):
         """
         torch.compiler.cudagraph_mark_step_begin()
         self.log("packing/tokens_per_batch", (batch["attention_mask"] != -1).float().sum())
+        self.log("packing/efficiency", (batch["attention_mask"] != -1).float().sum() / batch["attention_mask"].numel())
         self.log(
             "packing/sequences_per_batch",
             float(batch["attention_mask"].max()) + 1  # Packed sequences
@@ -563,6 +576,19 @@ class BertBlocksPretrainingModule(L.LightningModule):
         """Log grad norms at each optimizer step."""
         norms = grad_norm(self.model, norm_type=2)
         self.log_dict({f"gradnorm/{k}": v for k, v in norms.items()})
+
+    def on_train_epoch_end(self) -> None:
+        """Synchronize all ranks after epoch end to prevent deadlocks.
+
+        When using distributed training with packed datasets, rank 0 may be delayed
+        by checkpoint saving while other ranks proceed to the next epoch. This barrier
+        ensures all ranks start the next epoch together.
+        """
+        if self.trainer.world_size > 1:
+            import torch.distributed as dist
+
+            if dist.is_initialized():
+                dist.barrier()
 
     def on_save_checkpoint(self, *args: Any, **kwargs: Any) -> None:
         """Save model checkpoint in HuggingFace format.

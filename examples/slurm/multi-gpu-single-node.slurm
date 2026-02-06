@@ -15,7 +15,7 @@ CONFIG=${1:?Usage: sbatch pretrain.slurm <config.yaml>}
 mkdir -p logs
 
 # Launch training (one process per GPU with Lightning DDP)
- # Gradient accumulation is 48 for 1 H100, scale accordingly
+# Gradient accumulation is 48 for 1 H100, scale accordingly
 srun \
     --container-image=pytorch/pytorch:2.7.1-cuda12.8-cudnn9-devel \
     --container-remap-root \
@@ -29,7 +29,6 @@ srun \
         export NCCL_TIMEOUT=300  # seconds
         export NCCL_SOCKET_IFNAME=bond0
         export NCCL_P2P_LEVEL=NVL
-        export TORCH_USE_CUDA_DSA=1
         pip install uv
         uv sync --extra flash-attn --extra optimizers --extra wandb
         uv run python -m bertblocks fit \
@@ -38,4 +37,5 @@ srun \
             --trainer.strategy=ddp \
             --trainer.num_nodes=1 \
             --trainer.accumulate_grad_batches=24
+            --data.init_args.num_workers=8
     "
