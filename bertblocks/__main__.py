@@ -8,6 +8,7 @@ def cli(args: ArgsType = None) -> None:
     _ = LightningCLI(
         args=args,
         save_config_kwargs={"overwrite": True},
+        trainer_defaults={"use_distributed_sampler": False},
         parser_kwargs={"parser_mode": "omegaconf"},
     )
 

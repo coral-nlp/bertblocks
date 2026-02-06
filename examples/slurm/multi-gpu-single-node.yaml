@@ -7,6 +7,7 @@ trainer:
   # 4.608 effective size; we roughly end up with ~96 seqs/batch after packing per GPU; x2 GPUs = 192
   accumulate_grad_batches: 24
   gradient_clip_val: 5.0
+  reload_dataloaders_every_n_epochs: 1
   callbacks:
     - class_path: lightning.pytorch.callbacks.ModelCheckpoint
       init_args:
@@ -92,7 +93,6 @@ data:
   init_args:
     objective: diffusion
     collator_kwargs:
-      mask_token_id: ${model.init_args.model_config_kwargs.mask_token_id}
       sampling_eps: 0.1
       noise_eps: 0.1
       min_masked: 1
@@ -101,11 +101,9 @@ data:
     file_format: "parquet"
     pretrained_tokenizer_name_or_path: lgienapp/gecco-tokenizer
     max_sequence_length: 1024
-    train_batch_size: 80
-    val_batch_size: 80
+    train_batch_size: 64
+    val_batch_size: 64
     packing: true
-    packing_buffer_size: 8192
-    packing_lookahead: 256
     packing_pad_to_budget: true
     num_workers: 8
     shuffle: true

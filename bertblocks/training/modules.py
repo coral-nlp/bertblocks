@@ -30,7 +30,7 @@ from bertblocks.modeling.norms import DeepNorm, DynamicTanhNorm, GroupNorm, Laye
 from bertblocks.training.metrics import get_metrics_for_task
 from bertblocks.training.objectives import get_collator_cls
 from bertblocks.training.optimizer import get_optimizer
-from bertblocks.training.packing import DistributedStoppingDataLoader, PackedDataset
+from bertblocks.training.packing import PackingBatchSampler, PackingCollatorWrapper, PackingIterableDataset
 from bertblocks.training.scheduler import get_scheduler
 
 
@@ -116,28 +116,33 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
             num_workers (int, optional): Number of workers for data loading. Defaults to 0.
             collator_kwargs (dict[str, Any], optional): Additional keyword arguments for the data collator.
                 For example, the mlm_probability.
-            packing (bool, optional): Enable sequence packing.
-            packing_buffer_size (int, optional): Maximum number of unpacked sequences to buffer internally
-                during packing. Defaults to 4096.
-            packing_lookahead (int, optional): Number if items to descend into the buffer before aborting search for
-                fitting sequences during greedy packing. Defaults to 0 (no lookahead).
-            packing_pad_to_budget (bool, optional): When True, each packed batch is padded with a dummy sequence to
-                exactly fill the token budget, producing a fixed unpadded length every step and eliminating
-                ``torch.compile`` recompilation from dynamic shapes. Defaults to False.
+            packing (bool, optional): Enable sequence packing. Defaults to False.
+            packing_pad_to_budget (bool, optional): When True, packed batches are padded to token_budget for
+                fixed shapes (useful for torch.compile). When False, uses dynamic shapes. Defaults to False.
         """
         super().__init__()
         self.save_hyperparameters()
-        tokenizer = AutoTokenizer.from_pretrained(self.hparams.pretrained_tokenizer_name_or_path)
+        self.tokenizer = AutoTokenizer.from_pretrained(self.hparams.pretrained_tokenizer_name_or_path)
         self.collator = get_collator_cls(objective)(
-            tokenizer=tokenizer,
+            pad_token_id=self.tokenizer.pad_token_id or 0,
+            mask_token_id=self.tokenizer.mask_token_id or 1,
+            vocab_size=self.tokenizer.vocab_size,
             max_sequence_length=self.hparams.max_sequence_length,
             text_column=self.hparams.text_column or "text",
-            pretokenized=self.hparams.pretokenized,
             **(self.hparams.collator_kwargs or {}),
         )
 
-    def setup(self, stage: str) -> None:
-        """Prepare the dataset for training. Called once per node."""
+    def prepare_data(self) -> None:
+        """Ensure that data is downloaded. Called only in a single process."""
+        if not os.path.isdir(self.hparams.dataset_name_or_path) and not self.hparams.streaming:
+            _ = load_dataset(
+                self.hparams.dataset_name_or_path,
+                split=self.hparams.data_split or "train",
+                streaming=self.hparams.streaming,
+            )
+
+    def setup(self, stage: str | None = None) -> None:
+        """Prepare the dataset for training. Called in every process."""
         if os.path.isdir(self.hparams.dataset_name_or_path):
             self.dataset: datasets.Dataset | datasets.IterableDataset = load_dataset(
                 self.hparams.file_format or "json",
@@ -152,26 +157,49 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
                 streaming=self.hparams.streaming,
             )
 
-        if (self.hparams.packing and self.hparams.shuffle) and not self.hparams.streaming:
-            self.dataset = self.dataset.shuffle().flatten_indices()
-
-        if self.trainer.world_size > 1:
+        if not self.hparams.streaming and self.trainer.world_size > 1:
             self.dataset = self.dataset.shard(num_shards=self.trainer.world_size, index=self.trainer.global_rank)
 
-        if self.hparams.packing:
-            self.dataset = PackedDataset(
-                dataset=self.dataset,
-                tokenizer=self.collator.tokenizer,
-                max_length=self.hparams.max_sequence_length,
-                token_budget=self.hparams.max_sequence_length * self.hparams.train_batch_size,
-                text_column=self.hparams.text_column or "text",
-                pretokenized=self.hparams.pretokenized,
-                buffer_size=self.hparams.packing_buffer_size,
-                lookahead=self.hparams.packing_lookahead,
-                pad_to_budget=self.hparams.packing_pad_to_budget,
+        # DEBUG ONLY
+        subset_size = min(self.hparams.train_batch_size * 256, len(self.dataset))
+        self.dataset = self.dataset.select(range(subset_size))
+
+        if not self.hparams.pretokenized:
+            # Not pretokenized - tokenize and truncate to max_sequence_length using batched processing
+            def __inner_batched__(batch: dict[str, list[Any]]) -> dict[str, list[Any]]:
+                res = self.tokenizer(
+                    batch[self.hparams.text_column or "text"],
+                    truncation=True,
+                    max_length=self.hparams.max_sequence_length,
+                    add_special_tokens=True,
+                    padding=False,
+                )
+                return {
+                    "input_ids": res["input_ids"],
+                    "attention_mask": res["attention_mask"],
+                    "length": [len(ids) for ids in res["input_ids"]],
+                }
+
+            self.dataset = self.dataset.map(__inner_batched__, batched=True)
+        else:
+            # Pre-tokenized: truncate sequences that exceed max_length and add/update length column
+            def __inner__(example: dict[str, Any]) -> dict[str, Any]:
+                input_ids = example["input_ids"][: self.hparams.max_sequence_length]
+                result = {"input_ids": input_ids, "length": len(input_ids)}
+                # Only include attention_mask if it exists in the original batch
+                if "attention_mask" in example:
+                    result["attention_mask"] = example["attention_mask"][: self.hparams.max_sequence_length]
+                return result
+
+            self.dataset = self.dataset.map(__inner__)
+
+        if self.hparams.shuffle and self.hparams.streaming and self.hparams.packing:
+            warnings.warn(
+                "Shuffling while streaming is not supported for packed datasets. Falling back to unshuffled "
+                "mode. You may need to pre-shuffle your data to get correct results.",
+                stacklevel=2,
             )
-            # Collator receives pretokenized variable-length tensors from PackedDataset
-            self.collator.pretokenized = True
+            self.hparams.shuffle = False
 
     def train_dataloader(self) -> DataLoader:
         """Create the training data loader.
@@ -179,37 +207,47 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
         Returns:
             DataLoader configured for pretraining, optionally with packed batches.
         """
-        if self.hparams.streaming and self.hparams.packing and self.trainer.max_epochs > 1:
-            warnings.warn(
-                "Streamed datasets cannot be packed over multiple epochs. The training process will hang after"
-                " epoch 0. Deactivate streaming, or manually start from a checkpoint after each epoch.",
-                stacklevel=2,
-            )
-        if (self.hparams.shuffle and self.hparams.streaming) or (self.hparams.shuffle and self.hparams.packing):
-            warnings.warn(
-                "Shuffling is not supported for streamed or packed datasets. Falling back to"
-                " unshuffled mode. You may need to pre-shuffle your data to get correct results.",
-                stacklevel=2,
-            )
-            shuffle = False
+        if self.hparams.packing:
+            token_budget = self.hparams.max_sequence_length * self.hparams.train_batch_size
+            if self.hparams.streaming:
+                # Use batch_size=None since dataset yields batches internally
+                dataloader = DataLoader(
+                    PackingIterableDataset(
+                        dataset=self.dataset,
+                        token_budget=token_budget,
+                        length_column="length",
+                        drop_last=False,
+                    ),
+                    batch_size=None,
+                    collate_fn=PackingCollatorWrapper(
+                        base_collator=self.collator,
+                        token_budget=token_budget if self.hparams.packing_pad_to_budget else 0,
+                    ),
+                    num_workers=self.hparams.num_workers,
+                )
+            else:
+                dataloader = DataLoader(
+                    self.dataset,
+                    batch_sampler=PackingBatchSampler(
+                        lengths=list(self.dataset["length"]),
+                        token_budget=token_budget,
+                        shuffle=self.hparams.shuffle,
+                        drop_last=False,
+                    ),
+                    collate_fn=PackingCollatorWrapper(
+                        base_collator=self.collator,
+                        token_budget=token_budget if self.hparams.packing_pad_to_budget else 0,
+                    ),
+                    num_workers=self.hparams.num_workers,
+                )
         else:
-            shuffle = self.hparams.shuffle
-
-        # Note: With num_workers > 0, worker processes persist across epochs by default; however, we want to recreate
-        # workers (and their dataset copies) each epoch since otherwise sequence packing might behave weirdly.
-        dataloader = DataLoader(
-            self.dataset,
-            collate_fn=self.collator,
-            shuffle=shuffle,
-            batch_size=self.hparams.train_batch_size if not self.hparams.packing else None,  # Packing handles batches
-            num_workers=self.hparams.num_workers,
-            persistent_workers=False if self.hparams.num_workers > 0 else None,  # Recreate workers in distributed
-        )
-
-        # Wrap with distributed stopping for packing in multi-GPU training.
-        # This syncs in the main process (not workers), so num_workers > 0 is fine.
-        if self.hparams.packing and self.trainer.world_size > 1:
-            dataloader = DistributedStoppingDataLoader(dataloader, device="cuda")
+            dataloader = DataLoader(
+                self.dataset,
+                collate_fn=self.collator,
+                shuffle=self.hparams.shuffle,
+                batch_size=self.hparams.train_batch_size,
+                num_workers=self.hparams.num_workers,
+            )
 
         return dataloader
 
@@ -270,11 +308,13 @@ class BertBlocksFinetuningDataModule(L.LightningDataModule):
 
         collator_cls = get_collator_cls(task)
         self.collator = collator_cls(
-            tokenizer=self.tokenizer,
+            pad_token_id=self.tokenizer.pad_token_id or 0,
+            mask_token_id=self.tokenizer.mask_token_id or 1,
+            vocab_size=self.tokenizer.vocab_size,
             max_sequence_length=max_sequence_length,
             text_column=text_column,
             label_column=label_column,
-            **(collator_kwargs or {}),
+            **(collator_kwargs or {}),  # type: ignore
         )
 
         self.train_dataset = None
@@ -576,19 +616,6 @@ class BertBlocksPretrainingModule(L.LightningModule):
         """Log grad norms at each optimizer step."""
         norms = grad_norm(self.model, norm_type=2)
         self.log_dict({f"gradnorm/{k}": v for k, v in norms.items()})
-
-    def on_train_epoch_end(self) -> None:
-        """Synchronize all ranks after epoch end to prevent deadlocks.
-
-        When using distributed training with packed datasets, rank 0 may be delayed
-        by checkpoint saving while other ranks proceed to the next epoch. This barrier
-        ensures all ranks start the next epoch together.
-        """
-        if self.trainer.world_size > 1:
-            import torch.distributed as dist
-
-            if dist.is_initialized():
-                dist.barrier()
 
     def on_save_checkpoint(self, *args: Any, **kwargs: Any) -> None:
         """Save model checkpoint in HuggingFace format.

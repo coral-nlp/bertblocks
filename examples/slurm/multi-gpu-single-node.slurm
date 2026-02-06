@@ -36,6 +36,6 @@ srun \
             --trainer.devices=2 \
             --trainer.strategy=ddp \
             --trainer.num_nodes=1 \
-            --trainer.accumulate_grad_batches=24
-            --data.init_args.num_workers=8
+            --trainer.accumulate_grad_batches=24 \
+            --data.init_args.num_workers=4
     "

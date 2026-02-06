@@ -3,7 +3,6 @@ from typing import Any, Literal
 
 import torch
 from torch import Tensor
-from transformers import PreTrainedTokenizerBase
 
 from bertblocks.modeling.utils import LogLinearNoise
 from bertblocks.training.packing import is_packed_batch
@@ -12,107 +11,138 @@ from bertblocks.training.packing import is_packed_batch
 class Collator(ABC):
     """Abstract data collator class for pretraining tasks.
 
-    A data collator is responsible for processing raw input data into a format
-    suitable for model training. This typically involves tokenization, padding,
-    and applying any necessary transformations such as masking for language
-    modeling tasks.
+    A data collator is responsible for processing pretokenized input data into a format
+    suitable for model training. This includes padding and applying any necessary
+    transformations such as masking for language modeling tasks.
 
     Inherited classes must implement the `compute_labels` method.
     """
 
     def __init__(
         self,
-        tokenizer: PreTrainedTokenizerBase,
+        pad_token_id: int,
+        mask_token_id: int,
+        vocab_size: int,
         text_column: str = "text",
         label_column: str | None = None,
         max_sequence_length: int = 1024,
-        pretokenized: bool = False,
     ) -> None:
         """Initialize the data collator.
 
         Args:
-            tokenizer (PreTrainedTokenizerBase): Huggingface tokenizer to use for text processing.
-            text_column (str): Name of the column containing text data in the dataset. Defaults to "text".
-            label_column (str): Name of the column containing label data in the dataset. Defaults to "label".
-            max_sequence_length (int): Maximum sequence length after tokenization. Defaults to 1024.
-            pretokenized (bool): Whether the input data is already tokenized. Defaults to False.
+            pad_token_id (int): Token ID used for padding sequences.
+            mask_token_id (id): Token ID used for masking sequences.
+            vocab_size (int): Size of the tokenizer vocabulary.
+            text_column (str): Name of the column containing text data. Defaults to "text".
+            label_column (str): Name of the column containing label data. Defaults to "label".
+            max_sequence_length (int): Maximum sequence length for padding. Defaults to 1024.
         """
         super().__init__()
-        self.tokenizer = tokenizer
+        self.pad_token_id = pad_token_id
+        self.mask_token_id = mask_token_id
+        self.vocab_size = vocab_size
         self.text_column = text_column
         self.label_column = label_column
         self.max_sequence_length = max_sequence_length
-        self.pretokenized = pretokenized
-        self.special_tokens = torch.tensor(self.tokenizer.all_special_ids)
         self.batch_keys = ["input_ids", "attention_mask", "labels"]
 
     def _get_valid_token_mask(self, input_ids: Tensor, attention_mask: Tensor) -> Tensor:
         # Create valid token mask
         if is_packed_batch(attention_mask):
             # Packed format: valid tokens have attention_mask >= 0
-            valid_mask = (attention_mask >= 0) & torch.isin(input_ids, self.special_tokens, invert=True)
+            valid_mask = (attention_mask >= 0) & torch.isin(
+                input_ids, [self.pad_token_id, self.mask_token_id], invert=True
+            )
         else:
             # Standard format: valid tokens have attention_mask == 1
-            valid_mask = attention_mask.bool() & torch.isin(input_ids, self.special_tokens, invert=True)
+            valid_mask = attention_mask.bool() & torch.isin(
+                input_ids, [self.pad_token_id, self.mask_token_id], invert=True
+            )
         return valid_mask
 
     def __call__(self, batch: list[dict[str, Any]]) -> dict[str, Any]:
-        """Process a batch of examples.
+        """Process a batch of pretokenized examples.
 
         Args:
-            batch (list[dict[str, Any]]): List of examples, where each example is a dictionary
-                containing the raw input data.
+            batch (list[dict[str, Any]]): List of pretokenized examples, where each example
+                contains "input_ids" and "attention_mask" keys.
 
         Returns:
-            dict[str, Any]: Processed batch dictionary suitable for model input.
+            dict[str, Any]: Processed batch dictionary with padded tensors suitable for model input.
         """
-        if self.pretokenized and is_packed_batch(batch[0].get("attention_mask")):
-            # Packed format, always pretokenized
-            tokenized = batch[0]
-        elif self.pretokenized:
-            # Pretokenized, standard format
-            pad_id = self.tokenizer.pad_token_id or 0
-            input_ids = [
+        pad_id = self.pad_token_id
+        seq_lens = [len(item["input_ids"]) for item in batch]
+
+        # Convert to tensor first, then truncate to ensure all sequences are properly limited
+        input_ids = [
+            (
                 item["input_ids"]
                 if isinstance(item["input_ids"], torch.Tensor)
                 else torch.tensor(item["input_ids"], dtype=torch.long)
-                for item in batch
-            ]
-            attention_mask = [
+            )[: self.max_sequence_length]
+            for item in batch
+        ]
+        attention_mask = [
+            (
                 item["attention_mask"]
                 if isinstance(item["attention_mask"], torch.Tensor)
                 else torch.tensor(item["attention_mask"], dtype=torch.long)
-                for item in batch
-            ]
-            tokenized = {
-                "input_ids": torch.stack(
-                    [
-                        torch.nn.functional.pad(ids, (0, self.max_sequence_length - len(ids)), value=pad_id)
-                        for ids in input_ids
-                    ]
-                ),
-                "attention_mask": torch.stack(
-                    [
-                        torch.nn.functional.pad(mask, (0, self.max_sequence_length - len(mask)), value=0)
-                        for mask in attention_mask
-                    ]
-                ),
-            }
-        else:
-            if not isinstance(batch[0].get(self.text_column), str):
-                raise ValueError("Expected raw string input when not running in pretokenized mode.")
-            # Raw, standard format
-            tokenized = self.tokenizer(
-                [item[self.text_column] for item in batch],
-                padding="max_length",
-                truncation=True,
-                max_length=self.max_sequence_length,
-                return_tensors="pt",
-                return_special_tokens_mask=True,
-            )
+            )[: self.max_sequence_length]
+            for item in batch
+        ]
 
+        # Pad to max_sequence_length
+        tokenized = {
+            "input_ids": torch.stack(
+                [
+                    torch.nn.functional.pad(ids, (0, self.max_sequence_length - len(ids)), value=pad_id)
+                    for ids in input_ids
+                ]
+            ),
+            "attention_mask": torch.stack(
+                [
+                    torch.nn.functional.pad(mask, (0, self.max_sequence_length - len(mask)), value=0)
+                    for mask in attention_mask
+                ]
+            ),
+        }
+
+        # Handle labels if present
         if self.label_column:
-            tokenized.update({"labels": [item[self.label_column] for item in batch]})
+            pad_id = self.pad_token_id
+            # Inspect first element to figure out if we have sequence-level or token-level labels
+            first_label = batch[0][self.label_column]
+            if isinstance(first_label, torch.Tensor):
+                is_token_level = first_label.dim() > 1 and first_label.shape[1] == seq_lens[0]
+            else:
+                # For lists/arrays, check if it's 2D and matches sequence length
+                is_token_level = (
+                    isinstance(first_label, list | tuple)
+                    and len(first_label) > 0
+                    and isinstance(first_label[0], list | tuple)
+                )
+
+            if is_token_level:
+                # Token-level labels: convert to tensor first, then truncate
+                labels = [
+                    (
+                        item[self.label_column]
+                        if isinstance(item[self.label_column], torch.Tensor)
+                        else torch.tensor(item[self.label_column], dtype=torch.long)
+                    )[: self.max_sequence_length]
+                    for item in batch
+                ]
+                labels = torch.stack(
+                    [
+                        torch.nn.functional.pad(lb, (0, self.max_sequence_length - len(lb)), value=pad_id)
+                        for lb in labels
+                    ]
+                )
+            else:
+                # Sequence-level labels: just convert to tensor
+                labels = torch.tensor([item[self.label_column] for item in batch], dtype=torch.long)
+            tokenized.update({"labels": labels})
+
         tokenized_with_labels = self.compute_labels(tokenized)
         tokenized_with_labels = {k: v for k, v in tokenized_with_labels.items() if k in self.batch_keys}
         return tokenized_with_labels
@@ -136,35 +166,34 @@ class MaskedLanguageModelingCollator(Collator):
     Applies masking to create MLM training examples.
 
     Args:
-        tokenizer (PreTrainedTokenizerBase): Huggingface tokenizer to use for
-            text processing.
+         pad_token_id (int): Token ID used for padding sequences.
+        mask_token_id (int): Token ID used for masking sequences.
+        vocab_size (int): Size of the tokenizer vocabulary.
         text_column (str): Name of the column containing text data in the dataset.
             Defaults to "text".
         max_sequence_length (int | None): Maximum sequence length after tokenization.
             Defaults to 256.
-        pretokenized (bool | None): Whether the input data is already tokenized.
-            Defaults to False.
         mlm_probability (float | None): Probability of masking tokens for MLM.
             Defaults to 0.3 (30% of tokens will be masked).
     """
 
     def __init__(
         self,
-        tokenizer: "PreTrainedTokenizerBase",
+        pad_token_id: int,
+        mask_token_id: int,
+        vocab_size: int,
         text_column: str = "text",
         max_sequence_length: int = 1024,
-        pretokenized: bool = False,
         mlm_probability: float = 0.3,
     ):
         super().__init__(
-            tokenizer=tokenizer,
+            pad_token_id=pad_token_id,
+            mask_token_id=mask_token_id,
+            vocab_size=vocab_size,
             text_column=text_column,
             max_sequence_length=max_sequence_length,
-            pretokenized=pretokenized,
         )
         self.mlm_probability = mlm_probability
-        self.mask_token_id = tokenizer.mask_token_id
-        self.vocab_size = tokenizer.vocab_size
 
     def compute_labels(self, tokenized: dict[str, Any]) -> Any:
         """Compute the MLM labels for the given batch of tokenized inputs.
@@ -212,8 +241,10 @@ class MaskedLanguageModelingCollator(Collator):
 class EnhancedMaskedLanguageModelingCollator(Collator):
     """Data collator for enhanced masked language modeling pretraining.
 
-    The collator is the same as the MaskedLanguageModelingCollator but turns
-    off masking in the input sequence, because masking is handled by the model.
+    Prepares pretokenized sequences for enhanced MLM. Unlike standard MLM, masking
+    is not applied in the collator but is handled by the model itself.
+
+    Expects input to be already tokenized (handled in the data module).
     """
 
     def compute_labels(self, tokenized: dict[str, Any]) -> dict[str, Any]:
@@ -234,32 +265,36 @@ class EnhancedMaskedLanguageModelingCollator(Collator):
 class TokenClassificationCollator(Collator):
     """Data collator for token classification tasks.
 
-    This collator handles tokenization and formatting for token classification tasks
-    like NER, POS tagging, etc. It tokenizes the input text and properly aligns
-    the token-level labels with the tokenized sequence.
+    Handles formatting for token classification tasks like NER, POS tagging, etc.
+    Pads pretokenized sequences and aligns token-level labels.
+
+    Expects input to be already tokenized (handled in the data module).
 
     Args:
-        tokenizer (PreTrainedTokenizerBase): Huggingface tokenizer to use for text processing.
-        text_column (str): Name of the column containing text data in the dataset. Defaults to "text".
-        label_column (str): Name of the column containing label data in the dataset. Defaults to "labels".
-        max_sequence_length (int | None): Maximum sequence length after tokenization. Defaults to 512.
-        pretokenized (bool | None): Whether the input data is already tokenized. Defaults to False.
+        pad_token_id (int): Token ID used for padding sequences.
+        mask_token_id (int): Token ID used for masking sequences.
+        vocab_size (int): Size of the tokenizer vocabulary.
+        text_column (str): Name of the column containing text data. Defaults to "text".
+        label_column (str): Name of the column containing label data. Defaults to "labels".
+        max_sequence_length (int): Maximum sequence length for padding. Defaults to 1024.
     """
 
     def __init__(
         self,
-        tokenizer: "PreTrainedTokenizerBase",
+        pad_token_id: int,
+        mask_token_id: int,
+        vocab_size: int,
         text_column: str = "text",
         label_column: str = "labels",
         max_sequence_length: int = 1024,
-        pretokenized: bool = False,
     ):
         super().__init__(
-            tokenizer=tokenizer,
+            pad_token_id=pad_token_id,
+            mask_token_id=mask_token_id,
+            vocab_size=vocab_size,
             text_column=text_column,
             label_column=label_column,
             max_sequence_length=max_sequence_length,
-            pretokenized=pretokenized,
         )
 
     def compute_labels(self, tokenized: dict[str, Any]) -> dict[str, Any]:
@@ -307,32 +342,34 @@ class TokenClassificationCollator(Collator):
 class SequenceClassificationCollator(Collator):
     """Data collator for sequence classification tasks.
 
-    This collator handles tokenization and formatting for sequence classification tasks
-    like sentiment analysis, text classification, etc. It tokenizes the input text
-    and preserves the labels for classification.
+    Handles formatting for sequence classification tasks like sentiment analysis,
+    text classification, etc. Pads pretokenized sequences and preserves sequence-level labels.
 
     Args:
-        tokenizer (PreTrainedTokenizerBase): Huggingface tokenizer to use for text processing.
-        text_column (str): Name of the column containing text data in the dataset. Defaults to "text".
-        label_column (str): Name of the column containing label data in the dataset. Defaults to "label".
-        max_sequence_length (int | None): Maximum sequence length after tokenization. Defaults to 512.
-        pretokenized (bool | None): Whether the input data is already tokenized. Defaults to False.
+        pad_token_id (int): Token ID used for padding sequences.
+        mask_token_id (int): Token ID used for masking sequences.
+        vocab_size (int): Size of the tokenizer vocabulary.
+        text_column (str): Name of the column containing text data. Defaults to "text".
+        label_column (str): Name of the column containing label data. Defaults to "label".
+        max_sequence_length (int): Maximum sequence length for padding. Defaults to 1024.
     """
 
     def __init__(
         self,
-        tokenizer: "PreTrainedTokenizerBase",
+        pad_token_id: int,
+        mask_token_id: int,
+        vocab_size: int,
         text_column: str = "text",
         label_column: str = "label",
         max_sequence_length: int = 1024,
-        pretokenized: bool = False,
     ):
         super().__init__(
-            tokenizer=tokenizer,
+            pad_token_id=pad_token_id,
+            mask_token_id=mask_token_id,
+            vocab_size=vocab_size,
             text_column=text_column,
             label_column=label_column,
             max_sequence_length=max_sequence_length,
-            pretokenized=pretokenized,
         )
 
     def compute_labels(self, tokenized: dict[str, Any]) -> dict[str, Any]:
@@ -357,72 +394,55 @@ class SequenceClassificationCollator(Collator):
 class QuestionAnsweringCollator(Collator):
     """Data collator for question answering tasks.
 
-    This collator handles tokenization and formatting for question answering tasks
-    like SQuAD. It processes question-context pairs and preserves start/end positions
-    for answer span prediction.
+    Handles formatting for question answering tasks like SQuAD. Pads pretokenized
+    question-context pairs and preserves start/end positions for answer span prediction.
 
     Args:
-        tokenizer (PreTrainedTokenizerBase): Huggingface tokenizer to use for text processing.
-        question_column (str): Name of the column containing question data. Defaults to "question".
+        pad_token_id (int): Token ID used for padding sequences.
+        mask_token_id (int): Token ID used for masking sequences.
+        vocab_size (int): Size of the tokenizer vocabulary.
+        text_column (str): Name of the column containing question data. Defaults to "question".
+        label_column (str): Name of the column containing answer data. Defaults to "answers".
         context_column (str): Name of the column containing context data. Defaults to "context".
-        answer_column (str): Name of the column containing answer data. Defaults to "answers".
-        max_sequence_length (int | None): Maximum sequence length after tokenization. Defaults to 512.
-        pretokenized (bool | None): Whether the input data is already tokenized. Defaults to False.
+        max_sequence_length (int): Maximum sequence length for padding. Defaults to 1024.
         doc_stride (int): Stride for sliding window when context is too long. Defaults to 128.
     """
 
     def __init__(
         self,
-        tokenizer: "PreTrainedTokenizerBase",
+        pad_token_id: int,
+        mask_token_id: int,
+        vocab_size: int,
         text_column: str = "question",  # Override default for QA
         label_column: str = "answers",  # Override default for QA
         context_column: str = "context",
         max_sequence_length: int = 1024,
-        pretokenized: bool = False,
         doc_stride: int = 128,
     ):
         super().__init__(
-            tokenizer=tokenizer,
+            pad_token_id=pad_token_id,
+            mask_token_id=mask_token_id,
+            vocab_size=vocab_size,
             text_column=text_column,  # question column
             label_column=label_column,  # answers column
             max_sequence_length=max_sequence_length,
-            pretokenized=pretokenized,
         )
         self.context_column = context_column
         self.doc_stride = doc_stride
 
     def __call__(self, batch: list[dict[str, Any]]) -> dict[str, Any]:
-        """Process a batch of QA examples.
+        """Process a batch of pretokenized QA examples.
 
-        For QA, we need to handle question-context pairs differently than the base class.
+        Expects input to already be tokenized with question-context pairs.
         """
-        if not self.pretokenized:
-            questions = [item[self.text_column] for item in batch]
-            contexts = [item[self.context_column] for item in batch]
+        # Use base class to handle pretokenized input and padding
+        tokenized = super().__call__(batch)
 
-            # Tokenize question-context pairs
-            tokenized = self.tokenizer(
-                questions,
-                contexts,
-                padding="max_length",
-                truncation=True,
-                max_length=self.max_sequence_length,
-                return_tensors="pt",
-                return_offsets_mapping=True,
-                stride=self.doc_stride,
-                return_overflowing_tokens=True,
-            )
-        else:
-            # Handle pre-tokenized case
-            tokenized = {
-                "input_ids": torch.stack([item["input_ids"] for item in batch]),
-                "attention_mask": torch.stack([item["attention_mask"] for item in batch]),
-            }
-
-        # Add answers/start_positions/end_positions if available
+        # Add answers if available
         if self.label_column and all(self.label_column in item for item in batch):
             tokenized.update({"answers": [item[self.label_column] for item in batch]})
 
+        # Compute start/end positions
         tokenized_with_labels = self.compute_labels(tokenized)
 
         # Keep QA-specific fields
@@ -493,20 +513,25 @@ class QuestionAnsweringCollator(Collator):
 
 
 class MaskedDiffusionCollator(Collator):
-    """An MLM-type collator that samples a random masking probability per batch between 0 and 1.
+    """Diffusion-based MLM collator that samples random masking probabilities per batch.
 
-    Randomly masks tokens outside a preserved prefix length using the sampled masking probability.
+    Randomly masks tokens using a sampled masking probability from a diffusion schedule.
+    Expects input to be already tokenized (handled in the data module).
 
     Parameters
     ----------
-    tokenizer: PreTrainedTokenizerBase
-        The tokenizer used to tokenize the batch.
+    pad_token_id: int
+        Token ID used for padding sequences.
+    mask_token_id: int
+        Token ID to use for masking.
+    vocab_size: int
+        Size of the tokenizer vocabulary.
     text_column: str
-        The name of the column in `batch` that contains the texts.
+        The name of the column containing text data.
     max_sequence_length: int
-        The maximum length of the tokenized sequences.
-    pretokenized: bool
-        Whether the batch is pretokenized.
+        The maximum length for padding.
+    num_steps: int
+        Number of diffusion steps.
     sampling_eps: float
         Minimum timestep for sampling, controls minimum masking probability.
     noise_eps: float
@@ -519,11 +544,11 @@ class MaskedDiffusionCollator(Collator):
 
     def __init__(
         self,
-        tokenizer: "PreTrainedTokenizerBase",
+        pad_token_id: int,
+        mask_token_id: int,
+        vocab_size: int,
         text_column: str = "text",
-        mask_token_id: int = 0,
         max_sequence_length: int = 1024,
-        pretokenized: bool = False,
         num_steps: int = 1000,
         sampling_eps: float = 0.1,
         noise_eps: float = 1e-3,
@@ -531,13 +556,12 @@ class MaskedDiffusionCollator(Collator):
         max_masked: int | None = None,
     ):
         super().__init__(
-            tokenizer=tokenizer,
+            pad_token_id=pad_token_id,
+            mask_token_id=mask_token_id,
+            vocab_size=vocab_size,
             text_column=text_column,
             max_sequence_length=max_sequence_length,
-            pretokenized=pretokenized,
         )
-        self.vocab_size = tokenizer.vocab_size
-        self.mask_token_id = mask_token_id
         self.noise = LogLinearNoise(eps=noise_eps)
         self.num_steps = num_steps
         self.sampling_eps = sampling_eps
