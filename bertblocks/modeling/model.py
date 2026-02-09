@@ -1350,7 +1350,7 @@ class BertBlocksForMaskedDiffusion(BertBlocksForMaskedLM, GenerationMixin):
         transition_probs = transition_probs * dsigma
 
         # Add the redirected mass to MASK token
-        transition_probs[..., self.mask_token_id] += extra_const
+        transition_probs[..., self.mask_token_id] = transition_probs[..., self.mask_token_id] + extra_const
 
         return transition_probs
 

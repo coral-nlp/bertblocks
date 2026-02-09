@@ -1,12 +1,44 @@
 """Sequence packing using batch sampling and a wrapper around collators to produce full flat-packed batches."""
 
-import math
 from collections.abc import Callable, Iterator
 from typing import Any
 
 import torch
 import torch.distributed as dist
 from torch.utils.data import IterableDataset, Sampler
+
+
+def _pack_sequences(
+    indices: list[int],
+    lengths: list[int],
+    token_budget: int,
+) -> list[list[int]]:
+    """Pack sequences greedily into batches that fit within token budget.
+
+    Args:
+        indices: Dataset indices to pack.
+        lengths: Sequence lengths for all dataset samples.
+        token_budget: Maximum tokens per packed batch.
+
+    Returns:
+        List of packed batches (each batch is a list of dataset indices).
+    """
+    batches: list[list[int]] = []
+    ptr = 0
+    while ptr < len(indices):
+        batch: list[int] = []
+        tokens = 0
+        while ptr < len(indices):
+            seq_len = lengths[indices[ptr]]
+            if not batch or tokens + seq_len <= token_budget:
+                batch.append(indices[ptr])
+                tokens += seq_len
+                ptr += 1
+            else:
+                break
+        if batch:
+            batches.append(batch)
+    return batches
 
 
 def is_packed_batch(attention_mask: "torch.Tensor | None") -> bool:
@@ -28,27 +60,30 @@ def is_packed_batch(attention_mask: "torch.Tensor | None") -> bool:
 
 
 class PackingBatchSampler(Sampler[list[int]]):
-    """Batch sampler that greedily selects variable-length continuous runs of samples that fit inside the token budget.
+    """Distributed batch sampler that packs variable-length sequences into token-budget batches.
 
-    This sampler is supplied with a list of sequence lengths in tokens. In distributed mode, each rank independently
-    samples from its assigned data shard, retaining DDP compatibility.
+    This sampler follows PyTorch's DistributedSampler pattern: it packs ALL sequences globally
+    into batches, truncates to ensure even distribution across ranks, then assigns batches
+    round-robin to each rank. All ranks independently compute the same global packing using
+    deterministic shuffling, ensuring no distributed communication is needed.
 
     Args:
-        lengths: List of sequence lengths in tokens of the sampled dataset.
-        token_budget: Maximum total tokens per batch (typically max_length * batch_size).
-        shuffle: Whether to shuffle indices before packing. Defaults to False.
-        drop_last: Drop the last incomplete batch. Defaults to False.
-        rank: Rank for distributed training. If None, uses dist.get_rank() if available.
-        world_size: World size for distributed training. If None, uses dist.get_world_size() if available.
-        seed: Random seed for shuffle reproducibility.
+        lengths: Sequence lengths for all dataset samples.
+        token_budget: Maximum tokens per packed batch.
+        world_size: Number of processes participating in distributed training.
+            If None, uses world_size from current distributed group.
+        rank: Rank of current process within num_replicas.
+            If None, uses rank from current distributed group.
+        shuffle: Whether to shuffle indices before packing. Default: True.
+        seed: Random seed for shuffling. Should be identical across all processes. Default: 0.
+        drop_last: Drop the last batch, which might not be fully packed. Default: False.
 
     Example:
 
         >>> from datasets import load_dataset
         >>> from torch.utils.data import DataLoader
         >>> dataset = load_dataset("dataset_name", split="train")
-        >>> dataset = dataset.map(...) # Add length column if not already present
-        >>> batch_sampler = PackingBatchSampler(dataset, token_budget=4096)
+        >>> batch_sampler = PackingBatchSampler(list(datasets["length"]), token_budget=4096)
         >>> collator = PackingCollatorWrapper(base_collator, token_budget=4096)
         >>> dataloader = DataLoader(dataset, batch_sampler=batch_sampler, collate_fn=collator)
 
@@ -65,86 +100,79 @@ class PackingBatchSampler(Sampler[list[int]]):
         drop_last: bool = False,
     ) -> None:
         super().__init__()
-        # Setup distributed training; fall back to single-GPU if dist not specified
-        if dist.is_available() and dist.is_initialized():
-            self.rank = rank if rank is not None else dist.get_rank()
-            self.world_size = world_size if world_size is not None else dist.get_world_size()
-        else:
-            self.rank = rank if rank is not None else 0
-            self.world_size = world_size if world_size is not None else 1
+        if world_size is None:
+            if not dist.is_available():
+                raise RuntimeError("Requires distributed package to be available")
+            world_size = dist.get_world_size()
+        if rank is None:
+            if not dist.is_available():
+                raise RuntimeError("Requires distributed package to be available")
+            rank = dist.get_rank()
+        if rank >= world_size or rank < 0:
+            raise ValueError(f"Invalid rank {rank}, rank should be in the interval [0, {world_size - 1}]")
 
+        self.lengths = lengths
         self.token_budget = token_budget
-        self.data = lengths
-
+        self.num_replicas = world_size
+        self.rank = rank
         self.epoch = 0
-        self.drop_last = drop_last
-
-        # How many samples this rank sees
-        self.num_samples: int = math.ceil(len(self.data) / self.world_size)  # type: ignore[arg-type]
-        # How many samples there are in the dataset
-        self.total_size = len(self.data)  # type: ignore[arg-type]  # self.num_samples * self.world_size
         self.shuffle = shuffle
         self.seed = seed
+        self.drop_last = drop_last
 
-    def __iter__(self) -> Iterator[list[int]]:
-        """Provide an iterator over the subset of the dataset, yielding batches of sequences indices."""
-        # Generate list of indices of this dataset
+        # Compute batches once to determine num_samples
+        self._batches = self._compute_batches()
+        self.num_samples = len(self._batches)
+
+    def _compute_batches(self) -> list[list[int]]:
+        """Compute this rank's batches for the current epoch."""
+        total_size = len(self.lengths)
+
+        # Deterministically shuffle based on epoch and seed (same across all ranks)
         if self.shuffle:
-            # Deterministically shuffle based on epoch and seed
             g = torch.Generator()
             g.manual_seed(self.seed + self.epoch)
-            indices = torch.randperm(self.total_size, generator=g).tolist()
+            indices = torch.randperm(total_size, generator=g).tolist()
         else:
-            indices = list(range(self.total_size))
+            indices = list(range(total_size))
 
-        # Subsample the view of this batch
-        indices = indices[self.rank : self.total_size : self.world_size]
-        if len(indices) != self.num_samples:
-            raise AssertionError(
-                f"Number of subsampled indices ({len(indices)}) does not match num_samples ({self.num_samples})"
-            )
+        # Pack all sequences globally
+        all_batches = _pack_sequences(indices, self.lengths, self.token_budget)
 
-        idx_ptr = 0
-        while idx_ptr < len(indices):
-            batch_indices: list[int] = []
-            batch_tokens = 0
+        # Drop last batch if requested (it might not be fully packed)
+        if self.drop_last and len(all_batches) > 0:
+            all_batches = all_batches[:-1]
 
-            # Fill the batch with continuous run of sequences
-            while idx_ptr < len(indices):
-                current_idx = indices[idx_ptr]
-                seq_len = self.data[current_idx]
+        # Truncate to make batch count evenly divisible across ranks
+        num_batches = len(all_batches) - (len(all_batches) % self.num_replicas)
+        all_batches = all_batches[:num_batches]
 
-                # Always include at least one sequence per batch to ensure progress
-                if len(batch_indices) == 0 or batch_tokens + seq_len <= self.token_budget:
-                    # Fits (or first sequence), add to batch
-                    batch_indices.append(current_idx)
-                    batch_tokens += seq_len
-                    idx_ptr += 1
-                else:
-                    # Doesn't fit, finalize this batch
-                    break
+        # Distribute batches round-robin to ranks
+        rank_batches = all_batches[self.rank :: self.num_replicas]
 
-            # Yield the batch if it has sufficient tokens (or still yield if not dropping last)
-            if batch_indices and (not self.drop_last or batch_tokens >= self.token_budget * 0.5):
-                yield batch_indices
-            else:
-                return
+        return rank_batches
+
+    def __iter__(self) -> Iterator[list[int]]:
+        """Return an iterator over the current rank's batches."""
+        return iter(self._batches)
 
     def __len__(self) -> int:
-        """Return the number of samples in this subset of the dataset."""
-        return self.num_samples
+        """Return the number of batches."""
+        return len(self._batches)
 
     def set_epoch(self, epoch: int) -> None:
-        r"""Set the epoch for this sampler.
+        """Set the epoch for this sampler.
 
-        When :attr:`shuffle=True`, this ensures all replicas
-        use a different random ordering for each epoch. Otherwise, the next iteration of this
-        sampler will yield the same ordering.
+        When shuffle=True, this ensures all replicas use a different random ordering
+        for each epoch. Otherwise, the next iteration will yield the same ordering.
 
         Args:
-            epoch (int): Epoch number.
+            epoch: Epoch number.
         """
         self.epoch = epoch
+        self._batches = self._compute_batches()
+        self.num_samples = len(self._batches)
+        print(f"[Rank {self.rank}] Epoch {self.epoch}: sampled {self.num_samples} batches")
 
 
 class PackingIterableDataset(IterableDataset):
@@ -356,6 +384,6 @@ class PackingCollatorWrapper:
 __all__ = [
     "is_packed_batch",
     "PackingBatchSampler",
-    "PackingIterableDataset",
     "PackingCollatorWrapper",
+    "PackingIterableDataset",
 ]

@@ -1,8 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=bertblocks-pretrain
-#SBATCH --gres=gpu:hopper:2 # 2x H100 80GB
-#SBATCH --ntasks-per-node=2 # All located on the same host
-#SBATCH --cpus-per-task=8   # 2x8 = 16 cores total (make num_workers match this)
+#SBATCH --gres=gpu:hopper   # 1x H100 80GB
+#SBATCH --cpus-per-task=8   # 1x8 = 8 cores total (make num_workers match this)
 #SBATCH --mem=128GB         # 128GB total
 #SBATCH --time=47:00:00     # We have a max job time of 48:00:00 on the cluster
 #SBATCH --output=logs/%x-%j.out
@@ -33,8 +32,5 @@ srun \
         uv sync --extra flash-attn --extra optimizers --extra wandb
         uv run python -m bertblocks fit \
             --config $CONFIG \
-            --trainer.devices=2 \
-            --trainer.num_nodes=1 \
-            --trainer.accumulate_grad_batches=24 \
-            --trainer.strategy=ddp
+            --trainer.accumulate_grad_batches=48 \
     "

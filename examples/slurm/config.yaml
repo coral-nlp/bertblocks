@@ -1,13 +1,13 @@
 # lightning.pytorch==2.0.0
 seed_everything: 153201820 # For reproducibility
 trainer:
+  deterministic: true
   accelerator: "gpu"
   precision: "bf16-mixed"
   default_root_dir: "./checkpoints"
   # 4.608 effective size; we roughly end up with ~96 seqs/batch after packing per GPU; x2 GPUs = 192
   accumulate_grad_batches: 24
   gradient_clip_val: 5.0
-  reload_dataloaders_every_n_epochs: 1
   callbacks:
     - class_path: lightning.pytorch.callbacks.ModelCheckpoint
       init_args:
@@ -25,7 +25,9 @@ trainer:
         project: "gecco-lm"
         entity: "lgienapp"
         log_model: true
-  max_epochs: 10 # 10 times the whole dataset, each pass will perform limit_train_batches/accumulate_grad_batches updates
+  max_epochs: 10
+  val_check_interval: 100
+  check_val_every_n_epoch: null
   log_every_n_steps: 1
 model:
   class_path: bertblocks.training.modules.BertBlocksPretrainingModule
@@ -91,15 +93,16 @@ model:
 data:
   class_path: bertblocks.training.modules.BertBlocksPretrainingDataModule
   init_args:
+    train_dataset_name_or_path: "roneneldan/TinyStories" # "/var/tmp/gienapp/gecco-ablation-dataset"
+    val_dataset_name_or_path: "roneneldan/TinyStories"
+    pretrained_tokenizer_name_or_path: "lgienapp/gecco-tokenizer"
     objective: diffusion
     collator_kwargs:
       sampling_eps: 0.1
       noise_eps: 0.1
       min_masked: 1
       max_masked: 992
-    dataset_name_or_path: "/var/tmp/gienapp/gecco-ablation-dataset"
     file_format: "parquet"
-    pretrained_tokenizer_name_or_path: lgienapp/gecco-tokenizer
     max_sequence_length: 1024
     train_batch_size: 64
     val_batch_size: 64
@@ -108,3 +111,4 @@ data:
     num_workers: 8
     shuffle: true
     streaming: false
+    cache_dir: "/var/tmp/gienapp/bertblocks-cache"

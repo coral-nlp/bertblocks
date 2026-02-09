@@ -1,12 +1,9 @@
 import warnings
 from typing import TYPE_CHECKING, Any, Literal
 
-import datasets
-
 if TYPE_CHECKING:
     from torchmetrics import MetricCollection
 
-import os.path
 from pathlib import Path
 
 import lightning as L
@@ -14,7 +11,7 @@ import torch
 import torchmetrics
 from datasets import load_dataset
 from lightning.pytorch.utilities import grad_norm
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader
 from transformers import (
     AutoModelForQuestionAnswering,
     AutoModelForSequenceClassification,
@@ -27,27 +24,12 @@ from transformers.trainer_pt_utils import get_parameter_names
 from bertblocks.config import BertBlocksConfig
 from bertblocks.modeling.model import get_model_cls
 from bertblocks.modeling.norms import DeepNorm, DynamicTanhNorm, GroupNorm, LayerNorm, RMSNorm
+from bertblocks.training.data import EmptyDataset, _cache_paths, _load_dataset, _tokenize_batch, _truncated_add_length
 from bertblocks.training.metrics import get_metrics_for_task
 from bertblocks.training.objectives import get_collator_cls
 from bertblocks.training.optimizer import get_optimizer
 from bertblocks.training.packing import PackingBatchSampler, PackingCollatorWrapper, PackingIterableDataset
 from bertblocks.training.scheduler import get_scheduler
-
-
-class EmptyDataset(Dataset):
-    """Empty dataset dummy to return when no data is loaded.
-
-    https://stackoverflow.com/questions/70369070/can-a-pytorch-dataloader-start-with-an-empty-dataset#70369304
-    """
-
-    def __init__(self) -> None:
-        pass
-
-    def __len__(self) -> int:
-        return 0
-
-    def __getitem__(self, index: int) -> None:
-        raise IndexError("Empty dataset cannot be indexed")
 
 
 class BertBlocksPretrainingDataModule(L.LightningDataModule):
@@ -62,17 +44,19 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
     and includes configurable batch sizes and data loading parameters.
     """
 
-    dataset: torch.utils.data.Dataset
+    train_dataset: torch.utils.data.Dataset
+    val_dataset: torch.utils.data.Dataset | None
 
     def __init__(
         self,
+        train_dataset_name_or_path: str | list[str],
         pretrained_tokenizer_name_or_path: str,
         objective: Literal["mlm", "enhanced_mlm", "diffusion"] = "mlm",
         max_sequence_length: int = 512,
-        dataset: "torch.utils.data.Dataset" = None,
-        dataset_name_or_path: str | list[str] | None = None,
+        val_dataset_name_or_path: str | list[str] | None = None,
+        train_split: str | None = None,
+        val_split: str | None = None,
         file_format: str | None = None,
-        data_split: str | None = None,
         text_column: str = "text",
         streaming: bool = False,
         shuffle: bool = False,
@@ -83,28 +67,25 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
         num_workers: int = 0,
         collator_kwargs: dict[str, Any] | None = None,
         packing: bool = False,
-        packing_buffer_size: int = 4096,
-        packing_lookahead: int = 0,
         packing_pad_to_budget: bool = False,
-        shuffle_buffer_size: int = 10_000,
+        cache_dir: str | None = None,
     ) -> None:
         """Initialize the pretraining data module.
 
         Args:
+            train_dataset_name_or_path (str | list[str]): Dataset name or path to load via huggingface
+                datasets to use for training.
             pretrained_tokenizer_name_or_path (str): Path or name of HuggingFace tokenizer
                 to use for text processing.
             objective (Literal["mlm", "enhanced_mlm", "diffusion"]): The training objective. Available options:
                 "mlm", "enhanced_mlm", "diffusion".
             max_sequence_length (int, optional): Maximum sequence length for tokenization.
                 Longer sequences will be truncated. Defaults to 512.
-            dataset (torch.utils.data.Dataset, optional): Instantiated dataset to use. For train only, does not support
-                splits. Defaults to None. Either `dataset` or `dataset_name_or_path` must be provided, but only one
-                of them.
-            dataset_name_or_path (str | list[str], optional): Dataset name or path to load via huggingface datasets.
-                Defaults to None. Either `dataset` or `dataset_name_or_path` must be provided, but only one
-                of them.
-            data_split (str, optional): Dataset split to use for pretraining. Defaults to 'train'. Only used if data is
-                specifie via `dataset_name_or_path`.
+            val_dataset_name_or_path (str | list[str], optional): Dataset name or path to load via huggingface
+                datasets to use for validation. Defaults to None.
+            train_split (str, optional): Dataset split to use for training. Defaults to 'train'.
+            val_split (str, optional): Dataset split to use for training. Defaults to 'validation'.
+            file_format (str, optional): File format to use if loading data from disk. Defaults to 'json'.
             text_column (str, optional): Text column name pretrain with. Defaults to 'text'.
             streaming (bool, optional): Whether to use streaming data. Defaults to False.
             shuffle (bool, optional): Whether to shuffle the dataset before pretraining. Shuffling is only supported
@@ -119,6 +100,7 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
             packing (bool, optional): Enable sequence packing. Defaults to False.
             packing_pad_to_budget (bool, optional): When True, packed batches are padded to token_budget for
                 fixed shapes (useful for torch.compile). When False, uses dynamic shapes. Defaults to False.
+            cache_dir (str, optional): Directory to cache data transformations. Defaults to None.
         """
         super().__init__()
         self.save_hyperparameters()
@@ -133,73 +115,139 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
         )
 
     def prepare_data(self) -> None:
-        """Ensure that data is downloaded. Called only in a single process."""
-        if not os.path.isdir(self.hparams.dataset_name_or_path) and not self.hparams.streaming:
-            _ = load_dataset(
-                self.hparams.dataset_name_or_path,
-                split=self.hparams.data_split or "train",
-                streaming=self.hparams.streaming,
+        """Download and tokenize data. Called only on LOCAL_RANK=0 per node (Lightning handles this automatically)."""
+        # Construct cache file paths if cache_dir is specified
+        train_cache, val_cache, _ = _cache_paths(self.hparams.cache_dir)
+
+        # Tokenize training dataset to populate HuggingFace's cache
+        # Other ranks will load from cache in setup()
+        if not self.hparams.pretokenized:
+            _ = _load_dataset(
+                dataset_name_or_path=self.hparams.train_dataset_name_or_path,
+                split=self.hparams.train_split or "train",
+                add_index=self.hparams.packing,
+            ).map(
+                lambda x: _tokenize_batch(
+                    x,
+                    tokenizer=self.tokenizer,
+                    text_column=self.hparams.text_column,
+                    max_sequence_length=self.hparams.max_sequence_length,
+                ),
+                batched=True,
+                cache_file_name=train_cache,
             )
+        else:
+            _ = _load_dataset(
+                dataset_name_or_path=self.hparams.train_dataset_name_or_path,
+                split=self.hparams.train_split or "train",
+                add_index=self.hparams.packing,
+            ).map(
+                lambda x: _truncated_add_length(x, self.hparams.max_sequence_length),
+                batched=False,
+                cache_file_name=train_cache,
+            )
+
+        # Optionally prepare validation dataset
+        if self.hparams.val_dataset_name_or_path is not None and not self.hparams.streaming:
+            if not self.hparams.pretokenized:
+                _ = _load_dataset(
+                    dataset_name_or_path=self.hparams.val_dataset_name_or_path,
+                    split=self.hparams.val_split or "validation",
+                    add_index=self.hparams.packing,
+                ).map(
+                    lambda x: _tokenize_batch(
+                        x,
+                        tokenizer=self.tokenizer,
+                        text_column=self.hparams.text_column,
+                        max_sequence_length=self.hparams.max_sequence_length,
+                    ),
+                    batched=True,
+                    cache_file_name=val_cache,
+                )
+            else:
+                _ = _load_dataset(
+                    dataset_name_or_path=self.hparams.val_dataset_name_or_path,
+                    split=self.hparams.val_split or "validation",
+                    add_index=self.hparams.packing,
+                ).map(
+                    lambda x: _truncated_add_length(x, self.hparams.max_sequence_length),
+                    batched=False,
+                    cache_file_name=val_cache,
+                )
 
     def setup(self, stage: str | None = None) -> None:
-        """Prepare the dataset for training. Called in every process."""
-        if os.path.isdir(self.hparams.dataset_name_or_path):
-            self.dataset: datasets.Dataset | datasets.IterableDataset = load_dataset(
-                self.hparams.file_format or "json",
-                data_dir=self.hparams.dataset_name_or_path,
-                split=self.hparams.data_split or "train",
-                streaming=self.hparams.streaming,
+        """Load the dataset for training. Called on every process - loads from cache populated by prepare_data()."""
+        if stage == "fit" or stage is None:
+            train_cache, val_cache, _ = _cache_paths(self.hparams.cache_dir)
+
+            self.train_dataset = _load_dataset(
+                dataset_name_or_path=self.hparams.train_dataset_name_or_path,
+                split=self.hparams.train_split or "train",
+                add_index=self.hparams.packing,
             )
-        else:
-            self.dataset = load_dataset(
-                self.hparams.dataset_name_or_path,
-                split=self.hparams.data_split or "train",
-                streaming=self.hparams.streaming,
-            )
-
-        if not self.hparams.streaming and self.trainer.world_size > 1:
-            self.dataset = self.dataset.shard(num_shards=self.trainer.world_size, index=self.trainer.global_rank)
-
-        # DEBUG ONLY
-        subset_size = min(self.hparams.train_batch_size * 256, len(self.dataset))
-        self.dataset = self.dataset.select(range(subset_size))
-
-        if not self.hparams.pretokenized:
-            # Not pretokenized - tokenize and truncate to max_sequence_length using batched processing
-            def __inner_batched__(batch: dict[str, list[Any]]) -> dict[str, list[Any]]:
-                res = self.tokenizer(
-                    batch[self.hparams.text_column or "text"],
-                    truncation=True,
-                    max_length=self.hparams.max_sequence_length,
-                    add_special_tokens=True,
-                    padding=False,
+            if self.hparams.val_dataset_name_or_path is not None:
+                self.val_dataset = _load_dataset(
+                    dataset_name_or_path=self.hparams.val_dataset_name_or_path,
+                    split=self.hparams.val_split or "validation",
+                    add_index=self.hparams.packing,
                 )
-                return {
-                    "input_ids": res["input_ids"],
-                    "attention_mask": res["attention_mask"],
-                    "length": [len(ids) for ids in res["input_ids"]],
-                }
+            else:
+                self.val_dataset = None
 
-            self.dataset = self.dataset.map(__inner_batched__, batched=True)
-        else:
-            # Pre-tokenized: truncate sequences that exceed max_length and add/update length column
-            def __inner__(example: dict[str, Any]) -> dict[str, Any]:
-                input_ids = example["input_ids"][: self.hparams.max_sequence_length]
-                result = {"input_ids": input_ids, "length": len(input_ids)}
-                # Only include attention_mask if it exists in the original batch
-                if "attention_mask" in example:
-                    result["attention_mask"] = example["attention_mask"][: self.hparams.max_sequence_length]
-                return result
+            if not self.hparams.pretokenized:
+                self.train_dataset = self.train_dataset.map(
+                    lambda x: _tokenize_batch(
+                        x,
+                        tokenizer=self.tokenizer,
+                        text_column=self.hparams.text_column,
+                        max_sequence_length=self.hparams.max_sequence_length,
+                    ),
+                    batched=True,
+                    cache_file_name=train_cache,
+                )
+                if self.hparams.val_dataset_name_or_path is not None:
+                    self.val_dataset = self.val_dataset.map(
+                        lambda x: _tokenize_batch(
+                            x,
+                            tokenizer=self.tokenizer,
+                            text_column=self.hparams.text_column,
+                            max_sequence_length=self.hparams.max_sequence_length,
+                        ),
+                        batched=True,
+                        cache_file_name=val_cache,
+                    )
 
-            self.dataset = self.dataset.map(__inner__)
+            else:
+                self.train_dataset = self.train_dataset.map(
+                    lambda x: _truncated_add_length(x, self.hparams.max_sequence_length),
+                    batched=False,
+                    cache_file_name=train_cache,
+                )
+                if self.hparams.val_dataset_name_or_path is not None:
+                    self.val_dataset = self.val_dataset.map(
+                        lambda x: _truncated_add_length(x, self.hparams.max_sequence_length),
+                        batched=False,
+                        cache_file_name=val_cache,
+                    )
 
-        if self.hparams.shuffle and self.hparams.streaming and self.hparams.packing:
-            warnings.warn(
-                "Shuffling while streaming is not supported for packed datasets. Falling back to unshuffled "
-                "mode. You may need to pre-shuffle your data to get correct results.",
-                stacklevel=2,
-            )
-            self.hparams.shuffle = False
+            # When packing, ensure deterministic order across all ranks by sorting by original index
+            if self.hparams.packing and not self.hparams.streaming:
+                self.train_dataset = self.train_dataset.sort("_idx")
+                self.train_dataset = self.train_dataset.remove_columns(["_idx"])
+
+            # For non-packing mode, shard the dataset across ranks
+            if not self.hparams.streaming and self.trainer.world_size > 1 and not self.hparams.packing:
+                self.train_dataset = self.train_dataset.shard(
+                    num_shards=self.trainer.world_size, index=self.trainer.global_rank, contiguous=True
+                )
+
+            if self.hparams.streaming and self.hparams.shuffle:
+                warnings.warn(
+                    "Shuffling is not supported for streamed datasets. Falling back to unshuffled "
+                    "mode. You may need to pre-shuffle your data to get correct results.",
+                    stacklevel=2,
+                )
+                self.hparams.shuffle = False
 
     def train_dataloader(self) -> DataLoader:
         """Create the training data loader.
@@ -213,7 +261,7 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
                 # Use batch_size=None since dataset yields batches internally
                 dataloader = DataLoader(
                     PackingIterableDataset(
-                        dataset=self.dataset,
+                        dataset=self.train_dataset,
                         token_budget=token_budget,
                         length_column="length",
                         drop_last=False,
@@ -227,12 +275,14 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
                 )
             else:
                 dataloader = DataLoader(
-                    self.dataset,
+                    self.train_dataset,
                     batch_sampler=PackingBatchSampler(
-                        lengths=list(self.dataset["length"]),
+                        lengths=list(self.train_dataset["length"]),
                         token_budget=token_budget,
+                        world_size=self.trainer.world_size,
+                        rank=self.trainer.global_rank,
                         shuffle=self.hparams.shuffle,
-                        drop_last=False,
+                        drop_last=True,
                     ),
                     collate_fn=PackingCollatorWrapper(
                         base_collator=self.collator,
@@ -242,7 +292,7 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
                 )
         else:
             dataloader = DataLoader(
-                self.dataset,
+                self.train_dataset,
                 collate_fn=self.collator,
                 shuffle=self.hparams.shuffle,
                 batch_size=self.hparams.train_batch_size,
@@ -250,6 +300,23 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
             )
 
         return dataloader
+
+    def val_dataloader(self) -> DataLoader:
+        """Create the validation data loader.
+
+        Returns:
+            DataLoader configured for validation or dummy dataloader if no validation dataset is set.
+        """
+        if self.val_dataset is None:
+            return DataLoader(EmptyDataset(), batch_size=self.hparams.val_batch_size, shuffle=False)
+
+        return DataLoader(
+            self.val_dataset,
+            collate_fn=self.collator,
+            shuffle=False,
+            batch_size=self.hparams.val_batch_size,
+            num_workers=self.hparams.num_workers,
+        )
 
 
 class BertBlocksFinetuningDataModule(L.LightningDataModule):
@@ -324,7 +391,7 @@ class BertBlocksFinetuningDataModule(L.LightningDataModule):
     def prepare_data(self) -> None:
         """Download datasets if needed. Called once per node."""
         if self.hparams.dataset_name_or_path is not None:
-            load_dataset(self.hparams.dataset_name_or_path, name=self.hparams.dataset_config_name)
+            _ = _load_dataset(self.hparams.dataset_name_or_path, name=self.hparams.dataset_config_name, split=None)
 
     def setup(self, stage: str | None = None) -> None:
         """Set up datasets for each process. Called on every process.
@@ -338,18 +405,42 @@ class BertBlocksFinetuningDataModule(L.LightningDataModule):
 
         if stage == "fit" or stage is None:
             if self.hparams.train_split in dataset:
-                self.train_dataset = dataset[self.hparams.train_split]
+                self.train_dataset = dataset[self.hparams.train_split].map(
+                    lambda x: _tokenize_batch(
+                        x,
+                        tokenizer=self.tokenizer,
+                        text_column=self.hparams.text_column,
+                        max_sequence_length=self.hparams.max_sequence_length,
+                    ),
+                    batched=True,
+                )
             else:
                 raise ValueError(f"Train split {self.hparams.train_split} not found, got: {dataset.keys()}")
 
             if self.hparams.val_split is not None and self.hparams.val_split in dataset:
-                self.val_dataset = dataset[self.hparams.val_split]
+                self.val_dataset = dataset[self.hparams.val_split].map(
+                    lambda x: _tokenize_batch(
+                        x,
+                        tokenizer=self.tokenizer,
+                        text_column=self.hparams.text_column,
+                        max_sequence_length=self.hparams.max_sequence_length,
+                    ),
+                    batched=True,
+                )
             else:
                 raise ValueError(f"Validation split {self.hparams.val_split} not found, got: {dataset.keys()}")
 
         if stage == "test" or stage is None:
             if self.hparams.test_split is not None and self.hparams.test_split in dataset:
-                self.test_dataset = dataset[self.hparams.test_split]
+                self.test_dataset = dataset[self.hparams.test_split].map(
+                    lambda x: _tokenize_batch(
+                        x,
+                        tokenizer=self.tokenizer,
+                        text_column=self.hparams.text_column,
+                        max_sequence_length=self.hparams.max_sequence_length,
+                    ),
+                    batched=True,
+                )
             else:
                 raise ValueError(f"Test split {self.hparams.val_split} not found, got: {dataset.keys()}")
 
@@ -457,6 +548,9 @@ class BertBlocksPretrainingModule(L.LightningModule):
         scheduler_cooldown_decay: float = 0.0,
         objective: Literal["mlm", "enhanced_mlm", "diffusion"] = "mlm",
         gradient_checkpointing: bool = False,
+        use_ddp_join: bool = False,
+        ddp_join_divide_by_initial_world_size: bool = True,
+        ddp_join_throw_on_early_termination: bool = False,
         model_config_kwargs: "dict[str, Any] | None" = None,
         model_kwargs: "dict[str, Any] | None" = None,
     ):
@@ -592,14 +686,18 @@ class BertBlocksPretrainingModule(L.LightningModule):
             torch.Tensor: MLM loss for backpropagation.
 
         """
-        torch.compiler.cudagraph_mark_step_begin()
-        self.log("packing/tokens_per_batch", (batch["attention_mask"] != -1).float().sum())
-        self.log("packing/efficiency", (batch["attention_mask"] != -1).float().sum() / batch["attention_mask"].numel())
+        self.log("packing/tokens_per_batch", (batch["attention_mask"] != -1).float().sum(), sync_dist=False)
+        self.log(
+            "packing/efficiency",
+            (batch["attention_mask"] != -1).float().sum() / batch["attention_mask"].numel(),
+            sync_dist=False,
+        )
         self.log(
             "packing/sequences_per_batch",
             float(batch["attention_mask"].max()) + 1  # Packed sequences
             if (batch["attention_mask"] == -1).any()
             else float(batch["attention_mask"].shape[0]),  # Unpacked sequences
+            sync_dist=False,
         )
         output = self.model(**batch)
         self.log("loss/train", output.loss, prog_bar=True)
@@ -607,7 +705,6 @@ class BertBlocksPretrainingModule(L.LightningModule):
 
     def validation_step(self, batch: dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
         """Perform a single validation step."""
-        torch.compiler.cudagraph_mark_step_begin()
         output = self.model(**batch)
         self.log("loss/validation", output.loss, prog_bar=True)
         return output.loss
