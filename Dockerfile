@@ -6,7 +6,7 @@ FROM pytorch/pytorch:2.10.0-cuda13.0-cudnn9-devel@sha256:48af19ebb88034e0325decc
 WORKDIR /app
 # Set env vars
 ENV UV_COMPILE_BYTECODE=1 \
-    UV_TORCH_BACKEND=auto \
+    UV_TORCH_BACKEND=cu130 \
     UV_LINK_MODE=copy \
     UV_PROJECT_ENVIRONMENT=/app/.venv \
     TRITON_CACHE_DIR=/tmp/triton_cache \
