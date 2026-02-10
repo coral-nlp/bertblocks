@@ -1,6 +1,7 @@
-import functools
 import math
-from collections.abc import Callable, Sequence
+import os
+import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
@@ -16,6 +17,7 @@ if TYPE_CHECKING:
 import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
+from torch.nn.modules.normalization import GroupNorm
 from transformers.modeling_outputs import (
     BaseModelOutput,
     BaseModelOutputWithPooling,
@@ -30,9 +32,62 @@ from bertblocks.config import BertBlocksConfig
 from bertblocks.modeling.block import Encoder, EnhancedMaskingBlock, convert_to_4d_attention_mask
 from bertblocks.modeling.embedding import TokenEmbedding
 from bertblocks.modeling.head import Pooler, get_prediction_head
+from bertblocks.modeling.initialization import (
+    TilableMixin,
+    get_layer_dim,
+    init_weights,
+    tile_embedding,
+    tile_linear,
+    tile_norm,
+)
 from bertblocks.modeling.loss import get_loss_function
+from bertblocks.modeling.norms import RMSNorm
 from bertblocks.modeling.padding import pad_output, unpad_input
 from bertblocks.modeling.position import AlibiPositionalEncoding
+
+
+def _remap_name_for_depth(name: str, new_n_blocks: int, pretrained_n_blocks: int) -> str:
+    """Remap a module name's block index to the nearest pretrained block index.
+
+    Used when the new model has a different number of blocks than the pretrained model.
+    Maps each new block index uniformly onto the pretrained block range so that
+    pretrained knowledge is distributed evenly across the expanded (or contracted) depth.
+
+    Args:
+        name: Full module path, e.g. "encd.blocks.13.attn.ffwd".
+        new_n_blocks: Number of blocks in the new model.
+        pretrained_n_blocks: Number of blocks in the pretrained model.
+
+    Returns:
+        Name with the block index remapped to the pretrained range.
+    """
+    m = re.search(r"(encd\.blocks\.)(\d+)", name)
+    if not m:
+        return name
+    new_idx = int(m.group(2))
+    pretrained_idx = 0 if new_n_blocks <= 1 else round(new_idx * (pretrained_n_blocks - 1) / (new_n_blocks - 1))
+    pretrained_idx = min(pretrained_idx, pretrained_n_blocks - 1)
+    return name[: m.start(2)] + str(pretrained_idx) + name[m.end(2) :]
+
+
+def _init_block_as_identity(block: nn.Module) -> None:
+    """Zero-initialize output projections in a transformer block.
+
+    Makes the block approximately a no-op at init by zeroing the attention output
+    projection (attn.ffwd) and the MLP/GLU down-projection (ffwd.dprj). Input
+    projections are left with their existing random initialization so the block
+    can be trained in without disrupting the pretrained residual stream.
+
+    Args:
+        block: A Block module whose output projections should be zeroed.
+    """
+    with torch.no_grad():
+        for name, module in block.named_modules():
+            leaf = name.split(".")[-1]
+            if leaf in ("ffwd", "dprj") and isinstance(module, nn.Linear):
+                module.weight.zero_()
+                if module.bias is not None:
+                    module.bias.zero_()
 
 
 @dataclass
@@ -73,87 +128,154 @@ class BertBlocksPreTrainedModel(PreTrainedModel):
         super().__init__(config, *args, **kwargs)
 
     def _init_weights(self, module: "nn.Module") -> None:
-        """Initialize module weights.
+        """Initialize module weights using initialization.py functions.
+
+        Called by HuggingFace's apply() mechanism via post_init().
 
         Args:
             module: The module to initialize.
 
         """
-        # Set up initialization parameters from config
-        initializer_kind = self.config.initializer_kind
-        initializer_cutoff_factor = self.config.initializer_cutoff_factor
-        initializer_range = self.config.initializer_range
-        initializer_gain = self.config.initializer_gain
+        if not isinstance(module, nn.Linear | nn.Embedding):
+            return
 
-        std_values = {
-            "in": initializer_range,
-            "out": initializer_range / math.sqrt(2.0 * self.config.num_blocks),
-            "embedding": initializer_range,
-            "final_out": self.config.hidden_size**-0.5,
-        }
+        init_weights(
+            config=self.config,
+            module=module,
+            layer_dim=get_layer_dim(module),
+        )
 
-        # Determine std_kind based on module type
-        std_kind = None
-
-        # Embedding layers use "embedding" std
-        if isinstance(module, nn.Embedding):
-            std_kind = "embedding"
-        # Linear layers - determine type by attribute name patterns
-        elif isinstance(module, nn.Linear):
-            # Get the full module path to determine context
-            module_name = getattr(module, "_get_name", lambda: str(module))()
-
-            # Task-specific output layers (final classification/generation layers)
-            if any(name in module_name.lower() for name in ["classifier", "decoder"]):
-                std_kind = "final_out"
-            # Attention projection layers (input projections)
-            elif any(name in module_name.lower() for name in ["proj", "uprj"]):
-                std_kind = "in"
-            # Feed-forward and output projections
-            elif any(name in module_name.lower() for name in ["ffwd", "dprj"]):
-                std_kind = "out"
-            else:
-                # Default for other linear layers
-                std_kind = "in"
-
-        if std_kind is None:
-            return  # Skip initialization for unsupported modules
-
-        std = std_values[std_kind]
-
-        def _get_init_fn() -> "Callable[[torch.Tensor], None]":
-            match initializer_kind:
-                case "trunc_normal":
-                    return functools.partial(
-                        nn.init.trunc_normal_,
-                        mean=0.0,
-                        std=std,
-                        a=-initializer_cutoff_factor * std,
-                        b=initializer_cutoff_factor * std,
-                    )
-                case "kaiming_normal":
-                    return functools.partial(nn.init.kaiming_normal_)
-                case "kaiming_uniform":
-                    return functools.partial(nn.init.kaiming_uniform_)
-                case "xavier_normal":
-                    return functools.partial(nn.init.xavier_normal_)
-                case "xavier_uniform":
-                    return functools.partial(nn.init.xavier_uniform_)
-                case _:
-                    raise ValueError(
-                        f"Unknown initialization function {initializer_kind}, supported functions: "
-                        f"'trunc_normal', 'kaiming_normal', 'kaiming_uniform', 'xavier_normal', 'xavier_uniform'"
-                    )
-
-        # Apply initialization function to module weight
-        init_fn = _get_init_fn()
+        # Apply initializer_gain scaling on top of the base initialization
         if hasattr(module, "weight") and module.weight is not None:
-            init_fn(module.weight)
-            module.weight.data *= initializer_gain
+            module.weight.data *= self.config.initializer_gain
 
-        # Initialize bias terms to zero for linear layers
-        if isinstance(module, nn.Linear) and module.bias is not None:
-            nn.init.zeros_(module.bias)
+    def _init_from_pretrained(self) -> None:
+        """Load weights from a pretrained model (exact architecture, size-compatible).
+
+        Supports HuggingFace model IDs and local (torch) checkpoint paths.
+        """
+        from bertblocks.integration import from_huggingface
+
+        if os.path.isdir(self.config.pretrained_model_path):
+            # Local file path
+            state_dict = torch.load(self.config.pretrained_model_path, map_location="cpu", weights_only=True)
+            # Handle common checkpoint formats
+            if "model" in state_dict:
+                state_dict = state_dict["model"]
+            elif "state_dict" in state_dict:
+                state_dict = state_dict["state_dict"]
+            self.load_state_dict(state_dict, strict=False)
+        else:
+            # HuggingFace model ID or local directory
+            pretrained = from_huggingface(self.config.pretrained_model_path, load_weights=True)
+            self.load_state_dict(pretrained.state_dict(), strict=False)
+
+    def _init_with_tiling(self) -> None:
+        """Load weights from a smaller pretrained model and tile them to fit larger dimensions.
+
+        Supports HuggingFace model IDs and local (torch) checkpoint paths. Modules implementing TilableMixin handle
+        their own tiling logic (e.g., fused QKV in Attention, fused gate+input in GLU). All other plain modules
+        (Linear, Embedding, normalization layers) are handled generically. Children of TilableMixin modules are
+        skipped to avoid double-tiling. Modules absent from the pretrained model are left with their random
+        initialization.
+
+        Depth mismatches (different number of blocks) are handled according to config.depth_tile_strategy:
+        - "nearest": each new block index is mapped to the nearest pretrained block index, so pretrained
+          knowledge is distributed uniformly across the expanded depth.
+        - "identity": blocks beyond the pretrained depth keep random input projections but have their
+          output projections zeroed, making them approximate no-ops at init.
+        """
+        from bertblocks.integration import from_huggingface
+
+        path = self.config.pretrained_model_path
+
+        # Load pretrained model
+        if path.startswith("/") or path.startswith("./") or path.startswith("../"):
+            pretrained_model = self.__class__.from_pretrained(path)
+        else:
+            pretrained_model = from_huggingface(path, load_weights=True)
+
+        pretrained_modules = dict(pretrained_model.named_modules())
+
+        # Detect pretrained depth from module names
+        pretrained_block_indices: set[int] = set()
+        for mod_name in pretrained_modules:
+            m = re.search(r"encd\.blocks\.(\d+)$", mod_name)
+            if m:
+                pretrained_block_indices.add(int(m.group(1)))
+        pretrained_n_blocks = max(pretrained_block_indices) + 1 if pretrained_block_indices else self.config.num_blocks
+        new_n_blocks = self.config.num_blocks
+
+        use_nearest = self.config.depth_tile_strategy == "nearest"
+        depth_differs = new_n_blocks != pretrained_n_blocks
+
+        tiled_ids: set[int] = set()
+
+        for name, module in self.named_modules():
+            if id(module) in tiled_ids:
+                continue
+
+            # For nearest strategy, remap block index to the nearest pretrained block
+            lookup_name = (
+                _remap_name_for_depth(name, new_n_blocks, pretrained_n_blocks)
+                if (depth_differs and use_nearest)
+                else name
+            )
+
+            pretrained_module = pretrained_modules.get(lookup_name)
+            if pretrained_module is None:
+                continue
+
+            if isinstance(module, TilableMixin) and isinstance(module, nn.Module):
+                # Mark all descendants (including self) to avoid double-tiling their children
+                for child in module.modules():
+                    tiled_ids.add(id(child))
+                module.tile_from(pretrained_module, mode=self.config.tile_mode)
+            elif isinstance(module, nn.Embedding) and isinstance(pretrained_module, nn.Embedding):
+                if module.embedding_dim > pretrained_module.embedding_dim:
+                    tile_embedding(pretrained_module, module, mode=self.config.tile_mode)
+                else:
+                    with torch.no_grad():
+                        module.weight.data.copy_(pretrained_module.weight.data)
+            elif isinstance(module, nn.LayerNorm | RMSNorm | GroupNorm) and isinstance(
+                pretrained_module, nn.LayerNorm | RMSNorm | GroupNorm
+            ):
+                if module.weight.shape != pretrained_module.weight.shape:
+                    tile_norm(pretrained_module, module, mode=self.config.tile_mode)
+                else:
+                    with torch.no_grad():
+                        module.weight.data.copy_(pretrained_module.weight.data)
+                        if (
+                            hasattr(module, "bias")
+                            and module.bias is not None
+                            and hasattr(pretrained_module, "bias")
+                            and pretrained_module.bias is not None
+                        ):
+                            module.bias.data.copy_(pretrained_module.bias.data)
+            elif isinstance(module, nn.Linear) and isinstance(pretrained_module, nn.Linear):
+                tile_linear(pretrained_module, module, mode=self.config.tile_mode)
+
+        # For identity strategy: zero-init output projections of extra blocks so they are no-ops
+        if not use_nearest and new_n_blocks > pretrained_n_blocks:
+            for name, module in self.named_modules():
+                m = re.search(r"encd\.blocks\.(\d+)$", name)
+                if m and int(m.group(1)) >= pretrained_n_blocks:
+                    _init_block_as_identity(module)
+
+    def post_init(self) -> None:
+        """Initialize weights based on config.init_strategy.
+
+        Overrides HuggingFace's post_init to support three initialization strategies:
+        - "from_scratch": Random initialization using the configured method
+        - "from_pretrained": Load weights from a pretrained checkpoint
+        - "tile_from_pretrained": Load and tile weights from a smaller pretrained model
+        """
+        if self.config.init_strategy == "from_scratch":
+            self.apply(self._init_weights)
+        elif self.config.init_strategy == "from_pretrained":
+            self._init_from_pretrained()
+        elif self.config.init_strategy == "tile_from_pretrained":
+            self._init_with_tiling()
 
     def _set_gradient_checkpointing(self, module: "nn.Module", value: bool = False) -> None:
         """Enable or disable gradient checkpointing for encoder modules.

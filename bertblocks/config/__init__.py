@@ -9,7 +9,18 @@ ActivationFunction = Literal["relu", "silu", "gelu", "leakyrelu", "selu", "logsi
 Head = Literal["proj", "mlp", "glu"]
 FeedForward = Literal["linear", "mlp", "glu"]
 KeywordArgs = dict[str, Any]
-Initializer = Literal["trunc_normal", "kaiming_normal", "kaiming_uniform", "xavier_normal", "xavier_uniform"]
+Initializer = Literal[
+    "trunc_normal",
+    "normal",
+    "fan_in",
+    "kaiming_normal",
+    "kaiming_uniform",
+    "xavier_normal",
+    "xavier_uniform",
+]
+InitStrategy = Literal["from_scratch", "from_pretrained", "tile_from_pretrained"]
+TileMode = Literal["center_weights", "tile_weights_from_edge", "tile_weights_from_middle"]
+DepthTileStrategy = Literal["nearest", "identity"]
 AttentionBackend = Literal["flash_attention_2", "eager", "sdpa"]
 EmbeddingPositionalEncoding = Literal["none", "sinusoidal", "learned"]
 BlockPositionalEncoding = Literal["none", "alibi", "rope", "learned_alibi"]
@@ -81,9 +92,10 @@ class BertBlocksConfig(PretrainedConfig):
         attn_out_bias: Whether to include bias terms in the output projection of attention layers.
         local_attention: Whether to include local attention mechanism. Default (-1, -1) means global attention.
         global_attention_every_n_layers: The layer step size for global attention.
-        initializer_kind: The initialization method for weights. Determines the type of
-            distribution random weights are sampled from for initialization.
-            Defaults to a truncated normal distribution.
+        initializer_kind: The initialization method for weights. Available options:
+            "trunc_normal" (Truncated normal, default), "normal" (Normal distribution),
+            "fan_in" (Fan-in variance scaling: std=1/sqrt(d_in)),
+            "kaiming_normal", "kaiming_uniform", "xavier_normal", "xavier_uniform".
         initializer_range: Standard deviation for weight initialization. Smaller values lead
             to more conservative initialization. Common values: 0.02 (BERT). Must be greater than 0.0.
         initializer_cutoff_factor: Cutoff factor for truncated normal initialization.
@@ -92,6 +104,24 @@ class BertBlocksConfig(PretrainedConfig):
             Must be greater than 0.0.
         initializer_gain: Gain to scale initialized weights with, e.g., for DeepNorm.
             Must be greater than 0.0.
+        init_strategy: How to initialize model weights. Options:
+            "from_scratch" (random initialization, default),
+            "from_pretrained" (load weights from pretrained_model_path with strict=False),
+            "tile_from_pretrained" (load and tile weights from a smaller pretrained model).
+        pretrained_model_path: Path to pretrained weights or HuggingFace model ID
+            (e.g., "answerdotai/ModernBERT-base" or "/path/to/checkpoint.pt").
+            Required when init_strategy is "from_pretrained" or "tile_from_pretrained".
+        tile_mode: Strategy for tiling pretrained weights to larger dimensions.
+            Only used when init_strategy is "tile_from_pretrained". Options:
+            "tile_weights_from_middle" (center original, tile outward symmetrically, default),
+            "center_weights" (place original in center, zero-pad edges),
+            "tile_weights_from_edge" (repeat weights starting from edge).
+        depth_tile_strategy: Strategy for handling depth mismatches when tiling from a pretrained model
+            with a different number of blocks. Only used when init_strategy is "tile_from_pretrained". Options:
+            "nearest" (map each new block index to the nearest pretrained block index, default),
+            "identity" (extra blocks beyond pretrained depth are zero-initialized to act as no-ops).
+        init_small_embedding: If True, overrides embedding initialization to uniform[-1e-4, 1e-4].
+            Cannot be used with initializer_kind="full_megatron".
         add_timestep_emb: Whether to add timestep embeddings to the model (only needed for some diffusion models).
         actv_fn: The activation function used in feed-forward networks.
         norm_kind: When to apply normalization in the transformer layers. Available options:
@@ -154,6 +184,11 @@ class BertBlocksConfig(PretrainedConfig):
         initializer_range: float = 0.02,
         initializer_cutoff_factor: float = 3.0,
         initializer_gain: float = 1.0,
+        init_strategy: InitStrategy = "from_scratch",
+        pretrained_model_path: str | None = None,
+        tile_mode: TileMode = "tile_weights_from_middle",
+        depth_tile_strategy: DepthTileStrategy = "nearest",
+        init_small_embedding: bool = False,
         add_timestep_emb: bool = False,
         add_token_type_emb: bool = False,
         type_vocab_size: int = 1,
@@ -206,6 +241,8 @@ class BertBlocksConfig(PretrainedConfig):
             initializer_range=initializer_range,
             initializer_cutoff_factor=initializer_cutoff_factor,
             initializer_gain=initializer_gain,
+            init_strategy=init_strategy,
+            pretrained_model_path=pretrained_model_path,
             emb_dropout_prob=emb_dropout_prob,
             num_attention_heads=num_attention_heads,
             num_kv_heads=num_kv_heads,
@@ -255,6 +292,11 @@ class BertBlocksConfig(PretrainedConfig):
         self.initializer_range = initializer_range
         self.initializer_cutoff_factor = initializer_cutoff_factor
         self.initializer_gain = initializer_gain
+        self.init_strategy = init_strategy
+        self.pretrained_model_path = pretrained_model_path
+        self.tile_mode = tile_mode
+        self.depth_tile_strategy = depth_tile_strategy
+        self.init_small_embedding = init_small_embedding
         # Activation functions
         self.actv_fn = actv_fn
         # Normalization parameters
@@ -298,6 +340,8 @@ class BertBlocksConfig(PretrainedConfig):
         initializer_range: float,
         initializer_cutoff_factor: float,
         initializer_gain: float,
+        init_strategy: str,
+        pretrained_model_path: str | None,
         emb_dropout_prob: float,
         num_attention_heads: int,
         num_kv_heads: int,
@@ -389,6 +433,15 @@ class BertBlocksConfig(PretrainedConfig):
 
         if hidden_size % 2 != 0:
             raise ValueError("hidden_size must be even")
+
+        if init_strategy not in ("from_scratch", "from_pretrained", "tile_from_pretrained"):
+            raise ValueError(
+                f"init_strategy must be one of 'from_scratch', 'from_pretrained', 'tile_from_pretrained'"
+                f", got {init_strategy}"
+            )
+
+        if init_strategy in ("from_pretrained", "tile_from_pretrained") and pretrained_model_path is None:
+            raise ValueError(f"pretrained_model_path must be provided when init_strategy='{init_strategy}'")
 
 
 class BertConfig(BertBlocksConfig):

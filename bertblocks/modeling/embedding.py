@@ -1,5 +1,6 @@
 from typing import TYPE_CHECKING
 
+from bertblocks.modeling.initialization import TilableMixin, TileMode, tile_embedding, tile_norm
 from bertblocks.modeling.norms import get_norm
 
 if TYPE_CHECKING:
@@ -53,7 +54,7 @@ class TokenTypeEmbedding(nn.Module):
         return x + self.embd(token_type_ids.to(torch.int32))
 
 
-class TokenEmbedding(nn.Module):
+class TokenEmbedding(TilableMixin, nn.Module):
     """Token embedding layer.
 
     Implements the token embedding layer that converts input token IDs to dense vector representations.
@@ -128,6 +129,55 @@ class TokenEmbedding(nn.Module):
         # Dropout (optional)
         x = self.drop(x)
         return x
+
+    def tile_from(self, pretrained: "TokenEmbedding", mode: str | TileMode = TileMode.tile_weights_from_middle) -> None:
+        """Tile weights from a smaller pretrained TokenEmbedding module.
+
+        Handles all sub-embeddings: token embeddings, optional learned positional
+        encodings, optional token type embeddings, and the normalization layer.
+        Sub-modules whose dimensions match are copied directly instead of tiled.
+
+        Args:
+            pretrained: Smaller pretrained TokenEmbedding module to tile from.
+            mode: Tiling strategy to use.
+        """
+        # Token embeddings
+        if self.embd.embedding_dim > pretrained.embd.embedding_dim:
+            tile_embedding(pretrained.embd, self.embd, mode=mode)
+        else:
+            with torch.no_grad():
+                self.embd.weight.data.copy_(pretrained.embd.weight.data)
+
+        # Learned positional encodings (sinusoidal has no learnable weights)
+        if isinstance(self.pose, LearnedPositionalEncoding) and isinstance(pretrained.pose, LearnedPositionalEncoding):
+            if self.pose.embd.embedding_dim > pretrained.pose.embd.embedding_dim:
+                tile_embedding(pretrained.pose.embd, self.pose.embd, mode=mode)
+            else:
+                with torch.no_grad():
+                    self.pose.embd.weight.data.copy_(pretrained.pose.embd.weight.data)
+
+        # Token type embeddings
+        if self.tokt is not None and pretrained.tokt is not None:
+            if self.tokt.embd.embedding_dim > pretrained.tokt.embd.embedding_dim:
+                tile_embedding(pretrained.tokt.embd, self.tokt.embd, mode=mode)
+            else:
+                with torch.no_grad():
+                    self.tokt.embd.weight.data.copy_(pretrained.tokt.embd.weight.data)
+
+        # Normalization layer
+        if not isinstance(self.norm, nn.Identity) and not isinstance(pretrained.norm, nn.Identity):
+            if self.norm.weight.shape != pretrained.norm.weight.shape:
+                tile_norm(pretrained.norm, self.norm, mode=mode)
+            else:
+                with torch.no_grad():
+                    self.norm.weight.data.copy_(pretrained.norm.weight.data)
+                    if (
+                        hasattr(self.norm, "bias")
+                        and self.norm.bias is not None
+                        and hasattr(pretrained.norm, "bias")
+                        and pretrained.norm.bias is not None
+                    ):
+                        self.norm.bias.data.copy_(pretrained.norm.bias.data)
 
 
 __all__ = ["TokenEmbedding", "TokenTypeEmbedding"]

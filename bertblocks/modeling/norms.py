@@ -9,9 +9,10 @@ from torch.nn.modules.normalization import (
 )
 
 from bertblocks.config import BertBlocksConfig
+from bertblocks.modeling.initialization import TilableMixin, TileMode, tile_norm, tile_weight
 
 
-class DynamicTanhNorm(nn.Module):
+class DynamicTanhNorm(TilableMixin, nn.Module):
     """Dynamic Tanh normalization.
 
     Attributes:
@@ -47,8 +48,25 @@ class DynamicTanhNorm(nn.Module):
         x = torch.tanh(self.alpha * x)
         return self.gamma * x + self.beta
 
+    def tile_from(
+        self, pretrained: "DynamicTanhNorm", mode: str | TileMode = TileMode.tile_weights_from_middle
+    ) -> None:
+        """Tile weights from a smaller pretrained DynamicTanhNorm module.
 
-class DeepNorm(nn.Module):
+        Tiles gamma (per-channel scale) and beta (per-channel shift) to the new dimension.
+        The scalar alpha is copied directly as it has no spatial dimension to tile.
+
+        Args:
+            pretrained: Smaller pretrained DynamicTanhNorm module to tile from.
+            mode: Tiling strategy to use.
+        """
+        with torch.no_grad():
+            self.gamma.data = tile_weight(pretrained.gamma.data, self.gamma.data, mode=mode)
+            self.beta.data = tile_weight(pretrained.beta.data, self.beta.data, mode=mode)
+            self.alpha.data.copy_(pretrained.alpha.data)
+
+
+class DeepNorm(TilableMixin, nn.Module):
     """DeepNorm normalization.
 
     References:
@@ -75,6 +93,18 @@ class DeepNorm(nn.Module):
 
         """
         return self.layer_norm(x + self.alpha * gx)
+
+    def tile_from(self, pretrained: "DeepNorm", mode: str | TileMode = TileMode.tile_weights_from_middle) -> None:
+        """Tile weights from a smaller pretrained DeepNorm module.
+
+        Tiles the wrapped LayerNorm's weight and bias. The alpha scaling factor
+        is a plain float attribute, not a parameter, and carries over unchanged.
+
+        Args:
+            pretrained: Smaller pretrained DeepNorm module to tile from.
+            mode: Tiling strategy to use.
+        """
+        tile_norm(pretrained.layer_norm, self.layer_norm, mode=mode)
 
 
 def get_norm(config: "BertBlocksConfig") -> "nn.Module":

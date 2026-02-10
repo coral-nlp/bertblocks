@@ -10,10 +10,11 @@ from torch import nn
 
 from bertblocks.config import BertBlocksConfig
 from bertblocks.modeling.backends import get_attention
+from bertblocks.modeling.initialization import TilableMixin, TileLinear, TileMode, tile_linear
 from bertblocks.modeling.position import AlibiPositionalEncoding, RotaryPositionalEncoding
 
 
-class Attention(nn.Module):
+class Attention(TilableMixin, nn.Module):
     """Attention with configurable positional encodings.
 
     Attributes:
@@ -216,6 +217,19 @@ class Attention(nn.Module):
         # Fuse heads back together
         x_out = self.ffwd(x_out)
         return x_out, w
+
+    def tile_from(self, pretrained: "Attention", mode: str | TileMode = TileMode.tile_weights_from_middle) -> None:
+        """Tile weights from a smaller pretrained Attention module.
+
+        Handles the fused QKV projection (proj) and output projection (ffwd) separately,
+        using the correct tiling strategy for each.
+
+        Args:
+            pretrained: Smaller pretrained Attention module to tile from.
+            mode: Tiling strategy to use.
+        """
+        tile_linear(pretrained.proj, self.proj, linear_type=TileLinear.wqkv, mode=mode)
+        tile_linear(pretrained.ffwd, self.ffwd, mode=mode)
 
 
 class AttentionGate(nn.Module):

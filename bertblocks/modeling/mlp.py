@@ -8,6 +8,7 @@ if TYPE_CHECKING:
 from torch import nn
 
 from bertblocks.modeling.activations import get_actv_fn
+from bertblocks.modeling.initialization import TilableMixin, TileLinear, TileMode, tile_linear
 
 
 class Linear(nn.Module):
@@ -32,7 +33,7 @@ class Linear(nn.Module):
         return self.actv(self.ffwd(x))
 
 
-class GLU(nn.Module):
+class GLU(TilableMixin, nn.Module):
     """Gated Linear Unit (GLU) implementation for BertBlocks.
 
     This class implements a GLU-style MLP layer that uses gating to control information flow.
@@ -76,6 +77,19 @@ class GLU(nn.Module):
         x = gate * self.actv(x)
         x = self.dprj(x)
         return x
+
+    def tile_from(self, pretrained: "GLU", mode: str | TileMode = TileMode.tile_weights_from_middle) -> None:
+        """Tile weights from a smaller pretrained GLU module.
+
+        Handles the fused gate+input projection (uprj) using GLU-aware tiling,
+        and the down-projection (dprj) with standard tiling.
+
+        Args:
+            pretrained: Smaller pretrained GLU module to tile from.
+            mode: Tiling strategy to use.
+        """
+        tile_linear(pretrained.uprj, self.uprj, linear_type=TileLinear.glu, mode=mode)
+        tile_linear(pretrained.dprj, self.dprj, mode=mode)
 
 
 class MLP(nn.Module):
