@@ -41,7 +41,7 @@ jobs:
       - name: Install dependencies
         run: |
           # Install the project with docs dependencies
-          uv sync --group docs --group base
+          uv sync --all-groups --all-extras
         env:
           #   Skip CUDA build for flash-attention during docs build
           FLASH_ATTENTION_SKIP_CUDA_BUILD: "TRUE"
