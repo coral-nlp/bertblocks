@@ -6,15 +6,14 @@ FROM pytorch/pytorch:2.10.0-cuda13.0-cudnn9-devel@sha256:48af19ebb88034e0325decc
 WORKDIR /app
 # Set env vars
 ENV UV_COMPILE_BYTECODE=1 \
-    UV_TORCH_BACKEND=cu130 \
     UV_LINK_MODE=copy \
     UV_PROJECT_ENVIRONMENT=/app/.venv \
     TRITON_CACHE_DIR=/tmp/triton_cache \
     TORCHINDUCTOR_CACHE_DIR=/tmp/torchinductor_cache
-# Install dependencies; mount in cache/uv files to avoid extra copy layer; force pre-built wheels to match container runtime for flash-attn
+# Install dependencies; mount in cache/uv files to avoid extra copy layer
 RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
-    uv sync --no-install-project --extra cu130 --no-dev && \
+    uv sync --no-install-project --no-dev --extra cu130
 # Activate uv venv
 ENV PATH="/app/.venv/bin:$PATH"
 # Copy sources
