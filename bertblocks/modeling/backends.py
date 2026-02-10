@@ -135,7 +135,7 @@ class FlashBackend(AttentionBackend):
         local_attention: tuple[int, int] = (-1, -1),
         dropout_p: float = 0.0,
         deterministic: bool = False,
-    ) -> "tuple[Tensor, Tensor]":
+    ) -> "tuple[Tensor, Tensor | None]":
         """Flash attention forward pass without padding."""
         orig_dtype = q.dtype
         needs_cast = orig_dtype not in (torch.float16, torch.bfloat16)
@@ -145,7 +145,7 @@ class FlashBackend(AttentionBackend):
         if cu_seqlens.dtype != torch.int32:
             cu_seqlens = cu_seqlens.to(torch.int32)
 
-        x, _, w = flash_attn_varlen_func(
+        x = flash_attn_varlen_func(
             q.to(torch.bfloat16) if needs_cast else q,
             k.to(torch.bfloat16) if needs_cast else k,
             v.to(torch.bfloat16) if needs_cast else v,
@@ -159,14 +159,13 @@ class FlashBackend(AttentionBackend):
             window_size=local_attention,
             alibi_slopes=alibi_slopes,
             deterministic=deterministic,
-            return_attn_probs=True,
+            return_attn_probs=False,  # We save loads of memory this way
         )
 
         if needs_cast:
             x = x.to(orig_dtype)
-            w = w.to(orig_dtype) if w is not None else None
         x = x.flatten(-2)  # s h d -> s (h d)
-        return x, w
+        return x, None
 
     def _forward_padded(
         self,

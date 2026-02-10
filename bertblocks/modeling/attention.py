@@ -275,12 +275,12 @@ class AttentionGate(nn.Module):
             gate_output = gate_output.unsqueeze(-1)
         else:  # elementwise
             # Reshape to [..., h, d]
-            gate_output = gate_output.view(*q.shape)
+            gate_output = gate_output.reshape(*q.shape)
 
         gate_output = torch.sigmoid(gate_output)
 
         # Apply gating
-        x_out = x.view(*x.shape[:-1], self.num_heads, self.head_dim)
+        x_out = x.reshape(*x.shape[:-1], self.num_heads, self.head_dim)
         x_out = x_out * gate_output
 
         # [..., h, d] -> [..., h*d]

@@ -229,13 +229,36 @@ class BertBlocksModel(BertBlocksPreTrainedModel):
         """
         self.embd.embd = value
 
-    @torch.compiler.disable()
+    @torch.compiler.disable(recursive=True)
     @torch.no_grad()
     def unpad_input(
         self, input_ids: "torch.Tensor", attention_mask: "torch.Tensor | None"
     ) -> tuple[Tensor, Tensor, Tensor, int]:
         """Unpad input tensors."""
         return unpad_input(input_ids, attention_mask, self.pad_token_id)
+
+    def _forward(
+        self,
+        input_ids: "torch.Tensor",
+        attention_mask: "torch.Tensor | None",
+        cu_seqlens: "torch.Tensor | None",
+        max_seq_len: "int | None",
+        token_type_ids: "torch.Tensor | None",
+        output_attentions: bool,
+        output_hidden_states: bool,
+    ) -> "tuple[torch.Tensor, torch.Tensor | None, list[torch.Tensor] | None, tuple[torch.Tensor, ...] | None]":
+        """Core compute path (embed -> encode -> norm -> scale -> pool).
+
+        Extracted into inner function to be able to compile as full graph separately from unpadding.
+        """
+        x = self.embd(input_ids, token_type_ids=token_type_ids, cu_seqlens=cu_seqlens)
+        x, hidden_states, attentions = self.encd(
+            x, attention_mask, cu_seqlens, max_seq_len, output_attentions, output_hidden_states
+        )
+        x = self.norm(x)
+        x = self.scaler(x)
+        pooler_output = self.pool(x) if self.pool is not None else None
+        return x, pooler_output, hidden_states, attentions
 
     def forward(
         self,
@@ -272,6 +295,11 @@ class BertBlocksModel(BertBlocksPreTrainedModel):
             attention_mask = None
         else:
             indices, cu_seqlens, max_seq_len = None, None, None
+            if attention_mask is not None and ((attention_mask > 1).any() or (attention_mask < 0).any()):
+                raise ValueError(
+                    "Unpadding is required for packed inputs. Either run the model in unpadding mode, or"
+                    " turn off sequence packing."
+                )
             attention_mask = (
                 torch.ones_like(input_ids, dtype=torch.bool) if attention_mask is None else attention_mask.bool()
             )
@@ -289,15 +317,17 @@ class BertBlocksModel(BertBlocksPreTrainedModel):
                 else:
                     attention_mask = attention_mask.masked_fill(~local_mask, -float("inf"))
 
-        x = self.embd(input_ids, token_type_ids=token_type_ids, cu_seqlens=cu_seqlens)
-        x, hidden_states, attentions = self.encd(
-            x, attention_mask, cu_seqlens, max_seq_len, output_attentions, output_hidden_states
+        x, pooler_output, hidden_states, attentions = self._forward(
+            input_ids,
+            attention_mask,
+            cu_seqlens,
+            max_seq_len,
+            token_type_ids,
+            output_attentions,
+            output_hidden_states,
         )
-        x = self.norm(x)
-        x = self.scaler(x)
 
-        if self.pool is not None:
-            pooler_output = self.pool(x)
+        if pooler_output is not None:
             return MaybeUnpaddedBaseModelOutputWithPooling(
                 last_hidden_state=x,
                 pooler_output=pooler_output,
@@ -937,7 +967,6 @@ class BertBlocksForMaskedDiffusion(BertBlocksForMaskedLM, GenerationMixin):
                 masked_labels = torch.where(unpadded_input_ids == self.mask_token_id, unpadded_labels, -100)
             else:
                 masked_labels = torch.where(input_ids == self.mask_token_id, labels, -100)
-            # Compute loss on unpadded sequences
             loss = F.cross_entropy(
                 logits.view(-1, self.config.vocab_size),
                 masked_labels.view(-1),
@@ -1321,7 +1350,7 @@ class BertBlocksForMaskedDiffusion(BertBlocksForMaskedLM, GenerationMixin):
         transition_probs = transition_probs * dsigma
 
         # Add the redirected mass to MASK token
-        transition_probs[..., self.mask_token_id] += extra_const
+        transition_probs[..., self.mask_token_id] = transition_probs[..., self.mask_token_id] + extra_const
 
         return transition_probs
 

@@ -1,6 +1,5 @@
 """Lightning CLI Wrapper entrypoint."""
 
-from lightning.pytorch.callbacks import ThroughputMonitor
 from lightning.pytorch.cli import ArgsType, LightningCLI
 
 
@@ -9,16 +8,11 @@ def cli(args: ArgsType = None) -> None:
     _ = LightningCLI(
         args=args,
         save_config_kwargs={"overwrite": True},
-        parser_kwargs={"parser_mode": "omegaconf"},
         trainer_defaults={
-            "callbacks": [
-                ThroughputMonitor(
-                    batch_size_fn=lambda batch: batch["input_ids"].size(0),
-                    length_fn=lambda batch: batch["input_ids"].numel(),
-                    window_size=50,
-                )
-            ],
+            "use_distributed_sampler": False,
+            "reload_dataloaders_every_n_epochs": 1,
         },
+        parser_kwargs={"parser_mode": "omegaconf"},
     )
 
 
