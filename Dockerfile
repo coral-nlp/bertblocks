@@ -11,11 +11,11 @@ ENV UV_COMPILE_BYTECODE=1 \
     UV_PROJECT_ENVIRONMENT=/app/.venv \
     TRITON_CACHE_DIR=/tmp/triton_cache \
     TORCHINDUCTOR_CACHE_DIR=/tmp/torchinductor_cache
-# Install dependencies; mount in cache/uv files to avoid extra copy layer; override flash-attn to link against correct CUDA
+# Install dependencies; mount in cache/uv files to avoid extra copy layer; force pre-built wheels to match container runtime for flash-attn
 RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
-    echo "flash-attn @ https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.7.16/flash_attn-2.8.3%2Bcu130torch2.10-cp312-cp312-linux_x86_64.whl" > /tmp/override.txt && \
-    uv sync --no-install-project --all-extras --no-dev --override /tmp/override.txt
+    uv sync --no-install-project --all-extras --no-dev && \
+    uv pip install "flash-attn @ https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.7.16/flash_attn-2.8.3%2Bcu130torch2.10-cp312-cp312-linux_x86_64.whl"
 # Activate uv venv
 ENV PATH="/app/.venv/bin:$PATH"
 # Copy sources
