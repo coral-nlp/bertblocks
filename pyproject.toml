@@ -11,7 +11,6 @@ license = "MIT"
 dependencies = [
     "torch>=2.0.0",
     "transformers>=4.53.2",
-    "einops>=0.8.1",
     "pytorch_optimizer>=3.8.0",
     "datasets>=4.0.0",
     "jsonargparse[signatures]>=4.27.7",

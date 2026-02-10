@@ -1,9 +1,10 @@
 import functools
 import math
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
-from einops import rearrange, repeat
+from transformers import GenerationMixin
 
 from bertblocks.modeling.norms import get_norm
 from bertblocks.modeling.scale import LayerScaler
@@ -14,7 +15,7 @@ if TYPE_CHECKING:
 
 import torch
 import torch.nn.functional as F
-from torch import nn
+from torch import Tensor, nn
 from transformers.modeling_outputs import (
     BaseModelOutput,
     BaseModelOutputWithPooling,
@@ -32,6 +33,22 @@ from bertblocks.modeling.head import Pooler, get_prediction_head
 from bertblocks.modeling.loss import get_loss_function
 from bertblocks.modeling.padding import pad_output, unpad_input
 from bertblocks.modeling.position import AlibiPositionalEncoding
+
+
+@dataclass
+class MaybeUnpaddedBaseModelOutput(BaseModelOutput):
+    cu_seqlens: torch.FloatTensor | None = None
+    indices: torch.FloatTensor | None = None
+    seq_len: int | None = None
+    batch_size: int | None = None
+
+
+@dataclass
+class MaybeUnpaddedBaseModelOutputWithPooling(BaseModelOutputWithPooling):
+    cu_seqlens: torch.FloatTensor | None = None
+    indices: torch.FloatTensor | None = None
+    seq_len: int | None = None
+    batch_size: int | None = None
 
 
 class BertBlocksPreTrainedModel(PreTrainedModel):
@@ -138,6 +155,16 @@ class BertBlocksPreTrainedModel(PreTrainedModel):
         if isinstance(module, nn.Linear) and module.bias is not None:
             nn.init.zeros_(module.bias)
 
+    def _set_gradient_checkpointing(self, module: "nn.Module", value: bool = False) -> None:
+        """Enable or disable gradient checkpointing for encoder modules.
+
+        Args:
+            module: The module to configure.
+            value: Whether to enable gradient checkpointing.
+        """
+        if hasattr(module, "gradient_checkpointing"):
+            module.gradient_checkpointing = value
+
 
 class BertBlocksModel(BertBlocksPreTrainedModel):
     """Core BertBlocks model for encoding sequences.
@@ -171,9 +198,7 @@ class BertBlocksModel(BertBlocksPreTrainedModel):
         self.post_init()
         self.local_attention = config.local_attention
         self.alibi = (
-            AlibiPositionalEncoding(config.num_attention_heads, device="cpu")
-            if config.block_pos_enc_kind == "alibi"
-            else None
+            AlibiPositionalEncoding(config.num_attention_heads) if config.block_pos_enc_kind == "alibi" else None
         )
 
     @property
@@ -204,6 +229,37 @@ class BertBlocksModel(BertBlocksPreTrainedModel):
         """
         self.embd.embd = value
 
+    @torch.compiler.disable(recursive=True)
+    @torch.no_grad()
+    def unpad_input(
+        self, input_ids: "torch.Tensor", attention_mask: "torch.Tensor | None"
+    ) -> tuple[Tensor, Tensor, Tensor, int]:
+        """Unpad input tensors."""
+        return unpad_input(input_ids, attention_mask, self.pad_token_id)
+
+    def _forward(
+        self,
+        input_ids: "torch.Tensor",
+        attention_mask: "torch.Tensor | None",
+        cu_seqlens: "torch.Tensor | None",
+        max_seq_len: "int | None",
+        token_type_ids: "torch.Tensor | None",
+        output_attentions: bool,
+        output_hidden_states: bool,
+    ) -> "tuple[torch.Tensor, torch.Tensor | None, list[torch.Tensor] | None, tuple[torch.Tensor, ...] | None]":
+        """Core compute path (embed -> encode -> norm -> scale -> pool).
+
+        Extracted into inner function to be able to compile as full graph separately from unpadding.
+        """
+        x = self.embd(input_ids, token_type_ids=token_type_ids, cu_seqlens=cu_seqlens)
+        x, hidden_states, attentions = self.encd(
+            x, attention_mask, cu_seqlens, max_seq_len, output_attentions, output_hidden_states
+        )
+        x = self.norm(x)
+        x = self.scaler(x)
+        pooler_output = self.pool(x) if self.pool is not None else None
+        return x, pooler_output, hidden_states, attentions
+
     def forward(
         self,
         input_ids: "torch.Tensor",
@@ -211,7 +267,7 @@ class BertBlocksModel(BertBlocksPreTrainedModel):
         token_type_ids: "torch.Tensor | None" = None,
         output_attentions: "bool" = False,
         output_hidden_states: "bool" = False,
-    ) -> "BaseModelOutput | BaseModelOutputWithPooling":
+    ) -> "MaybeUnpaddedBaseModelOutput | MaybeUnpaddedBaseModelOutputWithPooling":
         """Forward pass of the BertBlocks model.
 
         Args:
@@ -232,14 +288,18 @@ class BertBlocksModel(BertBlocksPreTrainedModel):
                 - `attentions`: Attention weights from all layers (optional)
 
         """
-        B, S = input_ids.shape
+        batch_size, seq_len = input_ids.shape
 
         if self.unpadding:
-            with torch.no_grad():
-                input_ids, indices, cu_seqlens, max_seq_len = unpad_input(input_ids, attention_mask, self.pad_token_id)
+            input_ids, indices, cu_seqlens, max_seq_len = self.unpad_input(input_ids, attention_mask)
             attention_mask = None
         else:
             indices, cu_seqlens, max_seq_len = None, None, None
+            if attention_mask is not None and ((attention_mask > 1).any() or (attention_mask < 0).any()):
+                raise ValueError(
+                    "Unpadding is required for packed inputs. Either run the model in unpadding mode, or"
+                    " turn off sequence packing."
+                )
             attention_mask = (
                 torch.ones_like(input_ids, dtype=torch.bool) if attention_mask is None else attention_mask.bool()
             )
@@ -257,33 +317,36 @@ class BertBlocksModel(BertBlocksPreTrainedModel):
                 else:
                     attention_mask = attention_mask.masked_fill(~local_mask, -float("inf"))
 
-        # Input embeddings
-        x = self.embd(input_ids, token_type_ids=token_type_ids, cu_seqlens=cu_seqlens)
-
-        x, hidden_states, attentions = self.encd(
-            x, attention_mask, cu_seqlens, max_seq_len, output_attentions, output_hidden_states
+        x, pooler_output, hidden_states, attentions = self._forward(
+            input_ids,
+            attention_mask,
+            cu_seqlens,
+            max_seq_len,
+            token_type_ids,
+            output_attentions,
+            output_hidden_states,
         )
-        x = self.norm(x)
-        x = self.scaler(x)
 
-        if self.config._unpadding:
-            x = pad_output(x, indices, B, S)
-            if output_hidden_states:
-                hidden_states = [pad_output(h, indices, B, S, self.pad_token_id) for h in hidden_states]
-
-        if self.pool is not None:
-            pooler_output = self.pool(x)
-            return BaseModelOutputWithPooling(
+        if pooler_output is not None:
+            return MaybeUnpaddedBaseModelOutputWithPooling(
                 last_hidden_state=x,
                 pooler_output=pooler_output,
                 hidden_states=hidden_states if output_hidden_states else None,
                 attentions=attentions if output_attentions else None,
+                cu_seqlens=cu_seqlens,
+                indices=indices,
+                seq_len=seq_len,
+                batch_size=batch_size,
             )
         else:
-            return BaseModelOutput(
+            return MaybeUnpaddedBaseModelOutput(
                 last_hidden_state=x,
                 hidden_states=hidden_states if output_hidden_states else None,
                 attentions=attentions if output_attentions else None,
+                cu_seqlens=cu_seqlens,
+                indices=indices,
+                seq_len=seq_len,
+                batch_size=batch_size,
             )
 
 
@@ -303,6 +366,42 @@ class BertBlocksForTasksBase(BertBlocksPreTrainedModel):
         super().__init__(config, *args, **kwargs)
         self.model = BertBlocksModel(config)
         self.head = get_prediction_head(config)
+
+    def pad_output(
+        self, output: MaybeUnpaddedBaseModelOutput | MaybeUnpaddedBaseModelOutputWithPooling
+    ) -> BaseModelOutput | BaseModelOutputWithPooling:
+        indices = output.indices
+        seq_len = output.seq_len or 0
+        batch_size = output.batch_size or 0
+
+        if indices is None:
+            return output
+
+        if isinstance(output, BaseModelOutputWithPooling):
+            return BaseModelOutputWithPooling(
+                last_hidden_state=pad_output(
+                    output.last_hidden_state, indices, batch_size, seq_len, self.model.pad_token_id
+                ),
+                pooler_output=output.pooler_output,
+                hidden_states=[
+                    pad_output(h, indices, batch_size, seq_len, self.pad_token_id) for h in output.hidden_states
+                ]
+                if output.hidden_states is not None
+                else None,
+                attentions=output.attentions,
+            )
+        else:
+            return BaseModelOutput(
+                last_hidden_state=pad_output(
+                    output.last_hidden_state, indices, batch_size, seq_len, self.model.pad_token_id
+                ),
+                hidden_states=[
+                    pad_output(h, indices, batch_size, seq_len, self.pad_token_id) for h in output.hidden_states
+                ]
+                if output.hidden_states is not None
+                else None,
+                attentions=output.attentions,
+            )
 
     def compute_loss(
         self,
@@ -408,7 +507,7 @@ class BertBlocksForMaskedLM(BertBlocksPreTrainedModel):
                 - `attentions`: Attention weights from all layers if requested
 
         """
-        output = self.model(
+        output: MaybeUnpaddedBaseModelOutput = self.model(
             input_ids,
             attention_mask=attention_mask,
             token_type_ids=token_type_ids,
@@ -419,16 +518,30 @@ class BertBlocksForMaskedLM(BertBlocksPreTrainedModel):
 
         loss = None
         if labels is not None:
-            labels = labels.flatten()  # (b d -> (b d))
-            logits = logits.flatten(0, 1)  # (b d v -> (b d) v)
-            loss = self.loss_fn(logits, labels)
+            labels = labels.flatten()[output.indices] if output.indices is not None else labels.flatten()
+            loss = self.loss_fn(logits.view(-1, self.vocab_size), labels)
 
-        return MaskedLMOutput(
-            loss=loss,
-            logits=logits,
-            hidden_states=output.hidden_states,
-            attentions=output.attentions,
-        )
+        if output.indices is not None:
+            indices = output.indices
+            seq_len = output.seq_len or 0
+            batch_size = output.batch_size or 0  # Just to satisfy mypy, this will never trigger in practice
+            return MaskedLMOutput(
+                loss=loss,
+                logits=pad_output(logits, indices, batch_size, seq_len, -torch.inf),
+                hidden_states=[
+                    pad_output(h, indices, batch_size, seq_len, self.pad_token_id) for h in output.hidden_states
+                ]
+                if output.hidden_states is not None
+                else None,
+                attentions=output.attentions,
+            )
+        else:
+            return MaskedLMOutput(
+                loss=loss,
+                logits=logits,
+                hidden_states=output.hidden_states,
+                attentions=output.attentions,
+            )
 
 
 class BertBlocksForEnhancedMaskedLM(BertBlocksForMaskedLM):
@@ -496,7 +609,7 @@ class BertBlocksForEnhancedMaskedLM(BertBlocksForMaskedLM):
                 - `attentions`: Attention weights from all layers if requested
 
         """
-        output = self.model(
+        output: MaybeUnpaddedBaseModelOutput = self.model(
             input_ids,
             attention_mask=attention_mask,
             token_type_ids=token_type_ids,
@@ -508,16 +621,30 @@ class BertBlocksForEnhancedMaskedLM(BertBlocksForMaskedLM):
 
         loss = None
         if labels is not None:
-            labels = labels.flatten()  # (b d -> (b d))
-            logits = logits.flatten(0, 1)  # (b d v -> (b d) v)
-            loss = self.loss_fn(logits, labels)
+            labels = labels.flatten()[output.indices] if output.indices is not None else labels.flatten()
+            loss = self.loss_fn(logits.view(-1, self.vocab_size), labels)
 
-        return MaskedLMOutput(
-            loss=loss,
-            logits=logits,
-            hidden_states=output.hidden_states,
-            attentions=output.attentions,
-        )
+        if output.indices is not None:
+            indices = output.indices
+            seq_len = output.seq_len or 0
+            batch_size = output.batch_size or 0
+            return MaskedLMOutput(
+                loss=loss,
+                logits=pad_output(logits, indices, batch_size, seq_len, -torch.inf),
+                hidden_states=[
+                    pad_output(h, indices, batch_size, seq_len, self.pad_token_id) for h in output.hidden_states
+                ]
+                if output.hidden_states is not None
+                else None,
+                attentions=output.attentions,
+            )
+        else:
+            return MaskedLMOutput(
+                loss=loss,
+                logits=logits,
+                hidden_states=output.hidden_states,
+                attentions=output.attentions,
+            )
 
 
 class BertBlocksForSequenceClassification(BertBlocksForTasksBase):
@@ -583,6 +710,7 @@ class BertBlocksForSequenceClassification(BertBlocksForTasksBase):
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
         )
+        output = self.pad_output(output)
 
         cls_features = output.last_hidden_state[:, 0, :]  # Regular CLS token extraction
         logits = self.classifier(self.head(cls_features))
@@ -660,6 +788,7 @@ class BertBlocksForTokenClassification(BertBlocksForTasksBase):
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
         )
+        output = self.pad_output(output)
         logits = self.classifier(self.head(output.last_hidden_state))
 
         loss = self.compute_loss(logits, labels, self.problem_type)
@@ -735,6 +864,7 @@ class BertBlocksForQuestionAnswering(BertBlocksForTasksBase):
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
         )
+        output = self.pad_output(output)
         logits = self.classifier(self.head(output.last_hidden_state))
 
         start_logits, end_logits = logits.split(1, dim=-1)
@@ -765,7 +895,7 @@ class BertBlocksForQuestionAnswering(BertBlocksForTasksBase):
         )
 
 
-class BertBlocksForMaskedDiffusion(BertBlocksForMaskedLM):
+class BertBlocksForMaskedDiffusion(BertBlocksForMaskedLM, GenerationMixin):
     """Implementation of a masked diffusion model.
 
     Closely follows https://github.com/kuleshov-group/mdlm
@@ -820,36 +950,57 @@ class BertBlocksForMaskedDiffusion(BertBlocksForMaskedLM):
         if attention_mask is None:
             attention_mask = torch.ones_like(input_ids)
 
-        output: MaskedLMOutput = super().forward(
-            input_ids=input_ids,
+        output: MaybeUnpaddedBaseModelOutput = self.model(
+            input_ids,
             attention_mask=attention_mask,
             token_type_ids=token_type_ids,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
         )
+        logits = self.decoder(self.head(output.last_hidden_state))
 
         if labels is not None:
-            # Remove the possibility of predicting a mask token
-            logits = self._process_logits(input_ids=input_ids, logits=output.logits)
-            # Binary mask indicating masked tokens in batch
-            mask = input_ids == self.mask_token_id
-            # Compute cross entropy between predictions and labels
-            loss = F.cross_entropy(logits.view(-1, self.config.vocab_size), labels.view(-1), reduction="none")
-            loss = loss.view(labels.shape)
-            # Average over masked token positions
-            loss = loss[mask].sum() / mask.sum()
+            # Binary mask indicating unmasked tokens in batch (that should not contribute to the loss)
+            if output.indices is not None:
+                unpadded_input_ids = input_ids.flatten()[output.indices]
+                unpadded_labels = labels.flatten()[output.indices]
+                masked_labels = torch.where(unpadded_input_ids == self.mask_token_id, unpadded_labels, -100)
+            else:
+                masked_labels = torch.where(input_ids == self.mask_token_id, labels, -100)
+            loss = F.cross_entropy(
+                logits.view(-1, self.config.vocab_size),
+                masked_labels.view(-1),
+                ignore_index=-100,
+                reduction="mean",
+            )
         else:
-            logits = output.logits
             loss = None
+
+        if output.indices is not None:
+            indices = output.indices
+            seq_len = output.seq_len or 0
+            batch_size = output.batch_size or 0
+            logits = pad_output(logits, indices, batch_size, seq_len, -torch.inf)
+            hidden_states = (
+                [pad_output(h, indices, batch_size, seq_len, self.pad_token_id) for h in output.hidden_states]
+                if output.hidden_states is not None
+                else None
+            )
+        else:
+            hidden_states = output.hidden_states
+
+        if loss is None:
+            # Remove the possibility of predicting a mask token
+            logits = self._process_logits(input_ids=input_ids, logits=logits)
 
         return MaskedLMOutput(
             loss=loss,
             logits=logits,
-            hidden_states=output.hidden_states,
+            hidden_states=hidden_states,
             attentions=output.attentions,
         )
 
-    def _prior(self, *batch_dims: Sequence[int]) -> torch.Tensor:
+    def _prior(self, batch_dims: Sequence[int]) -> torch.Tensor:
         """Calculate the prior distribution, i.e., a fully masked tensor.
 
         Args:
@@ -858,7 +1009,7 @@ class BertBlocksForMaskedDiffusion(BertBlocksForMaskedLM):
         Returns:
             torch.Tensor, shape [*batch_dims]: Fully masked tensor.
         """
-        return self.mask_token_id * torch.ones(*batch_dims, dtype=torch.int64)
+        return torch.full(batch_dims, self.mask_token_id, dtype=torch.int64, device=self.device)
 
     def _sample_categorical(self, categorical_probs: torch.Tensor) -> torch.Tensor:
         """Sample from categorical distribution using Gumbel-max trick.
@@ -887,6 +1038,7 @@ class BertBlocksForMaskedDiffusion(BertBlocksForMaskedLM):
         num_steps: int = 100,
         temperature: float = 1.0,
         eps: float = 1e-5,
+        block_size: int | None = None,
     ) -> "torch.Tensor":
         """Generate samples using iterative denoising from noise to data.
 
@@ -906,17 +1058,23 @@ class BertBlocksForMaskedDiffusion(BertBlocksForMaskedLM):
             num_steps (int, optional): Number of denoising steps (more = higher quality, slower). Defaults to 100.
             temperature (float, optional): Temperature parameter. Defaults to 1.0.
             eps (float, optional): Final noise level. Defaults to 1e-5.
+            block_size (int, optional): Size of blocks for block-wise denoising. If None, processes
+                the whole sequence in parallel. Block denoising processes the sequence left-to-right
+                in chunks, which can improve coherence for longer sequences.
 
         Returns:
             torch.Tensor (shape [batch_size, max_length] or [num_samples, max_length]): Generated token sequences.
 
         Examples:
             # Unconditional generation
-            >>> sequences = model.sample(num_samples=4, max_length=128)
+            >>> sequences = model.generate(num_samples=4, max_length=128)
 
             # Prefix-conditioned generation
             >>> inputs = tokenizer("The cat sat on", return_tensors="pt")
-            >>> sequences = model.sample(**inputs, max_length=128)
+            >>> sequences = model.generate(**inputs, max_length=128)
+
+            # Block denoising for longer sequences
+            >>> sequences = model.generate(**inputs, max_length=256, block_size=64)
         """
         # Determine target length
         target_length = max_length or self.max_seq_len
@@ -924,27 +1082,40 @@ class BertBlocksForMaskedDiffusion(BertBlocksForMaskedLM):
         # Initialize sequence
         if input_ids is None:
             # Unconditional generation: start from all MASK tokens
-            x, prefix_mask = self._prior((num_samples, target_length)).to(self.device), None
+            x, prefix_mask = self._prior((num_samples, target_length)), None
         else:
             # Conditional generation: use provided prefix
-            x, prefix_mask = self.prepare_inputs_for_generation(attention_mask, input_ids, target_length)
-
-        # Create schedule: [1.0, ..., eps]
-        timesteps = torch.linspace(1, eps, num_steps + 1, device=self.device)
-        step_size = (1 - eps) / num_steps
+            x, prefix_mask = self.prepare_inputs_for_generation(input_ids, attention_mask, target_length)
 
         # Store original prefix for restoration
-        if prefix_mask is not None:
-            original_prefix = x.clone()
+        original_prefix = x.clone() if prefix_mask is not None else None
 
-        # Iterative denoising loop
-        for t in timesteps[:-1]:  # All except last
-            time = repeat(t.unsqueeze(-1), "1 -> b 1", b=x.shape[0])
-            x = self._reverse_step(x, time, step_size)
+        # Block denoising setup
+        if block_size is None:
+            block_size = target_length  # Single block = whole sequence
+        num_blocks = math.ceil(target_length / block_size)
+        steps_per_block = max(1, num_steps // num_blocks)
 
-            # Restore prefix tokens after each step
-            if prefix_mask is not None:
-                x[prefix_mask] = original_prefix[prefix_mask]
+        for b in range(num_blocks):
+            block_start = b * block_size
+            block_end = min((b + 1) * block_size, target_length)
+
+            # Create block mask: positions in current block that can be updated
+            block_mask = torch.zeros(target_length, dtype=torch.bool, device=self.device)
+            block_mask[block_start:block_end] = True
+
+            # Create schedule for this block: [1.0, ..., eps]
+            timesteps = torch.linspace(1, eps, steps_per_block + 1, device=self.device)
+            step_size = (1 - eps) / steps_per_block
+
+            # Iterative denoising loop for this block
+            for t in timesteps[:-1]:  # All except last
+                time = t.unsqueeze(-1).expand(x.shape[0], 1)  # 1 -> b 1
+                x = self._reverse_step(x, time, step_size, block_mask=block_mask)
+
+                # Restore prefix tokens after each step
+                if prefix_mask is not None:
+                    x[prefix_mask] = original_prefix[prefix_mask]
 
         # Final cleanup (greedy sample any remaining mask tokens)
         x = self._final_denoise(x, temperature=temperature)
@@ -952,6 +1123,94 @@ class BertBlocksForMaskedDiffusion(BertBlocksForMaskedLM):
         # Restore prefix one last time
         if prefix_mask is not None:
             x[prefix_mask] = original_prefix[prefix_mask]
+
+        return x
+
+    @torch.no_grad()
+    def infill(
+        self,
+        input_ids: "torch.Tensor",
+        attention_mask: "torch.Tensor | None" = None,
+        num_steps: int = 100,
+        temperature: float = 1.0,
+        eps: float = 1e-5,
+        block_size: int | None = None,
+    ) -> "torch.Tensor":
+        """Fill masked positions in the input using iterative diffusion denoising.
+
+        Unlike `generate()` which extends a prefix, this method fills in MASK tokens
+        at arbitrary positions within the sequence. All non-MASK tokens are preserved.
+
+        Args:
+            input_ids (torch.Tensor, shape [batch_size, seq_len]): Input sequences containing
+                MASK tokens at positions to be filled. Non-MASK tokens will be preserved.
+            attention_mask (torch.Tensor, shape [batch_size, seq_len], optional): Mask indicating
+                which positions are valid (1) vs padding (0). If None, all positions are valid.
+            num_steps (int, optional): Number of denoising steps. Defaults to 100.
+            temperature (float, optional): Sampling temperature. Defaults to 1.0.
+            eps (float, optional): Final noise level. Defaults to 1e-5.
+            block_size (int, optional): Size of blocks for block-wise denoising. If None,
+                processes the whole sequence in parallel.
+
+        Returns:
+            torch.Tensor (shape [batch_size, seq_len]): Sequences with MASK positions filled.
+
+        Examples:
+            # Fill middle of sequence
+            >>> text = "The cat [MASK] [MASK] [MASK] the mat."
+            >>> inputs = tokenizer(text, return_tensors="pt")
+            >>> filled = model.infill(inputs["input_ids"])
+
+            # Block denoising for longer sequences
+            >>> filled = model.infill(inputs["input_ids"], block_size=64)
+        """
+        input_ids = input_ids.to(self.device)
+        batch_size, seq_len = input_ids.shape
+
+        # Create attention mask if not provided
+        if attention_mask is None:
+            attention_mask = torch.ones_like(input_ids)
+        attention_mask = attention_mask.to(self.device)
+
+        # Identify positions to preserve (non-MASK tokens within valid positions)
+        preserve_mask = (input_ids != self.mask_token_id) & attention_mask.bool()
+
+        # Store original for restoration
+        original = input_ids.clone()
+
+        # Working copy
+        x = input_ids.clone()
+
+        # Block denoising setup
+        if block_size is None:
+            block_size = seq_len
+        num_blocks = math.ceil(seq_len / block_size)
+        steps_per_block = max(1, num_steps // num_blocks)
+
+        for b in range(num_blocks):
+            block_start = b * block_size
+            block_end = min((b + 1) * block_size, seq_len)
+
+            # Create block mask
+            block_mask = torch.zeros(seq_len, dtype=torch.bool, device=self.device)
+            block_mask[block_start:block_end] = True
+
+            # Create schedule for this block
+            timesteps = torch.linspace(1, eps, steps_per_block + 1, device=self.device)
+            step_size = (1 - eps) / steps_per_block
+
+            for t in timesteps[:-1]:
+                time = t.unsqueeze(-1).expand(batch_size, 1)  # 1 -> b 1
+                x = self._reverse_step(x, time, step_size, block_mask=block_mask)
+
+                # Restore preserved tokens after each step
+                x[preserve_mask] = original[preserve_mask]
+
+        # Final cleanup
+        x = self._final_denoise(x, temperature=temperature)
+
+        # Restore preserved tokens one last time
+        x[preserve_mask] = original[preserve_mask]
 
         return x
 
@@ -968,10 +1227,14 @@ class BertBlocksForMaskedDiffusion(BertBlocksForMaskedLM):
         input_ids = input_ids.to(self.device)
         # Create prefix mask (which positions to preserve)
         if attention_mask is None:
-            # If no mask provided, preserve all input tokens
-            prefix_mask = torch.ones(batch_size, seq_len, dtype=torch.bool, device=self.device)
+            # If no mask provided, we dont know what to preserve, so raise
+            raise ValueError("attention_mask is required for guided generation.")
         else:
             prefix_mask = attention_mask.bool().to(self.device)
+            # Exclude the last token (SEP) from the prefix to allow it to be denoised
+            seq_lengths = prefix_mask.sum(dim=1)
+            last_token_indices = seq_lengths - 1
+            prefix_mask[torch.arange(batch_size, device=self.device), last_token_indices] = False
             # Ensure attention_mask matches input_ids length
             assert (
                 prefix_mask.shape[1] == seq_len
@@ -979,7 +1242,7 @@ class BertBlocksForMaskedDiffusion(BertBlocksForMaskedLM):
         if seq_len < target_length:
             # Extend to target length if needed
             # Pad input_ids with MASK tokens
-            padding = self._prior((batch_size, target_length - seq_len)).to(self.device)
+            padding = self._prior((batch_size, target_length - seq_len))
             x = torch.cat([input_ids, padding], dim=1)
             # Extend prefix_mask with False (denoise padded positions)
             mask_padding = torch.zeros(batch_size, target_length - seq_len, dtype=torch.bool, device=self.device)
@@ -1014,7 +1277,10 @@ class BertBlocksForMaskedDiffusion(BertBlocksForMaskedLM):
         return logits
 
     def _compute_transition_probs(
-        self, input_ids: "torch.Tensor", sigma: "torch.Tensor", temperature: float = 1.0
+        self,
+        input_ids: "torch.Tensor",
+        sigma: "torch.Tensor",
+        temperature: float = 1.0,
     ) -> "torch.Tensor":
         """Compute token-wise transition probabilities for discrete diffusion reverse process.
 
@@ -1033,20 +1299,20 @@ class BertBlocksForMaskedDiffusion(BertBlocksForMaskedLM):
         Returns:
             torch.Tensor (shape [batch_size, seq_len, vocab_size]): Tensor of transition probabilities for each token.
         """
-        # Implicit timestep conditioning through number of masked tokens, not explicitily passed as timestep embedding.
-        logits = self._forward(input_ids=input_ids).logits
+        # Implicit timestep conditioning through number of masked tokens
+        logits = self.forward(input_ids=input_ids).logits
         logits = self._process_logits(input_ids=input_ids, logits=logits, temperature=temperature)
         batch, seq, vocab = logits.shape
 
         # k = P(token = [MASK]) / P(token = ~[MASK]) = exp(- timestep) / (1 - exp(- timestep))
         # Probability ratio between masked and unmasked states == 1/k in log space; used as logit scaling factor
         log_k = -torch.log(torch.expm1(sigma))  # [batch, 1, 1], negative value
-        log_k = rearrange(log_k, "b 1 1 -> b")
+        log_k = log_k.squeeze(-1).squeeze(-1)  # b 1 1 -> b
 
         # score(x, t) = p_t(y) / p_t(x) = log p_t(y) - log p_t(x) = logits + log_k (log_k is already negative)
         # Case 1: Original token was [MASK]
         # Case 1.1: Predicted token is not [MASK] -> score = prob ratio
-        masked_log_score = logits + repeat(log_k, "b -> b 1 1")
+        masked_log_score = logits + log_k[:, None, None]  # b -> b 1 1
         # Case 1.2: Predicted token is [MASK] -> score = equilibrium = 0 (stay here)
         masked_log_score[:, :, self.mask_token_id] = 0
 
@@ -1054,12 +1320,12 @@ class BertBlocksForMaskedDiffusion(BertBlocksForMaskedLM):
         # Case 2.1: Predicted token is not original token and not mask token -> score = ... / 0 (never move here)
         unmasked_log_score = torch.full_like(logits, -torch.inf)
         # Case 2.2: Predicted token is original token -> score = equilibrium = 0 (stay here)
-        unmasked_log_score.scatter_(dim=-1, index=repeat(input_ids, "b s -> b s 1"), value=0.0)
+        unmasked_log_score.scatter_(dim=-1, index=input_ids.unsqueeze(-1), value=0.0)  # b s -> b s 1
         # Can 2.3: Predicted token is not original token, but is mask token -> score = 1/k (maybe move here)
-        unmasked_log_score[:, :, self.mask_token_id] = -repeat(log_k, "b -> b s", s=seq)
+        unmasked_log_score[:, :, self.mask_token_id] = -log_k[:, None].expand(-1, seq)  # b -> b s
 
         # Combine based on whether position is masked
-        is_masked = repeat((input_ids == self.mask_token_id), "b s -> b s v", v=vocab)
+        is_masked = (input_ids == self.mask_token_id).unsqueeze(-1).expand(-1, -1, vocab)  # b s -> b s v
         log_score = torch.where(is_masked, masked_log_score, unmasked_log_score)
         # Transfer from log space and return
         return log_score.exp()
@@ -1084,17 +1350,25 @@ class BertBlocksForMaskedDiffusion(BertBlocksForMaskedLM):
         transition_probs = transition_probs * dsigma
 
         # Add the redirected mass to MASK token
-        transition_probs[..., self.mask_token_id] += extra_const
+        transition_probs[..., self.mask_token_id] = transition_probs[..., self.mask_token_id] + extra_const
 
         return transition_probs
 
-    def _reverse_step(self, input_ids: "torch.Tensor", timestep: "torch.Tensor", step_size: float) -> "torch.Tensor":
+    def _reverse_step(
+        self,
+        input_ids: "torch.Tensor",
+        timestep: "torch.Tensor",
+        step_size: float,
+        block_mask: "torch.Tensor | None" = None,
+    ) -> "torch.Tensor":
         """Perform a single reverse diffusion step through ancestral sampling.
 
         Args:
             input_ids (torch.Tensor, shape [batch_size, seq_len]): Input sequences.
             timestep (torch.Tensor, shape [batch_size, 1]): Time step for each sequence (t in [0,1]).
             step_size (float): Step size to move in time.
+            block_mask (torch.Tensor, shape [seq_len], optional): Boolean mask indicating which positions
+                are in the current block and can be updated. If None, all positions can be updated.
 
         Returns:
             torch.Tensor (shape [batch_size, seq_len]): Partially step-wise denoised sequences.
@@ -1113,21 +1387,35 @@ class BertBlocksForMaskedDiffusion(BertBlocksForMaskedLM):
         transition_probs = self._staggered_correction(transition_probs, dsigma)
         # Compute posterior
         posterior_distribution = transition_probs * self._transp_transition(input_ids, dsigma)
+
+        # Apply block mask: for positions outside the block, set distribution to one-hot on current token
+        # This ensures those positions remain unchanged during sampling
+        if block_mask is not None:
+            # Create one-hot distribution for current tokens
+            one_hot_current = F.one_hot(input_ids, num_classes=self.vocab_size).float()
+            # Expand block_mask to match posterior shape: [seq_len] -> [batch, seq_len, vocab]
+            block_mask_expanded = block_mask.unsqueeze(0).unsqueeze(-1).expand_as(posterior_distribution)
+            # Keep posterior for in-block positions, use one-hot for out-of-block
+            posterior_distribution = torch.where(block_mask_expanded, posterior_distribution, one_hot_current)
+
         # Sample using Gumbel-max trick (works with unnormalized probabilities)
         return self._sample_categorical(posterior_distribution)
 
-    def _final_denoise(self, input_ids: "torch.Tensor", temperature: float = 1.0) -> "torch.Tensor":
+    def _final_denoise(
+        self,
+        input_ids: "torch.Tensor",
+        temperature: float = 1.0,
+    ) -> "torch.Tensor":
         """Perform final greedy denoising step at near-zero noise to clean output.
 
         Args:
             input_ids (torch.Tensor, shape [batch_size, seq_len]): Input sequences.
-            timestep (torch.Tensor, shape [batch_size, 1]): Time step for each sequence (t in [0,1]).
+            temperature (float, optional): Sampling temperature. Defaults to 1.0.
 
         Returns:
             torch.Tensor (shape [batch_size, seq_len]): Final denoised sequences.
         """
-        # Infer final logits
-        logits = self._forward(input_ids).logits
+        logits = self.forward(input_ids).logits
         logits = self._process_logits(input_ids=input_ids, logits=logits, temperature=temperature)
 
         # For MASK positions, use model predictions, for non-MASK positions, keep current token

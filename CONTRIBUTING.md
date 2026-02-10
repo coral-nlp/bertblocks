@@ -108,10 +108,7 @@ bertblocks/modeling/
 
 ## Code Style Guidelines
 
-### General Principles
-- **Write simple, readable code**
-- **Use `einops` over raw `torch` operations where possible**
-- **Use `match` statements over `elif` chains when appropriate**
+**Write simple, readable code**
 
 ### Naming Conventions
 - **Layer names should be self-explanatory**
@@ -164,16 +161,6 @@ def process_tokens(
 ```
 
 ### Code Examples
-
-**Using einops:**
-```python
-# Good
-from einops import rearrange
-hidden = rearrange(x, 'b s h -> b h s')
-
-# Less preferred
-hidden = x.transpose(-1, -2)
-```
 
 **Using match statements:**
 ```python

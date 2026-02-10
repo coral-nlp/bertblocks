@@ -265,6 +265,7 @@ class Encoder(nn.Module):
     def __init__(self, config: "BertBlocksConfig"):
         super().__init__()
         self.blocks = nn.ModuleList([Block(config, layer_id) for layer_id in range(config.num_blocks)])
+        self.gradient_checkpointing = False
 
     def forward(
         self,
@@ -304,7 +305,12 @@ class Encoder(nn.Module):
         all_hidden_states = [x]
         # Apply layers
         for block in self.blocks:
-            x, w = block(x, attention_mask, cu_seqlens, max_seq_len)
+            if self.gradient_checkpointing and self.training:
+                x, w = torch.utils.checkpoint.checkpoint(
+                    block, x, attention_mask, cu_seqlens, max_seq_len, use_reentrant=False
+                )
+            else:
+                x, w = block(x, attention_mask, cu_seqlens, max_seq_len)
             if output_hidden_states:
                 all_hidden_states.append(x)
             if output_attentions:

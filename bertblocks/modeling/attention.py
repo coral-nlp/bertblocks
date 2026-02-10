@@ -1,7 +1,6 @@
 from typing import TYPE_CHECKING
 
 import torch
-from einops import rearrange
 
 if TYPE_CHECKING:
     from torch import Tensor
@@ -70,6 +69,10 @@ class Attention(nn.Module):
         # Private inits
         self._rotary_enc = self._get_rope(config, layer_id=layer_id)
         self._backend = get_attention(config)
+        if config.block_pos_enc_kind == "alibi":
+            self.register_buffer("_slopes", AlibiPositionalEncoding.get_slopes(self.num_heads))
+        else:
+            self._slopes = None
 
     def _get_rope(self, config: "BertBlocksConfig", layer_id: int) -> "RotaryPositionalEncoding | None":
         """Initialize rotary positional encoding if needed.
@@ -119,13 +122,15 @@ class Attention(nn.Module):
         kv_dim = self.num_kv_heads * self.head_dim
 
         if qkv.dim() == 2:  # Unpadded: [s, qkv_dim]
-            q = rearrange(qkv[..., :q_dim], "s (h d) -> s h d", h=self.num_heads, d=self.head_dim)
-            k = rearrange(qkv[..., q_dim:q_dim + kv_dim], "s (h d) -> s h d", h=self.num_kv_heads, d=self.head_dim)
-            v = rearrange(qkv[..., q_dim + kv_dim:], "s (h d) -> s h d", h=self.num_kv_heads, d=self.head_dim)
+            q = qkv[..., :q_dim].unflatten(-1, (self.num_heads, self.head_dim))  # s (h d) -> s h d
+            k = qkv[..., q_dim : q_dim + kv_dim].unflatten(-1, (self.num_kv_heads, self.head_dim))  # s (h d) -> s h d
+            v = qkv[..., q_dim + kv_dim :].unflatten(-1, (self.num_kv_heads, self.head_dim))  # s (h d) -> s h d
         else:  # Padded: [b, s, qkv_dim]
-            q = rearrange(qkv[..., :q_dim], "b s (h d) -> b s h d", h=self.num_heads, d=self.head_dim)
-            k = rearrange(qkv[..., q_dim:q_dim + kv_dim], "b s (h d) -> b s h d", h=self.num_kv_heads, d=self.head_dim)
-            v = rearrange(qkv[..., q_dim + kv_dim:], "b s (h d) -> b s h d", h=self.num_kv_heads, d=self.head_dim)
+            q = qkv[..., :q_dim].unflatten(-1, (self.num_heads, self.head_dim))  # b s (h d) -> b s h d
+            k = qkv[..., q_dim : q_dim + kv_dim].unflatten(
+                -1, (self.num_kv_heads, self.head_dim)
+            )  # b s (h d) -> b s h d
+            v = qkv[..., q_dim + kv_dim :].unflatten(-1, (self.num_kv_heads, self.head_dim))  # b s (h d) -> b s h d
 
         return q, k, v
 
@@ -185,7 +190,7 @@ class Attention(nn.Module):
                 v,
                 cu_seqlens,
                 max_seq_len,
-                alibi_slopes=AlibiPositionalEncoding.get_slopes(self.num_heads, device=q.device),
+                alibi_slopes=self._slopes,
                 local_attention=self.local_attention,
                 dropout_p=self.dropout_p if self.training else 0.0,
                 deterministic=self.deterministic,
@@ -270,12 +275,12 @@ class AttentionGate(nn.Module):
             gate_output = gate_output.unsqueeze(-1)
         else:  # elementwise
             # Reshape to [..., h, d]
-            gate_output = gate_output.view(*q.shape)
+            gate_output = gate_output.reshape(*q.shape)
 
         gate_output = torch.sigmoid(gate_output)
 
         # Apply gating
-        x_out = x.view(*x.shape[:-1], self.num_heads, self.head_dim)
+        x_out = x.reshape(*x.shape[:-1], self.num_heads, self.head_dim)
         x_out = x_out * gate_output
 
         # [..., h, d] -> [..., h*d]

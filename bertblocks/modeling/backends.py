@@ -9,7 +9,6 @@ if TYPE_CHECKING:
     from torch import Tensor
 
 import torch
-from einops import einsum, rearrange
 from transformers.modeling_utils import is_flash_attn_2_available
 
 if is_flash_attn_2_available():
@@ -45,7 +44,8 @@ class AttentionBackend(ABC):
             deterministic (bool): Whether to use deterministic attention.
 
         Returns:
-            tuple[Tensor, Tensor | None]: Output tensor [total_seq_len, num_heads * head_dim] and optional attention weights.
+            tuple[Tensor, Tensor | None]: Output tensor [total_seq_len, num_heads * head_dim] and optional attention
+                weights.
         """
         return self._forward_unpadded(
             q=q,
@@ -79,7 +79,8 @@ class AttentionBackend(ABC):
             deterministic (bool): Whether to use deterministic attention.
 
         Returns:
-            tuple[Tensor, Tensor | None]: Output tensor [batch_size, seq_len, num_heads * head_dim] and optional attention weights.
+            tuple[Tensor, Tensor | None]: Output tensor [batch_size, seq_len, num_heads * head_dim] and optional
+                attention weights.
         """
         return self._forward_padded(
             q=q,
@@ -134,18 +135,22 @@ class FlashBackend(AttentionBackend):
         local_attention: tuple[int, int] = (-1, -1),
         dropout_p: float = 0.0,
         deterministic: bool = False,
-    ) -> "tuple[Tensor, Tensor]":
+    ) -> "tuple[Tensor, Tensor | None]":
         """Flash attention forward pass without padding."""
         orig_dtype = q.dtype
-        alibi_slopes = alibi_slopes.to(torch.float32) if alibi_slopes is not None else None
-        cu_seqlens_int32 = cu_seqlens.to(torch.int32)
+        needs_cast = orig_dtype not in (torch.float16, torch.bfloat16)
 
-        x, _, w = flash_attn_varlen_func(
-            q.to(torch.bfloat16),
-            k.to(torch.bfloat16),
-            v.to(torch.bfloat16),
-            cu_seqlens_int32,
-            cu_seqlens_int32,
+        if alibi_slopes is not None and alibi_slopes.dtype != torch.float32:
+            alibi_slopes = alibi_slopes.to(torch.float32)
+        if cu_seqlens.dtype != torch.int32:
+            cu_seqlens = cu_seqlens.to(torch.int32)
+
+        x = flash_attn_varlen_func(
+            q.to(torch.bfloat16) if needs_cast else q,
+            k.to(torch.bfloat16) if needs_cast else k,
+            v.to(torch.bfloat16) if needs_cast else v,
+            cu_seqlens,
+            cu_seqlens,
             max_seq_len,
             max_seq_len,
             dropout_p=dropout_p,
@@ -154,13 +159,13 @@ class FlashBackend(AttentionBackend):
             window_size=local_attention,
             alibi_slopes=alibi_slopes,
             deterministic=deterministic,
-            return_attn_probs=True,
+            return_attn_probs=False,  # We save loads of memory this way
         )
 
-        x = x.to(orig_dtype)
-        w = w.to(orig_dtype) if w is not None else None
-        x = rearrange(x, "s h d -> s (h d)")
-        return x, w
+        if needs_cast:
+            x = x.to(orig_dtype)
+        x = x.flatten(-2)  # s h d -> s (h d)
+        return x, None
 
     def _forward_padded(
         self,
@@ -192,15 +197,15 @@ class SDPABackend(AttentionBackend):
         num_kv_heads = k.shape[2]
 
         # Transpose to [b, h, s, d] for SDPA
-        q = rearrange(q, "b s h d -> b h s d")
-        k = rearrange(k, "b s h d -> b h s d")
-        v = rearrange(v, "b s h d -> b h s d")
+        q = q.transpose(1, 2)  # b s h d -> b h s d
+        k = k.transpose(1, 2)  # b s h d -> b h s d
+        v = v.transpose(1, 2)  # b s h d -> b h s d
 
         # Expand K/V heads if using GQA
         if num_kv_heads < num_heads:
             num_kv_groups = num_heads // num_kv_heads
-            k = k.repeat_interleave(num_kv_groups, dim=1)
-            v = v.repeat_interleave(num_kv_groups, dim=1)
+            k = k.repeat_interleave(num_kv_groups, dim=1)  # b h s d -> b (h g) s d
+            v = v.repeat_interleave(num_kv_groups, dim=1)  # b h s d -> b (h g) s d
 
         output = torch.nn.functional.scaled_dot_product_attention(
             q,
@@ -210,7 +215,7 @@ class SDPABackend(AttentionBackend):
             dropout_p=dropout_p,
             is_causal=False,
         )
-        output = rearrange(output, "b h s d -> b s (h d)")
+        output = output.transpose(1, 2).flatten(-2)  # b h s d -> b s (h d)
         return output, None
 
     def _forward_unpadded(self, *args, **kwargs):  # type: ignore
@@ -236,17 +241,17 @@ class EagerBackend(AttentionBackend):
         head_dim = q.shape[3]
 
         # Transpose to [b, h, s, d] for attention computation
-        q = rearrange(q, "b s h d -> b h s d")
-        k = rearrange(k, "b s h d -> b h s d")
-        v = rearrange(v, "b s h d -> b h s d")
+        q = q.transpose(1, 2)  # b s h d -> b h s d
+        k = k.transpose(1, 2)  # b s h d -> b h s d
+        v = v.transpose(1, 2)  # b s h d -> b h s d
 
         # Expand K/V heads if using GQA
         if num_kv_heads < num_heads:
             num_kv_groups = num_heads // num_kv_heads
-            k = k.repeat_interleave(num_kv_groups, dim=1)
-            v = v.repeat_interleave(num_kv_groups, dim=1)
+            k = k.repeat_interleave(num_kv_groups, dim=1)  # b h s d -> b (h g) s d
+            v = v.repeat_interleave(num_kv_groups, dim=1)  # b h s d -> b (h g) s d
 
-        scores = einsum(q, k, "b h i d, b h j d -> b h i j") * (head_dim**-0.5)
+        scores = torch.einsum("b h i d, b h j d -> b h i j", q, k) * (head_dim**-0.5)
 
         if attention_mask.dtype == torch.bool:
             # Regular boolean mask
@@ -263,8 +268,8 @@ class EagerBackend(AttentionBackend):
         if dropout_p > 0.0:
             attn_weights = torch.nn.functional.dropout(attn_weights, p=dropout_p)
 
-        output = einsum(attn_weights, v, "b h i j, b h j d -> b h i d")
-        output = rearrange(output, "b h s d -> b s (h d)")
+        output = torch.einsum("b h i j, b h j d -> b h i d", attn_weights, v)
+        output = output.transpose(1, 2).flatten(-2)  # b h s d -> b s (h d)
         return output, None
 
     def _forward_unpadded(self, *args, **kwargs):  # type: ignore
