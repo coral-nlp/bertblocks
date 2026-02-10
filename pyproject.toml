@@ -52,9 +52,6 @@ docs = [
 flash-attn = [{ requirement = "torch", match-runtime = true }]
 optimizers = [{ requirement = "torch", match-runtime = true }]
 
-[tool.uv.extra-build-variables]
-flash-attn = { FLASH_ATTENTION_SKIP_CUDA_BUILD = "TRUE" }
-
 [tool.isort]
 profile = "black"
 line_length = 120
