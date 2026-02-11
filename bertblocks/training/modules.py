@@ -64,7 +64,8 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
         num_shards: int | None = None,
         train_batch_size: int = 32,
         val_batch_size: int = 32,
-        pretokenized: bool = False,
+        pretokenized_train: bool = False,
+        pretokenized_val: bool = False,
         num_workers: int = 0,
         collator_kwargs: dict[str, Any] | None = None,
         packing: bool = False,
@@ -95,7 +96,8 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
             num_shards (int, optional): Number of shards to partition the dataset into. Defaults to None (no sharding).
             train_batch_size (int, optional): Batch size for training. Defaults to 32.
             val_batch_size (int, optional): Batch size for validation. Defaults to 32.
-            pretokenized (bool, optional): Whether input is pre-tokenized. Defaults to False.
+            pretokenized_train (bool, optional): Whether train dataset is pre-tokenized. Defaults to False.
+            pretokenized_val (bool, optional): Whether validation dataset is pre-tokenized. Defaults to False.
             num_workers (int, optional): Number of workers for data loading. Defaults to 0.
             collator_kwargs (dict[str, Any], optional): Additional keyword arguments for the data collator.
                 For example, the mlm_probability.
@@ -125,11 +127,17 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
         # Tokenize training dataset to populate HuggingFace's cache
         # Other ranks will load from cache in setup(); skip if already local path
         if not os.path.isdir(self.hparams.train_dataset_name_or_path):
-            if not self.hparams.pretokenized:
+            if not self.hparams.pretokenized_train:
+                kwargs: dict[str, Any] = (
+                    {"batched": True} if self.hparams.streaming else {"batched": True, "cache_file_name": train_cache}
+                )
                 _ = _load_dataset(
                     dataset_name_or_path=self.hparams.train_dataset_name_or_path,
                     split=self.hparams.train_split or "train",
                     add_index=self.hparams.packing,
+                    file_format=self.hparams.file_format,
+                    streaming=self.hparams.streaming,
+                    **self.hparams.data_kwargs or {},
                 ).map(
                     lambda x: _tokenize_batch(
                         x,
@@ -137,19 +145,20 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
                         text_column=self.hparams.text_column,
                         max_sequence_length=self.hparams.max_sequence_length,
                     ),
-                    batched=True,
-                    cache_file_name=train_cache,
+                    **kwargs,
                 )
             else:
+                kwargs = (
+                    {"batched": False} if self.hparams.streaming else {"batched": False, "cache_file_name": train_cache}
+                )
                 _ = _load_dataset(
                     dataset_name_or_path=self.hparams.train_dataset_name_or_path,
                     split=self.hparams.train_split or "train",
                     add_index=self.hparams.packing,
-                ).map(
-                    lambda x: _truncated_add_length(x, self.hparams.max_sequence_length),
-                    batched=False,
-                    cache_file_name=train_cache,
-                )
+                    file_format=self.hparams.file_format,
+                    streaming=self.hparams.streaming,
+                    **self.hparams.data_kwargs or {},
+                ).map(lambda x: _truncated_add_length(x, self.hparams.max_sequence_length), **kwargs)
 
         # Optionally prepare validation dataset
         if (
@@ -157,11 +166,17 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
             and not self.hparams.streaming
             and not os.path.isdir(self.hparams.val_dataset_name_or_path)
         ):
-            if not self.hparams.pretokenized:
+            if not self.hparams.pretokenized_val:
+                kwargs = (
+                    {"batched": True} if self.hparams.streaming else {"batched": True, "cache_file_name": val_cache}
+                )
                 _ = _load_dataset(
                     dataset_name_or_path=self.hparams.val_dataset_name_or_path,
                     split=self.hparams.val_split or "validation",
                     add_index=self.hparams.packing,
+                    file_format=self.hparams.file_format,
+                    streaming=self.hparams.streaming,
+                    **self.hparams.data_kwargs or {},
                 ).map(
                     lambda x: _tokenize_batch(
                         x,
@@ -169,19 +184,20 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
                         text_column=self.hparams.text_column,
                         max_sequence_length=self.hparams.max_sequence_length,
                     ),
-                    batched=True,
-                    cache_file_name=val_cache,
+                    **kwargs,
                 )
             else:
+                kwargs = (
+                    {"batched": False} if self.hparams.streaming else {"batched": False, "cache_file_name": val_cache}
+                )
                 _ = _load_dataset(
                     dataset_name_or_path=self.hparams.val_dataset_name_or_path,
                     split=self.hparams.val_split or "validation",
                     add_index=self.hparams.packing,
-                ).map(
-                    lambda x: _truncated_add_length(x, self.hparams.max_sequence_length),
-                    batched=False,
-                    cache_file_name=val_cache,
-                )
+                    file_format=self.hparams.file_format,
+                    streaming=self.hparams.streaming,
+                    **self.hparams.data_kwargs or {},
+                ).map(lambda x: _truncated_add_length(x, self.hparams.max_sequence_length), **kwargs)
 
     def setup(self, stage: str | None = None) -> None:
         """Load the dataset for training. Called on every process - loads from cache populated by prepare_data()."""
@@ -207,7 +223,7 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
             else:
                 self.val_dataset = None
 
-            if not self.hparams.pretokenized:
+            if not self.hparams.pretokenized_train:
                 kwargs: dict[str, Any] = (
                     {"batched": True} if self.hparams.streaming else {"batched": True, "cache_file_name": train_cache}
                 )
@@ -220,41 +236,43 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
                     ),
                     **kwargs,
                 )
-                if self.hparams.val_dataset_name_or_path is not None:
-                    kwargs = (
-                        {"batched": True} if self.hparams.streaming else {"batched": True, "cache_file_name": val_cache}
-                    )
-                    self.val_dataset = self.val_dataset.map(
-                        lambda x: _tokenize_batch(
-                            x,
-                            tokenizer=self.tokenizer,
-                            text_column=self.hparams.text_column,
-                            max_sequence_length=self.hparams.max_sequence_length,
-                        ),
-                        **kwargs,
-                    )
+                #  When packing, ensure deterministic order across all ranks after map by sorting by original index
+                if self.hparams.packing and not self.hparams.streaming:
+                    self.train_dataset = self.train_dataset.sort("_idx")
+                    self.train_dataset = self.train_dataset.remove_columns(["_idx"])
 
             else:
                 kwargs = (
-                    {"batched": True} if self.hparams.streaming else {"batched": False, "cache_file_name": train_cache}
+                    {"batched": False} if self.hparams.streaming else {"batched": False, "cache_file_name": train_cache}
                 )
                 self.train_dataset = self.train_dataset.map(
                     lambda x: _truncated_add_length(x, self.hparams.max_sequence_length), **kwargs
                 )
-                if self.hparams.val_dataset_name_or_path is not None:
-                    kwargs = (
-                        {"batched": True}
-                        if self.hparams.streaming
-                        else {"batched": False, "cache_file_name": val_cache}
-                    )
-                    self.val_dataset = self.val_dataset.map(
-                        lambda x: _truncated_add_length(x, self.hparams.max_sequence_length), **kwargs
-                    )
+                # When packing, ensure deterministic order across all ranks after map by sorting by original index
+                if self.hparams.packing and not self.hparams.streaming:
+                    self.train_dataset = self.train_dataset.sort("_idx")
+                    self.train_dataset = self.train_dataset.remove_columns(["_idx"])
 
-            # When packing, ensure deterministic order across all ranks by sorting by original index
-            if self.hparams.packing and not self.hparams.streaming:
-                self.train_dataset = self.train_dataset.sort("_idx")
-                self.train_dataset = self.train_dataset.remove_columns(["_idx"])
+            if self.hparams.val_dataset_name_or_path is not None and not self.hparams.pretokenized_val:
+                kwargs = (
+                    {"batched": True} if self.hparams.streaming else {"batched": True, "cache_file_name": val_cache}
+                )
+                self.val_dataset = self.val_dataset.map(
+                    lambda x: _tokenize_batch(
+                        x,
+                        tokenizer=self.tokenizer,
+                        text_column=self.hparams.text_column,
+                        max_sequence_length=self.hparams.max_sequence_length,
+                    ),
+                    **kwargs,
+                )
+            elif self.val_dataset is not None:
+                kwargs = (
+                    {"batched": False} if self.hparams.streaming else {"batched": False, "cache_file_name": val_cache}
+                )
+                self.val_dataset = self.val_dataset.map(
+                    lambda x: _truncated_add_length(x, self.hparams.max_sequence_length), **kwargs
+                )
 
             # For non-packing mode, shard the dataset across ranks
             if not self.hparams.streaming and self.trainer.world_size > 1 and not self.hparams.packing:
