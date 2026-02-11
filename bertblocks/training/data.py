@@ -1,6 +1,9 @@
 import os
+import warnings
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+
+import datasets
 
 if TYPE_CHECKING:
     from transformers import PreTrainedTokenizerBase
@@ -47,31 +50,43 @@ def _load_dataset(
     file_format: str | None = None,
     streaming: bool = False,
     add_index: bool = False,
+    **kwargs: dict[str, Any],
 ) -> "Dataset | IterableDataset":
     """Load a dataset, either from disk or from Huggingface Hub.
 
     Args:
         dataset_name_or_path: Path or name of dataset to load.
+        name: Dataset configuration name.
         split: Dataset split to load.
+        file_format: Dataset file format to load when loading from local folder.
+        streaming: Whether to stream data (return an IterableDataset).
         add_index: Whether to add an explicit index column.
+        **kwargs: Additional keyword arguments to pass to load_dataset/load_from_disk.
 
     Returns:
         Processed dataset ready for training.
     """
-    # Load dataset
-    if os.path.isdir(dataset_name_or_path):
+    # Load dataset; if we have a special JSON file it might still be a HF dataset, just cached locally
+    if os.path.isdir(dataset_name_or_path) and not os.path.join(dataset_name_or_path, "dataset_info.json"):
         dataset = load_dataset(
             file_format or "json",
             data_dir=dataset_name_or_path,
             split=split,
             streaming=streaming,
+            **kwargs,
         )
+    elif os.path.isdir(dataset_name_or_path) and os.path.exists(
+        os.path.join(dataset_name_or_path, "dataset_info.json")
+    ):
+        warnings.warn("Loading HF dataset from disk; this ignores streaming parameters!", stacklevel=1)
+        dataset = datasets.load_from_disk(dataset_name_or_path, **kwargs)
     else:
         dataset = load_dataset(
             dataset_name_or_path,
             name=name,
             split=split,
             streaming=streaming,
+            **kwargs,
         )
     # Add index column if packing (needed for restoring original order sometimes)
     if add_index and not streaming:
