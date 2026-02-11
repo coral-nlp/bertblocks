@@ -1,4 +1,4 @@
-.PHONY: help install install-dev install-docs lint format type-check test test-cov clean pre-commit-install pre-commit-run docs-init docs-build docs-apidoc docs-serve docs-clean docs
+.PHONY: help install install-dev install-docs lint format type-check test test-cov clean pre-commit-install pre-commit-run docs-init docs-build docs-apidoc docs-serve docs-clean docs build-dev build-prod
 
 help: ## Show this help message
 	@echo "Available commands:"
@@ -78,3 +78,10 @@ dev-setup: install-dev pre-commit-install ## Set up development environment
 	@echo "Run 'make help' to see available commands."
 
 dev-check: fix check test ## Run full development check (fix, lint, type-check, test)
+
+# Docker image build commands
+build-dev: ## Build development Docker image using podman
+	podman build --platform linux/amd64 --no-cache -f Dockerfile.dev -t bertblocks:dev .
+
+build-prod: ## Build production Docker image using podman
+	podman build --platform linux/amd64 --no-cache -f Dockerfile -t bertblocks:latest .
