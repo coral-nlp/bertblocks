@@ -24,7 +24,7 @@ dependencies = [
 
 [project.optional-dependencies]
 cu130 = [
-    "flash-attn==2.8.3",
+    "flash-attn-3==3.0.0",
     "bitsandbytes>=0.48.2",
     "wandb>=0.21.1"
 ]
@@ -46,7 +46,7 @@ torch = [
   { index = "pytorch-cpu", marker = "sys_platform != 'linux'" },
   { index = "pytorch-cu130", marker = "sys_platform == 'linux'" },
 ]
-flash-attn = [
+flash-attn-3 = [
     { marker = "sys_platform == 'linux'", url = "https://github.com/windreamer/flash-attention3-wheels/releases/download/2026.01.26-f6c4937/flash_attn_3-3.0.0b1%2B20260126.cu130torch2100cxx11abitrue.438325-cp39-abi3-linux_x86_64.whl"}
 ]
 
