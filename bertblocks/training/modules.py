@@ -681,18 +681,49 @@ class BertBlocksPretrainingModule(L.LightningModule):
         norm_cls = [RMSNorm, LayerNorm, GroupNorm, DeepNorm, DynamicTanhNorm]
         decay_parameters = get_parameter_names(self.model, norm_cls)
         decay_parameters = [name for name in decay_parameters if "bias" not in name]
-        optimizer_grouped_parameters = [
-            {
-                "params": [p for n, p in self.model.named_parameters() if n in decay_parameters],
-                "weight_decay": self.hparams.weight_decay,
-            },
-            {
-                "params": [p for n, p in self.model.named_parameters() if n not in decay_parameters],
-                "weight_decay": 0.0,
-            },
-        ]
-        optimizer_kwargs = self.hparams.optimizer_kwargs or {}
-        optimizer_kwargs.update({"lr": self.hparams.learning_rate})
+
+        if self.hparams.optimizer_class == "muon":
+            # Muon can only handle 2D params and above, so we need to case-switch; non-muon params fall back to AdamW
+            optimizer_grouped_parameters = [
+                {
+                    "params": [p for n, p in self.model.named_parameters() if n in decay_parameters and p.ndim >= 2],
+                    "weight_decay": self.hparams.weight_decay,
+                    "use_muon": True,
+                },
+                {
+                    "params": [p for n, p in self.model.named_parameters() if n in decay_parameters and p.ndim < 2],
+                    "weight_decay": self.hparams.weight_decay,
+                    "use_muon": False,
+                },
+                {
+                    "params": [
+                        p for n, p in self.model.named_parameters() if n not in decay_parameters and p.ndim >= 2
+                    ],
+                    "weight_decay": 0.0,
+                    "use_muon": True,
+                },
+                {
+                    "params": [p for n, p in self.model.named_parameters() if n not in decay_parameters and p.ndim < 2],
+                    "weight_decay": 0.0,
+                    "use_muon": False,
+                },
+            ]
+            optimizer_kwargs = self.hparams.optimizer_kwargs or {}
+            optimizer_kwargs.update({"lr": self.hparams.learning_rate})
+        else:
+            optimizer_grouped_parameters = [
+                {
+                    "params": [p for n, p in self.model.named_parameters() if n in decay_parameters],
+                    "weight_decay": self.hparams.weight_decay,
+                },
+                {
+                    "params": [p for n, p in self.model.named_parameters() if n not in decay_parameters],
+                    "weight_decay": 0.0,
+                },
+            ]
+            optimizer_kwargs = self.hparams.optimizer_kwargs or {}
+            optimizer_kwargs.update({"lr": self.hparams.learning_rate})
+
         optimizer = get_optimizer(
             self.hparams.optimizer_class,
             optimizer_grouped_parameters,
