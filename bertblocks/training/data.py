@@ -6,9 +6,11 @@ from typing import TYPE_CHECKING, Any
 import datasets
 
 if TYPE_CHECKING:
+    from datasets import Dataset as HFDataset
+    from datasets import IterableDataset as HFIterableDataset
     from transformers import PreTrainedTokenizerBase
 
-from datasets import Dataset, IterableDataset, load_dataset
+from datasets import load_dataset
 from torch.utils.data import Dataset as TorchDataset
 
 
@@ -51,7 +53,7 @@ def _load_dataset(
     streaming: bool = False,
     add_index: bool = False,
     **kwargs: dict[str, Any],
-) -> "Dataset | IterableDataset":
+) -> "HFDataset | HFIterableDataset":
     """Load a dataset, either from disk or from Huggingface Hub.
 
     Args:
@@ -115,11 +117,11 @@ def _tokenize_batch(
     }
 
 
-def _truncated_add_length(example: dict[str, Any], max_sequence_length: int = 512) -> dict[str, Any]:
-    input_ids = example["input_ids"][:max_sequence_length]
-    result = {"input_ids": input_ids, "length": len(input_ids)}
-    if "attention_mask" in example:
-        result["attention_mask"] = example["attention_mask"][:max_sequence_length]
+def _truncated_add_length(batch: dict[str, list[Any]], max_sequence_length: int = 512) -> dict[str, list[Any]]:
+    input_ids = [ids[:max_sequence_length] for ids in batch["input_ids"]]
+    result: dict[str, list[Any]] = {"input_ids": input_ids, "length": [len(ids) for ids in input_ids]}
+    if "attention_mask" in batch:
+        result["attention_mask"] = [mask[:max_sequence_length] for mask in batch["attention_mask"]]
     return result
 
 

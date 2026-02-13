@@ -1,5 +1,6 @@
 import os
 import warnings
+from functools import partial
 from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
@@ -46,7 +47,7 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
     """
 
     train_dataset: torch.utils.data.Dataset
-    val_dataset: torch.utils.data.Dataset | None
+    val_dataset: torch.utils.data.Dataset | list[torch.utils.data.Dataset] | None
 
     def __init__(
         self,
@@ -56,7 +57,7 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
         max_sequence_length: int = 512,
         val_dataset_name_or_path: str | list[str] | None = None,
         train_split: str | None = None,
-        val_split: str | None = None,
+        val_split: str | list[str] | None = None,
         file_format: str | None = None,
         text_column: str = "text",
         streaming: bool = False,
@@ -64,8 +65,6 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
         num_shards: int | None = None,
         train_batch_size: int = 32,
         val_batch_size: int = 32,
-        pretokenized_train: bool = False,
-        pretokenized_val: bool = False,
         num_workers: int = 0,
         collator_kwargs: dict[str, Any] | None = None,
         packing: bool = False,
@@ -87,7 +86,8 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
             val_dataset_name_or_path (str | list[str], optional): Dataset name or path to load via huggingface
                 datasets to use for validation. Defaults to None.
             train_split (str, optional): Dataset split to use for training. Defaults to 'train'.
-            val_split (str, optional): Dataset split to use for training. Defaults to 'validation'.
+            val_split (str | list[str], optional): Dataset split to use for validation. When a list is provided,
+                each entry corresponds to the split for the matching val_dataset_name_or_path. Defaults to 'validation'.
             file_format (str, optional): File format to use if loading data from disk. Defaults to 'json'.
             text_column (str, optional): Text column name pretrain with. Defaults to 'text'.
             streaming (bool, optional): Whether to use streaming data. Defaults to False.
@@ -96,8 +96,6 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
             num_shards (int, optional): Number of shards to partition the dataset into. Defaults to None (no sharding).
             train_batch_size (int, optional): Batch size for training. Defaults to 32.
             val_batch_size (int, optional): Batch size for validation. Defaults to 32.
-            pretokenized_train (bool, optional): Whether train dataset is pre-tokenized. Defaults to False.
-            pretokenized_val (bool, optional): Whether validation dataset is pre-tokenized. Defaults to False.
             num_workers (int, optional): Number of workers for data loading. Defaults to 0.
             collator_kwargs (dict[str, Any], optional): Additional keyword arguments for the data collator.
                 For example, the mlm_probability.
@@ -119,90 +117,67 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
             **(self.hparams.collator_kwargs or {}),
         )
 
+    def _map_kwargs(self, cache_file_name: str | None = None) -> dict[str, Any]:
+        """Build kwargs for dataset .map() calls."""
+        kwargs: dict[str, Any] = {"batched": True}
+        if not self.hparams.streaming:
+            kwargs["cache_file_name"] = cache_file_name
+            kwargs["num_proc"] = self.hparams.num_workers or None
+        return kwargs
+
     def prepare_data(self) -> None:
         """Download and tokenize data. Called only on LOCAL_RANK=0 per node (Lightning handles this automatically)."""
         # Construct cache file paths if cache_dir is specified
-        train_cache, val_cache, _ = _cache_paths(self.hparams.cache_dir)
+        train_cache, _, _ = _cache_paths(self.hparams.cache_dir)
+        tokenize_fn = partial(
+            _tokenize_batch,
+            tokenizer=self.tokenizer,
+            text_column=self.hparams.text_column,
+            max_sequence_length=self.hparams.max_sequence_length,
+        )
+        truncate_fn = partial(_truncated_add_length, max_sequence_length=self.hparams.max_sequence_length)
 
         # Tokenize training dataset to populate HuggingFace's cache
         # Other ranks will load from cache in setup(); skip if already local path
         if not os.path.isdir(self.hparams.train_dataset_name_or_path):
-            if not self.hparams.pretokenized_train:
-                kwargs: dict[str, Any] = (
-                    {"batched": True} if self.hparams.streaming else {"batched": True, "cache_file_name": train_cache}
-                )
-                _ = _load_dataset(
-                    dataset_name_or_path=self.hparams.train_dataset_name_or_path,
-                    split=self.hparams.train_split or "train",
-                    add_index=self.hparams.packing,
-                    file_format=self.hparams.file_format,
-                    streaming=self.hparams.streaming,
-                    **self.hparams.data_kwargs or {},
-                ).map(
-                    lambda x: _tokenize_batch(
-                        x,
-                        tokenizer=self.tokenizer,
-                        text_column=self.hparams.text_column,
-                        max_sequence_length=self.hparams.max_sequence_length,
-                    ),
-                    **kwargs,
-                )
-            else:
-                kwargs = (
-                    {"batched": False} if self.hparams.streaming else {"batched": False, "cache_file_name": train_cache}
-                )
-                _ = _load_dataset(
-                    dataset_name_or_path=self.hparams.train_dataset_name_or_path,
-                    split=self.hparams.train_split or "train",
-                    add_index=self.hparams.packing,
-                    file_format=self.hparams.file_format,
-                    streaming=self.hparams.streaming,
-                    **self.hparams.data_kwargs or {},
-                ).map(lambda x: _truncated_add_length(x, self.hparams.max_sequence_length), **kwargs)
+            ds = _load_dataset(
+                dataset_name_or_path=self.hparams.train_dataset_name_or_path,
+                split=self.hparams.train_split or "train",
+                add_index=self.hparams.packing,
+                file_format=self.hparams.file_format,
+                streaming=self.hparams.streaming,
+                **self.hparams.data_kwargs or {},
+            )
+            fn = truncate_fn if "input_ids" in (ds.column_names or []) else tokenize_fn
+            ds.map(fn, **self._map_kwargs(train_cache))
 
-        # Optionally prepare validation dataset
-        if (
-            self.hparams.val_dataset_name_or_path is not None
-            and not self.hparams.streaming
-            and not os.path.isdir(self.hparams.val_dataset_name_or_path)
-        ):
-            if not self.hparams.pretokenized_val:
-                kwargs = (
-                    {"batched": True} if self.hparams.streaming else {"batched": True, "cache_file_name": val_cache}
-                )
-                _ = _load_dataset(
-                    dataset_name_or_path=self.hparams.val_dataset_name_or_path,
-                    split=self.hparams.val_split or "validation",
-                    add_index=self.hparams.packing,
+        # Optionally prepare validation dataset(s)
+        val_paths = self.hparams.val_dataset_name_or_path
+        if val_paths is not None and not self.hparams.streaming:
+            if isinstance(val_paths, str):
+                val_paths = [val_paths]
+            val_splits = self.hparams.val_split or "validation"
+            if isinstance(val_splits, str):
+                val_splits = [val_splits] * len(val_paths)
+            for i, (val_path, val_split) in enumerate(zip(val_paths, val_splits, strict=False)):
+                if os.path.isdir(val_path):
+                    continue
+                val_cache_i = str(Path(self.hparams.cache_dir) / f"val_{i}.arrow") if self.hparams.cache_dir else None
+                ds = _load_dataset(
+                    dataset_name_or_path=val_path,
+                    split=val_split,
+                    add_index=False,
                     file_format=self.hparams.file_format,
-                    streaming=self.hparams.streaming,
+                    streaming=False,
                     **self.hparams.data_kwargs or {},
-                ).map(
-                    lambda x: _tokenize_batch(
-                        x,
-                        tokenizer=self.tokenizer,
-                        text_column=self.hparams.text_column,
-                        max_sequence_length=self.hparams.max_sequence_length,
-                    ),
-                    **kwargs,
                 )
-            else:
-                kwargs = (
-                    {"batched": False} if self.hparams.streaming else {"batched": False, "cache_file_name": val_cache}
-                )
-                _ = _load_dataset(
-                    dataset_name_or_path=self.hparams.val_dataset_name_or_path,
-                    split=self.hparams.val_split or "validation",
-                    add_index=self.hparams.packing,
-                    file_format=self.hparams.file_format,
-                    streaming=self.hparams.streaming,
-                    **self.hparams.data_kwargs or {},
-                ).map(lambda x: _truncated_add_length(x, self.hparams.max_sequence_length), **kwargs)
+                fn = truncate_fn if "input_ids" in ds.column_names else tokenize_fn
+                ds.map(fn, **self._map_kwargs(val_cache_i))
 
     def setup(self, stage: str | None = None) -> None:
         """Load the dataset for training. Called on every process - loads from cache populated by prepare_data()."""
         if stage == "fit" or stage is None:
-            train_cache, val_cache, _ = _cache_paths(self.hparams.cache_dir)
+            train_cache, _, _ = _cache_paths(self.hparams.cache_dir)
             self.train_dataset = _load_dataset(
                 dataset_name_or_path=self.hparams.train_dataset_name_or_path,
                 split=self.hparams.train_split or "train",
@@ -211,68 +186,49 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
                 streaming=self.hparams.streaming,
                 **self.hparams.data_kwargs or {},
             )
-            if self.hparams.val_dataset_name_or_path is not None:
-                self.val_dataset = _load_dataset(
-                    dataset_name_or_path=self.hparams.val_dataset_name_or_path,
-                    split=self.hparams.val_split or "validation",
-                    add_index=self.hparams.packing,
-                    file_format=self.hparams.file_format,
-                    streaming=self.hparams.streaming,
-                    **self.hparams.data_kwargs or {},
-                )
+            val_paths = self.hparams.val_dataset_name_or_path
+            if val_paths is not None:
+                if isinstance(val_paths, str):
+                    val_paths = [val_paths]
+                val_splits = self.hparams.val_split or "validation"
+                if isinstance(val_splits, str):
+                    val_splits = [val_splits] * len(val_paths)
+                self.val_dataset = [
+                    _load_dataset(
+                        dataset_name_or_path=vp,
+                        split=vs,
+                        add_index=False,
+                        file_format=self.hparams.file_format,
+                        streaming=False,
+                        **self.hparams.data_kwargs or {},
+                    )
+                    for vp, vs in zip(val_paths, val_splits, strict=False)
+                ]
             else:
                 self.val_dataset = None
 
-            if not self.hparams.pretokenized_train:
-                kwargs: dict[str, Any] = (
-                    {"batched": True} if self.hparams.streaming else {"batched": True, "cache_file_name": train_cache}
-                )
-                self.train_dataset = self.train_dataset.map(
-                    lambda x: _tokenize_batch(
-                        x,
-                        tokenizer=self.tokenizer,
-                        text_column=self.hparams.text_column,
-                        max_sequence_length=self.hparams.max_sequence_length,
-                    ),
-                    **kwargs,
-                )
-                #  When packing, ensure deterministic order across all ranks after map by sorting by original index
-                if self.hparams.packing and not self.hparams.streaming:
-                    self.train_dataset = self.train_dataset.sort("_idx")
-                    self.train_dataset = self.train_dataset.remove_columns(["_idx"])
+            tokenize_fn = partial(
+                _tokenize_batch,
+                tokenizer=self.tokenizer,
+                text_column=self.hparams.text_column,
+                max_sequence_length=self.hparams.max_sequence_length,
+            )
+            truncate_fn = partial(_truncated_add_length, max_sequence_length=self.hparams.max_sequence_length)
 
-            else:
-                kwargs = (
-                    {"batched": False} if self.hparams.streaming else {"batched": False, "cache_file_name": train_cache}
-                )
-                self.train_dataset = self.train_dataset.map(
-                    lambda x: _truncated_add_length(x, self.hparams.max_sequence_length), **kwargs
-                )
-                # When packing, ensure deterministic order across all ranks after map by sorting by original index
-                if self.hparams.packing and not self.hparams.streaming:
-                    self.train_dataset = self.train_dataset.sort("_idx")
-                    self.train_dataset = self.train_dataset.remove_columns(["_idx"])
+            train_fn = truncate_fn if "input_ids" in (self.train_dataset.column_names or []) else tokenize_fn
+            self.train_dataset = self.train_dataset.map(train_fn, **self._map_kwargs(train_cache))
+            # When packing, ensure deterministic order across all ranks after map by sorting by original index
+            if self.hparams.packing and not self.hparams.streaming:
+                self.train_dataset = self.train_dataset.sort("_idx")
+                self.train_dataset = self.train_dataset.remove_columns(["_idx"])
 
-            if self.hparams.val_dataset_name_or_path is not None and not self.hparams.pretokenized_val:
-                kwargs = (
-                    {"batched": True} if self.hparams.streaming else {"batched": True, "cache_file_name": val_cache}
-                )
-                self.val_dataset = self.val_dataset.map(
-                    lambda x: _tokenize_batch(
-                        x,
-                        tokenizer=self.tokenizer,
-                        text_column=self.hparams.text_column,
-                        max_sequence_length=self.hparams.max_sequence_length,
-                    ),
-                    **kwargs,
-                )
-            elif self.val_dataset is not None:
-                kwargs = (
-                    {"batched": False} if self.hparams.streaming else {"batched": False, "cache_file_name": val_cache}
-                )
-                self.val_dataset = self.val_dataset.map(
-                    lambda x: _truncated_add_length(x, self.hparams.max_sequence_length), **kwargs
-                )
+            if self.val_dataset is not None:
+                for i in range(len(self.val_dataset)):
+                    val_cache_i = (
+                        str(Path(self.hparams.cache_dir) / f"val_{i}.arrow") if self.hparams.cache_dir else None
+                    )
+                    fn = truncate_fn if "input_ids" in self.val_dataset[i].column_names else tokenize_fn
+                    self.val_dataset[i] = self.val_dataset[i].map(fn, **self._map_kwargs(val_cache_i))
 
             # For non-packing mode, shard the dataset across ranks
             if not self.hparams.streaming and self.trainer.world_size > 1 and not self.hparams.packing:
@@ -340,22 +296,27 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
 
         return dataloader
 
-    def val_dataloader(self) -> DataLoader:
-        """Create the validation data loader.
+    def val_dataloader(self) -> DataLoader | list[DataLoader]:
+        """Create the validation data loader(s).
 
         Returns:
-            DataLoader configured for validation or dummy dataloader if no validation dataset is set.
+            Single DataLoader, list of DataLoaders for multiple validation sets,
+            or dummy dataloader if no validation dataset is set.
         """
         if self.val_dataset is None:
             return DataLoader(EmptyDataset(), batch_size=self.hparams.val_batch_size, shuffle=False)
 
-        return DataLoader(
-            self.val_dataset,
-            collate_fn=self.collator,
-            shuffle=False,
-            batch_size=self.hparams.val_batch_size,
-            num_workers=self.hparams.num_workers,
-        )
+        loaders = [
+            DataLoader(
+                ds,
+                collate_fn=self.collator,
+                shuffle=False,
+                batch_size=self.hparams.val_batch_size,
+                num_workers=self.hparams.num_workers,
+            )
+            for ds in self.val_dataset
+        ]
+        return loaders if len(loaders) > 1 else loaders[0]
 
 
 class BertBlocksFinetuningDataModule(L.LightningDataModule):
@@ -587,9 +548,6 @@ class BertBlocksPretrainingModule(L.LightningModule):
         scheduler_cooldown_decay: float = 0.0,
         objective: Literal["mlm", "enhanced_mlm", "diffusion"] = "mlm",
         gradient_checkpointing: bool = False,
-        use_ddp_join: bool = False,
-        ddp_join_divide_by_initial_world_size: bool = True,
-        ddp_join_throw_on_early_termination: bool = False,
         model_config_kwargs: "dict[str, Any] | None" = None,
         model_kwargs: "dict[str, Any] | None" = None,
     ):
@@ -714,15 +672,15 @@ class BertBlocksPretrainingModule(L.LightningModule):
             optimizer_grouped_parameters = [
                 {
                     "params": [p for n, p in self.model.named_parameters() if n in decay_parameters],
-                    "weight_decay": self.hparams.weight_decay,
+                    "weight_decay": torch.Tensor(self.hparams.weight_decay),
                 },
                 {
                     "params": [p for n, p in self.model.named_parameters() if n not in decay_parameters],
-                    "weight_decay": 0.0,
+                    "weight_decay": torch.Tensor(0.0),
                 },
             ]
             optimizer_kwargs = self.hparams.optimizer_kwargs or {}
-            optimizer_kwargs.update({"lr": self.hparams.learning_rate})
+            optimizer_kwargs.update({"lr": torch.Tensor(self.hparams.learning_rate)})
 
         optimizer = get_optimizer(
             self.hparams.optimizer_class,
@@ -773,10 +731,13 @@ class BertBlocksPretrainingModule(L.LightningModule):
         self.log("loss/train", output.loss, prog_bar=True)
         return output.loss
 
-    def validation_step(self, batch: dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
+    def validation_step(self, batch: dict[str, torch.Tensor], batch_idx: int, dataloader_idx: int = 0) -> torch.Tensor:
         """Perform a single validation step."""
         output = self.model(**batch)
-        self.log("loss/validation", output.loss, prog_bar=True)
+        if dataloader_idx > 0:
+            self.log(f"loss/validation_{dataloader_idx}", output.loss, prog_bar=True)
+        else:
+            self.log("loss/validation", output.loss, prog_bar=True)
         return output.loss
 
     def on_before_optimizer_step(self, optimizer: torch.optim.Optimizer) -> None:
@@ -881,15 +842,15 @@ class BertBlocksFinetuningModule(L.LightningModule):
         optimizer_grouped_parameters = [
             {
                 "params": [p for n, p in self.model.named_parameters() if n in decay_parameters],
-                "weight_decay": self.hparams.weight_decay,
+                "weight_decay": torch.Tensor(self.hparams.weight_decay),
             },
             {
                 "params": [p for n, p in self.model.named_parameters() if n not in decay_parameters],
-                "weight_decay": 0.0,
+                "weight_decay": torch.Tensor(0.0),
             },
         ]
         optimizer_kwargs = self.hparams.optimizer_kwargs or {}
-        optimizer_kwargs.update({"lr": self.hparams.learning_rate})
+        optimizer_kwargs.update({"lr": torch.Tensor(self.hparams.learning_rate)})
         optimizer = get_optimizer(
             self.hparams.optimizer_class,
             optimizer_grouped_parameters,
