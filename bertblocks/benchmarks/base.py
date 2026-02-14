@@ -8,6 +8,11 @@ import torch
 import torchmetrics
 from lightning.pytorch.utilities.types import EVAL_DATALOADERS, TRAIN_DATALOADERS
 from torch.utils.data import DataLoader
+from torchmetrics.classification import (
+    BinaryAccuracy,
+    BinaryF1Score,
+    BinaryMatthewsCorrCoef
+)
 from transformers import (
     AutoConfig,
     AutoModelForQuestionAnswering,
@@ -332,8 +337,7 @@ class TaskModule(abc.ABC, L.LightningModule):
         if self.multi_label:
             # Multi-label: return logits, torchmetrics applies sigmoid
             return out.logits, batch["labels"]
-        metric_task = getattr(self.metric, "task", None)
-        if metric_task == "binary":
+        if isinstance(self.metric, (BinaryAccuracy, BinaryF1Score, BinaryMatthewsCorrCoef)):
             # Binary metric: return positive class logits
             return out.logits[:, 1], batch["labels"]
         # Multiclass: return logits, torchmetrics applies argmax
