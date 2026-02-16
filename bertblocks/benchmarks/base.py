@@ -1,4 +1,5 @@
 import abc
+import math
 from typing import Any, Literal
 
 import datasets
@@ -7,6 +8,7 @@ import numpy as np
 import torch
 import torchmetrics
 from lightning.pytorch.utilities.types import EVAL_DATALOADERS, TRAIN_DATALOADERS
+from torch.nn import RMSNorm, LayerNorm, GroupNorm
 from torch.utils.data import DataLoader
 from torchmetrics.classification import (
     BinaryAccuracy,
@@ -21,12 +23,16 @@ from transformers import (
     AutoTokenizer,
     PreTrainedModel,
     PreTrainedTokenizer,
+    get_linear_schedule_with_warmup,
 )
 from transformers.modeling_outputs import (
     QuestionAnsweringModelOutput,
     SequenceClassifierOutput,
     TokenClassifierOutput,
 )
+from transformers.trainer_pt_utils import get_parameter_names
+
+from bertblocks.modeling.norms import DeepNorm, DynamicTanhNorm
 
 
 class SequenceClassificationCollator:
@@ -262,6 +268,7 @@ class TaskModule(abc.ABC, L.LightningModule):
         train_batch_size: int | None = 128,
         eval_batch_size: int | None = 128,
         num_workers: int | None = 2,
+        max_epochs: int = 3
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -409,12 +416,37 @@ class TaskModule(abc.ABC, L.LightningModule):
 
     def configure_optimizers(self) -> "torch.optim.Optimizer":
         """Set up the optimizer."""
+        norm_cls = [RMSNorm, LayerNorm, GroupNorm, DeepNorm, DynamicTanhNorm]
+        decay_parameters = get_parameter_names(self.model, norm_cls)
+        decay_parameters = [name for name in decay_parameters if "bias" not in name]
+        optimizer_grouped_parameters = [
+            {
+                "params": [p for n, p in self.named_parameters() if n in decay_parameters],
+                "weight_decay": self.hparams.weight_decay,
+            },
+            {
+                "params": [p for n, p in self.named_parameters() if n not in decay_parameters],
+                "weight_decay": 0.0,
+            },
+        ]
+
         optimizer = torch.optim.AdamW(
-            self.parameters(),
+            optimizer_grouped_parameters,
             lr=self.hparams.learning_rate,
             weight_decay=self.hparams.weight_decay,
         )
-        return optimizer
+
+        steps_per_epoch = math.ceil(len(self.train_dataloader()) / self.hparams.train_batch_size)
+        total_steps = steps_per_epoch * self.hparams.max_epochs
+
+        warmup_steps = int(0.1 * total_steps)
+
+        scheduler = get_linear_schedule_with_warmup(
+            optimizer,
+            num_warmup_steps=warmup_steps,
+            num_training_steps=total_steps,
+        )
+        return {"optimizer": optimizer, "lr_scheduler": scheduler}
 
     def training_step(self, batch: dict[str, torch.Tensor]) -> torch.Tensor:
         """Perform train step."""
