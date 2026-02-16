@@ -434,6 +434,8 @@ class TaskModule(abc.ABC, L.LightningModule):
             optimizer_grouped_parameters,
             lr=self.hparams.learning_rate,
             weight_decay=self.hparams.weight_decay,
+            eps=1e-6,
+            betas=(0.9, 0.98),
         )
 
         steps_per_epoch = math.ceil(len(self.train_dataloader()) / self.hparams.train_batch_size)
