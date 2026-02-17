@@ -19,7 +19,7 @@ def from_modernbert_model(
     bertblocks_model = BertBlocksModel(bertblocks_config, add_pooling_layer=add_pooling_layer)
 
     if load_weights:
-        orig_model = ModernBertModel.from_pretrained(pretrained_model_name_or_path, attn_backend=attn_implementation)
+        orig_model = ModernBertModel.from_pretrained(pretrained_model_name_or_path)
         # Embedding layer
         bertblocks_model.embd.embd.weight.data.copy_(orig_model.embeddings.tok_embeddings.weight.data)
 

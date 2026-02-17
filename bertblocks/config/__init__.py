@@ -181,7 +181,7 @@ class BertBlocksConfig(PretrainedConfig):
         norm_eps: float = 1e-12,
         norm_bias: bool = True,
         norm_scaling: bool = False,
-        norm_qk: bool = True,
+        norm_qk: bool = False,
         norm_params: KeywordArgs | None = None,
         hidden_dropout_prob: float = 0.1,
         attn_dropout_prob: float = 0.1,
@@ -537,7 +537,6 @@ class ModernBertConfig(BertBlocksConfig):
             intermediate_size=intermediate_size,
             num_attention_heads=num_attention_heads,
             block_pos_enc_kwargs=block_pos_enc_kwargs,
-            attention_gate=None,
             mlp_in_bias=mlp_in_bias,
             mlp_out_bias=mlp_out_bias,
             attn_proj_bias=attn_proj_bias,
@@ -554,6 +553,7 @@ class ModernBertConfig(BertBlocksConfig):
             classifier_dropout_prob=classifier_dropout_prob,
             attn_implementation=attn_implementation,
             # Hard-coded values for architecture compatibility
+            attention_gate=None,
             residual_first_layer=True,
             block_pos_enc_kind="rope",
             add_token_type_emb=False,
@@ -564,6 +564,7 @@ class ModernBertConfig(BertBlocksConfig):
             norm_kind="pre",
             norm_fn="layer",
             include_final_norm=True,
+            norm_qk=False,
         )
 
     @classmethod

@@ -55,7 +55,7 @@ def _unpad_standard_input(
         shape = batch * seqlen
         unpadded_inputs = input_ids.view(shape, *rest)[indices]
 
-    return unpadded_inputs, indices, cu_seqlens, max_seqlen_in_batch
+    return unpadded_inputs, indices.to(torch.int32), cu_seqlens.to(torch.int32), max_seqlen_in_batch
 
 
 def unpad_input(
