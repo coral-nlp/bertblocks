@@ -4,6 +4,7 @@ from pytest_dependency import depends
 from transformers import AutoTokenizer, ModernBertConfig, ModernBertModel
 
 from bertblocks.integration import from_modernbert_model
+from bertblocks.modeling.padding import pad_output
 
 TEST_MODELS = ["answerdotai/ModernBERT-base", "answerdotai/ModernBERT-large"]
 
@@ -258,7 +259,7 @@ class TestFromModernBertModel:
             ],
         )
         with torch.no_grad():
-            torch.testing.assert_close(
-                hf_model.forward(seq["input_ids"], attention_mask=seq["attention_mask"]).last_hidden_state,
-                bb_model.forward(seq["input_ids"], attention_mask=seq["attention_mask"]).last_hidden_state,
-            )
+            hf_out = hf_model.forward(seq["input_ids"], attention_mask=seq["attention_mask"]).last_hidden_state
+            bb_out = bb_model.forward(seq["input_ids"], attention_mask=seq["attention_mask"])
+            bb_out = pad_output(bb_out.last_hidden_state, bb_out.indices, hf_out.shape[0], hf_out.shape[1])
+            torch.testing.assert_close(hf_out, bb_out)
