@@ -1,14 +1,44 @@
 """Benchmark runner for evaluation tasks."""
 
 import logging
+from pathlib import Path
+from typing import Any
 
 import lightning as L
 import pandas as pd
+import yaml
 from tqdm import tqdm
 
 from bertblocks.benchmarks.base import TaskModule
 
 logging.getLogger("lightning.pytorch.utilities.rank_zero").setLevel(logging.FATAL)
+
+
+def load_task_config(path: str | Path) -> dict[str, dict[str, Any]]:
+    """Load per-task hyperparameter overrides from a YAML file.
+
+    Expected format:
+        CoLA:
+          learning_rate: 1e-5
+          epochs: 5
+          weight_decay: 0.001
+        SST2:
+          learning_rate: 3e-5
+
+    Supported keys per task: learning_rate, epochs, weight_decay.
+    """
+    with open(path) as f:
+        config = yaml.safe_load(f)
+    if not isinstance(config, dict):
+        raise ValueError(f"Task config must be a YAML mapping, got {type(config).__name__}")
+    valid_keys = {"learning_rate", "epochs", "weight_decay"}
+    for task_name, overrides in config.items():
+        if not isinstance(overrides, dict):
+            raise ValueError(f"Task config for '{task_name}' must be a mapping, got {type(overrides).__name__}")
+        unknown = set(overrides.keys()) - valid_keys
+        if unknown:
+            raise ValueError(f"Unknown keys for task '{task_name}': {unknown}. Valid keys: {valid_keys}")
+    return config
 
 
 def run_eval(
@@ -21,6 +51,7 @@ def run_eval(
     weight_decay: float = 0.01,
     train_batch_size: int = 32,
     eval_batch_size: int = 64,
+    task_config: dict[str, dict[str, Any]] | None = None,
 ) -> pd.DataFrame:
     """Run evaluation on a list of task modules.
 
@@ -35,6 +66,9 @@ def run_eval(
         weight_decay: Weight decay for AdamW optimizer.
         train_batch_size: Batch size for training.
         eval_batch_size: Batch size for evaluation.
+        task_config: Optional per-task hyperparameter overrides. Keys are task
+            class names, values are dicts with optional keys: learning_rate,
+            epochs, weight_decay.
 
     Returns:
         DataFrame with columns: Name, Group, Type, Metric, Score
@@ -46,9 +80,13 @@ def run_eval(
     pbar = tqdm(total=len(task_modules))
     for task_cls in task_modules:
         pbar.set_description(task_cls.__name__)
+        overrides = (task_config or {}).get(task_cls.__name__, {})
+        task_epochs = overrides.get("epochs", max_epochs)
+        task_lr = overrides.get("learning_rate", learning_rate)
+        task_wd = overrides.get("weight_decay", weight_decay)
         trainer = L.Trainer(
             logger=False,
-            max_epochs=max_epochs,
+            max_epochs=task_epochs,
             num_sanity_val_steps=0,
             enable_checkpointing=False,
             enable_model_summary=False,
@@ -58,8 +96,8 @@ def run_eval(
             pretrained_model_name_or_path=pretrained_model_name_or_path,
             pretrained_tokenizer_name_or_path=pretrained_tokenizer_name_or_path,
             max_seq_length=max_seq_length,
-            learning_rate=learning_rate,
-            weight_decay=weight_decay,
+            learning_rate=task_lr,
+            weight_decay=task_wd,
             train_batch_size=train_batch_size,
             eval_batch_size=eval_batch_size,
         )
@@ -95,6 +133,14 @@ if __name__ == "__main__":
     parser.add_argument("--train_batch_size", "-bt", type=int, required=False, help="Train batch size", default=64)
     parser.add_argument("--eval_batch_size", "-be", type=int, required=False, help="Eval batch size", default=128)
     parser.add_argument("--output", "-o", type=str, required=False, help="Output CSV path", default=None)
+    parser.add_argument(
+        "--config",
+        "-c",
+        type=str,
+        required=False,
+        help="Path to YAML file with per-task hyperparameter overrides (learning_rate, epochs, weight_decay)",
+        default=None,
+    )
 
     args = parser.parse_args()
 
@@ -107,6 +153,8 @@ if __name__ == "__main__":
         case _:
             raise ValueError(f"Unknown benchmark {args.benchmark}")
 
+    cfg = load_task_config(args.config) if args.config else None
+
     df = run_eval(
         task_modules=TASK_MODULES,
         pretrained_model_name_or_path=args.model,
@@ -117,6 +165,7 @@ if __name__ == "__main__":
         weight_decay=args.weight_decay,
         train_batch_size=args.train_batch_size,
         eval_batch_size=args.eval_batch_size,
+        task_config=cfg,
     )
     print(df)
     if args.output is not None:

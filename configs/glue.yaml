@@ -1,0 +1,40 @@
+CoLA:
+  learning_rate: 8e-5
+  weight_decay: 1e-6
+  epochs: 5
+SST2:
+  learning_rate: 8e-5
+  weight_decay: 1e-5
+  epochs: 2
+MRPC:
+  learning_rate: 5e-5
+  weight_decay: 5e-6
+  epochs: 10
+QQP:
+  learning_rate: 5e-5
+  weight_decay: 5e-6
+  epochs: 10
+STSB:
+  learning_rate: 8e-5
+  weight_decay: 5e-6
+  epochs: 10
+MNLIMatched:
+  learning_rate: 5e-5
+  weight_decay: 5e-6
+  epochs: 1
+MNLIMismatched:
+  learning_rate: 5e-5
+  weight_decay: 5e-6
+  epochs: 1
+QNLI:
+  learning_rate: 8e-5
+  weight_decay: 5e-6
+  epochs: 2
+RTE:
+  learning_rate: 5e-5
+  weight_decay: 1e-5
+  epochs: 3
+WNLI:
+  learning_rate: 8e-5
+  weight_decay: 5e-6
+  epochs: 3
