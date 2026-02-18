@@ -443,7 +443,6 @@ class TaskModule(abc.ABC, L.LightningModule):
         warmup_steps = int(0.1 * total_steps)
 
         def warmup_linear_decay(current_step, warmup_steps, total_steps, start_factor=0.1):
-            print("step", start_factor + (1.0 - start_factor) * (current_step / warmup_steps))
             if current_step < warmup_steps:
                 return start_factor + (1.0 - start_factor) * (current_step / warmup_steps)
             else:
