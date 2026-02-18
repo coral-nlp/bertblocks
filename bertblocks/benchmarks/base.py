@@ -418,7 +418,7 @@ class TaskModule(abc.ABC, L.LightningModule):
         """Set up the optimizer."""
         norm_cls = [RMSNorm, LayerNorm, GroupNorm, DeepNorm, DynamicTanhNorm]
         decay_parameters = get_parameter_names(self.model, norm_cls)
-        decay_parameters = [name for name in decay_parameters if "bias" not in name]
+        decay_parameters = [f"model.{name}" for name in decay_parameters if "bias" not in name]
         optimizer_grouped_parameters = [
             {
                 "params": [p for n, p in self.named_parameters() if n in decay_parameters],
