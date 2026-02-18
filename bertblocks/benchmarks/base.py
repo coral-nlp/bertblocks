@@ -1,5 +1,4 @@
 import abc
-import math
 from typing import Any, Literal
 
 import datasets
@@ -9,6 +8,7 @@ import torch
 import torchmetrics
 from lightning.pytorch.utilities.types import EVAL_DATALOADERS, TRAIN_DATALOADERS
 from torch.nn import RMSNorm, LayerNorm, GroupNorm
+from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader
 from torchmetrics.classification import (
     BinaryAccuracy,
@@ -23,7 +23,6 @@ from transformers import (
     AutoTokenizer,
     PreTrainedModel,
     PreTrainedTokenizer,
-    get_linear_schedule_with_warmup,
 )
 from transformers.modeling_outputs import (
     QuestionAnsweringModelOutput,
@@ -438,17 +437,32 @@ class TaskModule(abc.ABC, L.LightningModule):
             betas=(0.9, 0.98),
         )
 
-        steps_per_epoch = math.ceil(len(self.train_dataloader()) / self.hparams.train_batch_size)
+        steps_per_epoch = len(self.train_dataloader()) // self.trainer.accumulate_grad_batches
         total_steps = steps_per_epoch * self.hparams.max_epochs
 
         warmup_steps = int(0.1 * total_steps)
 
-        scheduler = get_linear_schedule_with_warmup(
+        def warmup_linear_decay(current_step, warmup_steps, total_steps, start_factor=0.1):
+            print("step", start_factor + (1.0 - start_factor) * (current_step / warmup_steps))
+            if current_step < warmup_steps:
+                return start_factor + (1.0 - start_factor) * (current_step / warmup_steps)
+            else:
+                progress = (current_step - warmup_steps) / (total_steps - warmup_steps)
+                return max(0.0, 1.0 - progress)
+
+        scheduler = LambdaLR(
             optimizer,
-            num_warmup_steps=warmup_steps,
-            num_training_steps=total_steps,
+            lr_lambda=lambda step: warmup_linear_decay(step, warmup_steps, total_steps)
         )
-        return {"optimizer": optimizer, "lr_scheduler": scheduler}
+
+        return {
+            "optimizer": optimizer,
+            "lr_scheduler": {
+                "scheduler": scheduler,
+                "interval": "step",
+                "frequency": 1,
+            }
+        }
 
     def training_step(self, batch: dict[str, torch.Tensor]) -> torch.Tensor:
         """Perform train step."""
