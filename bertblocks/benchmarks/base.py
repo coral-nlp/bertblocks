@@ -236,6 +236,68 @@ class QuestionAnsweringCollator:
         return res
 
 
+class RerankingCollator:
+    """Collator for Passage Reranking tasks."""
+
+    def __init__(
+        self,
+        tokenizer: PreTrainedTokenizer,
+        query_column: str = "query",
+        passages_column: str = "passages",
+        passage_text_column: str = "passage_text",
+        label_column: str = "is_selected",
+        max_seq_length: int | None = 512,
+        max_passages: int = 10,
+    ):
+        self.tokenizer = tokenizer
+        self.query_column = query_column
+        self.passages_column = passages_column
+        self.passage_text_column = passage_text_column
+        self.label_column = label_column
+        self.max_seq_length = max_seq_length
+        self.max_passages = max_passages
+
+    def __call__(self, batch: list[dict[str, str | dict[str, list]]]) -> dict[str, torch.Tensor]:
+        """Perform collation operation on a batch of Passage Reranking examples."""
+        all_input_ids, all_attention_masks, all_labels = [], [], []
+
+        for sample in batch:
+            query = sample[self.query_column]
+            passages = sample[self.passages_column]
+            texts = passages[self.passage_text_column]
+            selected = passages[self.label_column]
+
+            out = self.tokenizer(
+                [query] * len(texts),
+                texts,
+                padding="max_length",
+                truncation="only_second",
+                max_length=self.max_seq_length,
+                return_tensors="pt",
+            )
+
+            pad = self.max_passages - len(texts)
+            all_input_ids.append(torch.cat([out["input_ids"],
+                                            torch.zeros(pad,
+                                                        self.max_seq_length,
+                                                        dtype=torch.long)])
+            )
+            all_attention_masks.append(torch.cat([out["attention_mask"],
+                                                  torch.zeros(pad,
+                                                  self.max_seq_length,
+                                                  dtype=torch.long)])
+            )
+            all_labels.append(torch.cat(
+                [torch.tensor(selected, dtype=torch.float), torch.full((pad,), -100.0)])
+            )
+
+        return {
+            "input_ids": torch.stack(all_input_ids),
+            "attention_mask": torch.stack(all_attention_masks),
+            "labels": torch.stack(all_labels),
+        }
+
+
 def _set_config_num_labels(config: AutoConfig, num_labels: int) -> None:
     """Set the number of labels on a config, handling both num_labels and num_classes attributes."""
     if hasattr(config, "num_labels"):
