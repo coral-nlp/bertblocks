@@ -15,6 +15,6 @@ OUTPUT=${2:-glue_grid_search_results.csv}
 mkdir -p logs
 
 pip install uv
-uv sync
+UV_PYTHON_PREFERENCE=only-system uv sync
 
 uv run python -m bertblocks.benchmarks.grid_search glue "$MODEL" --output "$OUTPUT"
