@@ -6,8 +6,10 @@
 #SBATCH --output=logs/%x-%j.out
 #SBATCH --error=logs/%x-%j.err
 #SBATCH --container-workdir=/mnt/ceph/storage/data-tmp/current/willy/bertblocks
-#SBATCH --container-image=wpertsch/bertblocks:0.0.1
-#SBATCH --gres=gpu:ampere:1
+#SBATCH --container-image=ghcr.io#coral-nlp/bertblocks-dev:latest
+#SBATCH --container-remap-root
+#SBATCH --container-writable
+#SBATCH --gres=gpu:hopper:1
 
 MODEL=${1:?Usage: sbatch glue-grid-search.slurm <model_name_or_path> [output.csv]}
 OUTPUT=${2:-glue_grid_search_results.csv}
