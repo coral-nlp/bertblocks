@@ -6,7 +6,7 @@
 #SBATCH --output=logs/%x-%j.out
 #SBATCH --error=logs/%x-%j.err
 #SBATCH --container-workdir=/mnt/ceph/storage/data-tmp/current/willy/bertblocks
-#SBATCH --container-image=pytorch/pytorch:2.7.1-cuda12.8-cudnn9-devel
+#SBATCH --container-image=wpertsch/bertblocks:0.0.1
 #SBATCH --gres=gpu:ampere:1
 
 MODEL=${1:?Usage: sbatch glue-grid-search.slurm <model_name_or_path> [output.csv]}
@@ -14,6 +14,6 @@ OUTPUT=${2:-glue_grid_search_results.csv}
 
 mkdir -p logs
 
-pip install uv
-UV_PYTHON=$(which python3) uv sync --no-dev
-UV_PYTHON=$(which python3) uv run python -m bertblocks.benchmarks.grid_search glue "$MODEL" --output "$OUTPUT"
+pip install -e . --no-deps
+
+python -m bertblocks.benchmarks.grid_search glue "$MODEL" --output "$OUTPUT"
