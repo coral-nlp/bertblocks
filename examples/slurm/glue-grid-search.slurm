@@ -16,6 +16,6 @@ OUTPUT=${2:-glue_grid_search_results.csv}
 
 mkdir -p logs
 
-pip install -e . --no-deps
+pip install -e . --no-deps --break-system-packages
 
 python -m bertblocks.benchmarks.grid_search glue "$MODEL" --output "$OUTPUT"
