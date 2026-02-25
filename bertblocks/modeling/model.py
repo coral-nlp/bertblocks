@@ -29,7 +29,7 @@ from transformers.modeling_utils import PreTrainedModel
 from bertblocks.config import BertBlocksConfig
 from bertblocks.modeling.block import Encoder, EnhancedMaskingBlock, convert_to_4d_attention_mask
 from bertblocks.modeling.embedding import TokenEmbedding
-from bertblocks.modeling.head import Pooler, get_prediction_head
+from bertblocks.modeling.head import Pooler, get_prediction_head, ModernBertPredictionHead
 from bertblocks.modeling.loss import get_loss_function
 from bertblocks.modeling.padding import pad_output, unpad_input
 from bertblocks.modeling.position import AlibiPositionalEncoding
@@ -666,6 +666,7 @@ class BertBlocksForSequenceClassification(BertBlocksForTasksBase):
 
     def __init__(self, config: "BertBlocksConfig"):
         super().__init__(config=config)
+        self.head = ModernBertPredictionHead(config)
         self.classifier = torch.nn.Linear(config.hidden_size, config.num_classes)
         self.num_classes = config.num_classes
         self.problem_type = config.problem_type
@@ -712,8 +713,14 @@ class BertBlocksForSequenceClassification(BertBlocksForTasksBase):
         )
         output = self.pad_output(output)
 
-        cls_features = output.last_hidden_state[:, 0, :]  # Regular CLS token extraction
-        logits = self.classifier(self.head(cls_features))
+        attention_mask_expanded = attention_mask.unsqueeze(-1) # (B, T, 1)
+        sum_hidden = (output.last_hidden_state * attention_mask_expanded).sum(dim=1)  # (B, H)
+        sum_mask = attention_mask_expanded.sum(dim=1).clamp(min=1e-9)  # (B, 1)
+        cls_features = sum_hidden / sum_mask
+
+        #cls_features = output.last_hidden_state[:, 0, :]  # Regular CLS token extraction
+        pooled = self.head(cls_features)
+        logits = self.classifier(pooled)
 
         loss = self.compute_loss(logits, labels, self.problem_type)
 

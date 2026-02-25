@@ -8,6 +8,7 @@ if TYPE_CHECKING:
 
 from torch import nn
 
+from bertblocks.modeling.activations import get_actv_fn
 from bertblocks.modeling.mlp import get_mlp
 from bertblocks.modeling.norms import get_norm
 
@@ -167,6 +168,30 @@ class MLPPredictionHead(nn.Module):
         x = self.pre_norm(x)
         x = self.ffwd(x)
         x = self.post_norm(x)
+        return x
+
+
+class ModernBertPredictionHead(nn.Module):
+
+    def __init__(self, config: "BertBlocksConfig"):
+        super().__init__()
+        self.ffwd = nn.Linear(config.hidden_size, config.hidden_size, bias=config.mlp_out_bias)
+        self.actv = get_actv_fn(config.actv_fn)
+        #self.pre_norm = get_norm(config)
+
+    def forward(self, x: "torch.Tensor") -> "torch.Tensor":
+        """Forward pass of the prediction head.
+
+        Args:
+            x (torch.Tensor, shape [batch_size, sequence_length, hidden_size]): Padded input hidden state.
+
+        Returns:
+            torch.Tensor: Transformed hidden state, shape [batch_size, sequence_length, hidden_size].
+
+        """
+        #x = self.pre_norm(x)
+        x = self.ffwd(x)
+        x = self.actv(x)
         return x
 
 
