@@ -161,15 +161,33 @@ class Attention(nn.Module):
         """Forward pass of the attention mechanism.
 
         Automatically routes to padded or unpadded implementation based on backend capabilities.
+        Supports both standard padded sequences and packed (unpadded) sequences via flash attention.
 
         Args:
-            x (torch.Tensor, shape [batch_size, seq_len, hidden_dim] or [total_seq_len, hidden_dim]): Hidden state.
-            cu_seqlens (torch.Tensor, optional): Cumulative sequence lengths for unpadded sequences.
-            max_seq_len (int, optional): Maximum sequence length for unpadded sequences.
-            attention_mask (torch.Tensor, optional): Attention mask for padded sequences.
+            x (torch.Tensor, shape [batch_size, seq_len, hidden_size] or [total_seq_len, hidden_size]):
+                Hidden state to apply attention to. For padded inputs, use [batch_size, seq_len, hidden_size].
+                For unpadded inputs, use [total_seq_len, hidden_size].
+            attention_mask (torch.Tensor, shape [batch_size, 1, seq_len, seq_len], optional):
+                4D attention mask for padded sequences. Should be in causal or full attention format.
+                Ignored if cu_seqlens is provided. Defaults to None.
+            cu_seqlens (torch.Tensor, shape [batch_size + 1], optional):
+                Cumulative sequence lengths for unpadded sequences in packed format.
+                If provided, enables flash attention optimized path. Defaults to None.
+            max_seq_len (int, optional):
+                Maximum sequence length in the batch when using unpadded format.
+                Required when cu_seqlens is provided. Defaults to None.
 
         Returns:
-            tuple[torch.Tensor, torch.Tensor | None]: Output and optional attention weights
+            tuple: A tuple containing:
+                - output (torch.Tensor): Attention output with shape [batch_size, seq_len, hidden_size] (padded)
+                    or [total_seq_len, hidden_size] (unpadded).
+                - attention_weights (torch.Tensor | None): Optional attention weights. None for most backends.
+
+        Raises:
+            ValueError: If neither attention_mask nor cu_seqlens is provided.
+
+        References:
+            - "Attention Is All You Need" (https://arxiv.org/pdf/1706.03762)
         """
         # Fused projection and split into Q, K, V
         qkv = self.proj(x)
