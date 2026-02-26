@@ -81,6 +81,7 @@ docs = [
     "sphinx-autoapi>=3.0.0",
     "sphinx-autodoc-typehints>=1.24.0",
     "myst-parser>=1.0.0",
+    "sphinxcontrib-mermaid>=2.0.0",
 ]
 
 # https://github.com/astral-sh/uv/issues/6437#issuecomment-3167274955

@@ -18,7 +18,8 @@ extensions = [
     "sphinx.ext.viewcode",
     "sphinx.ext.intersphinx",
     "sphinx.ext.napoleon",
-    "myst_parser"
+    "myst_parser",
+    "sphinxcontrib.mermaid"
 ]
 
 templates_path = ["_templates"]
@@ -65,6 +66,16 @@ napoleon_use_ivar = True
 napoleon_use_param = True
 napoleon_use_rtype = True
 napoleon_use_keyword = True
+
+# -- Mermaid configuration --------------------------------------------------
+mermaid_version = "latest"
+mermaid_init_js = """
+mermaid.initialize({
+    startOnLoad: true,
+    theme: 'default',
+    securityLevel: 'loose'
+});
+"""
 
 # -- Options for HTML output -------------------------------------------------
 html_theme = "furo"
