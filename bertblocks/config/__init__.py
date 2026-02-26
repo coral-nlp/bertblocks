@@ -11,8 +11,8 @@ FeedForward = Literal["linear", "mlp", "glu"]
 KeywordArgs = dict[str, Any]
 Initializer = Literal["trunc_normal", "kaiming_normal", "kaiming_uniform", "xavier_normal", "xavier_uniform"]
 AttentionBackend = Literal["flash_attention_2", "eager", "sdpa"]
-EmbeddingPositionalEncoding = Literal["none", "sinusoidal", "learned"]
-BlockPositionalEncoding = Literal["none", "alibi", "rope", "learned_alibi"]
+EmbeddingPositionalEncoding = Literal["sinusoidal", "learned"] | None
+BlockPositionalEncoding = Literal["alibi", "rope", "learned", "learned_alibi"] | None
 AttentionGate = Literal["elementwise", "headwise"]
 
 
@@ -167,7 +167,7 @@ class BertBlocksConfig(PretrainedConfig):
         attention_gate: AttentionGate | None = None,
         hidden_size: int = 768,
         intermediate_size: int = 3072,
-        emb_pos_enc_kind: EmbeddingPositionalEncoding = "none",
+        emb_pos_enc_kind: EmbeddingPositionalEncoding = None,
         emb_pos_enc_kwargs: KeywordArgs | None = None,
         block_pos_enc_kind: BlockPositionalEncoding = "alibi",
         block_pos_enc_kwargs: KeywordArgs | None = None,
@@ -214,6 +214,8 @@ class BertBlocksConfig(PretrainedConfig):
             attn_dropout_prob=attn_dropout_prob,
             classifier_dropout_prob=classifier_dropout_prob,
             num_classes=num_classes,
+            emb_pos_enc_kind=emb_pos_enc_kind,
+            block_pos_enc_kind=block_pos_enc_kind,
         )
 
         if attn_implementation is None:
@@ -286,6 +288,32 @@ class BertBlocksConfig(PretrainedConfig):
         )
         self.block_pos_enc_kwargs.update({"rope_dim": rope_dim, "max_seq_len": self.max_sequence_length})
 
+        # Post-initialization validation to catch corrupted configs
+        # (e.g., from JSON loading or attribute manipulation)
+        self._validate_positional_encodings()
+
+    def _validate_positional_encodings(self) -> None:
+        """Validate that positional encoding kinds are properly set.
+
+        This is called after init to catch corrupted configs (e.g., from JSON loading
+        or attribute manipulation that sets values to empty strings).
+
+        Raises:
+            ValueError: If positional encoding kinds are invalid (non-None but not in valid set).
+        """
+        valid_emb_enc = {"sinusoidal", "learned"}
+        if self.emb_pos_enc_kind is not None and self.emb_pos_enc_kind not in valid_emb_enc:
+            raise ValueError(
+                f"invalid emb_pos_enc_kind: expected one of {valid_emb_enc} or None, got {self.emb_pos_enc_kind!r}"
+            )
+
+        valid_block_enc = {"alibi", "rope", "learned", "learned_alibi"}
+        if self.block_pos_enc_kind is not None and self.block_pos_enc_kind not in valid_block_enc:
+            raise ValueError(
+                f"invalid block_pos_enc_kind: expected one of {valid_block_enc} or None, "
+                f"got {self.block_pos_enc_kind!r}"
+            )
+
     @staticmethod
     def _validate(
         vocab_size: int,
@@ -306,6 +334,8 @@ class BertBlocksConfig(PretrainedConfig):
         attn_dropout_prob: float,
         classifier_dropout_prob: float,
         num_classes: int,
+        emb_pos_enc_kind: str | None = None,
+        block_pos_enc_kind: str | None = None,
     ) -> None:
         """Validate BertBlocksConfig parameters using native Python."""
         # Scalar parameter validation
@@ -390,6 +420,21 @@ class BertBlocksConfig(PretrainedConfig):
         if hidden_size % 2 != 0:
             raise ValueError("hidden_size must be even")
 
+        # Positional encoding validation
+        if emb_pos_enc_kind is not None:
+            valid_emb_enc = {"sinusoidal", "learned"}
+            if emb_pos_enc_kind not in valid_emb_enc:
+                raise ValueError(
+                    f"invalid emb_pos_enc_kind: expected one of {valid_emb_enc} or None, got {emb_pos_enc_kind!r}"
+                )
+
+        if block_pos_enc_kind is not None:
+            valid_block_enc = {"alibi", "rope", "learned", "learned_alibi"}
+            if block_pos_enc_kind not in valid_block_enc:
+                raise ValueError(
+                    f"invalid block_pos_enc_kind: expected one of {valid_block_enc} or None, got {block_pos_enc_kind!r}"
+                )
+
 
 class BertConfig(BertBlocksConfig):
     """BertBlocksConfig with default arguments applied for Bert architecture."""
@@ -427,8 +472,8 @@ class BertConfig(BertBlocksConfig):
             num_blocks=num_blocks,
             intermediate_size=intermediate_size,
             num_attention_heads=num_attention_heads,
-            emb_pos_enc_kind="learned" if pos_enc_kind in ("absolute", "learned") else "none",
-            block_pos_enc_kind="none",
+            emb_pos_enc_kind="learned" if pos_enc_kind in ("absolute", "learned") else None,
+            block_pos_enc_kind=None,
             attention_gate=None,
             type_vocab_size=type_vocab_size,
             initializer_range=initializer_range,
