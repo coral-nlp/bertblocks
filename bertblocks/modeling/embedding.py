@@ -104,16 +104,31 @@ class TokenEmbedding(nn.Module):
         cu_seqlens: "torch.LongTensor | None" = None,
         token_type_ids: "torch.LongTensor | None" = None,
     ) -> "torch.Tensor":
-        """Forward pass of the embedding layer.
+        """Forward pass of the token embedding layer.
+
+        Combines token embeddings, optional token type embeddings, optional positional encodings,
+        normalization, and dropout.
 
         Args:
-            input_ids (torch.Tensor, shape [total_seq_len,]): Unpadded token IDs.
-            cu_seqlens (torch.Tensor, shape [batch_size + 1]): Cumulative sequence lengths in batch.
-            token_type_ids (torch.LongTensor, shape [batch_size, sequence_length], optional): Tensor of token types.
+            input_ids (torch.Tensor, shape [batch_size, seq_len] or [total_seq_len]):
+                Token IDs to embed. For padded inputs, shape is [batch_size, seq_len].
+                For unpadded inputs, shape is [total_seq_len].
+            cu_seqlens (torch.Tensor, shape [batch_size + 1], optional):
+                Cumulative sequence lengths for unpadded sequences. Used by positional encodings
+                to compute per-sequence position indices. Defaults to None.
+            token_type_ids (torch.Tensor, shape [batch_size, seq_len] or [total_seq_len], optional):
+                Segment IDs indicating token type (e.g., 0 for sentence A, 1 for sentence B in NSP).
+                Only used if `add_token_type_emb` is True in config. Defaults to None.
 
         Returns:
-            torch.Tensor: Embedded token representations, shape [total_seq_len, hidden_size].
+            torch.Tensor: Embedded token representations with shape:
+                - [batch_size, seq_len, hidden_size] for padded inputs
+                - [total_seq_len, hidden_size] for unpadded inputs
 
+        References:
+            - "BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding"
+              (https://arxiv.org/abs/1810.04805)
+            - "Attention Is All You Need" (https://arxiv.org/pdf/1706.03762)
         """
         # Input embeddings
         x = self.embd(input_ids)

@@ -59,6 +59,9 @@ Use Google-style docstrings with custom shape annotations:
 def some_function(x: torch.Tensor) -> torch.Tensor:
     """Brief description of the function.
 
+    References:
+        - Smith et al. (2000): Some title (<some_arxiv_url>)
+
     Args:
         x (torch.Tensor, shape [total_seq_len, hidden_size] or [batch_size, seq_len, hidden_size]): Hidden state
             to add token type ids to.

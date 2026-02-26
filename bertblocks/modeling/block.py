@@ -103,18 +103,34 @@ class Block(nn.Module):
     ) -> "tuple[Tensor, Tensor | None]":
         """Forward pass of the transformer block.
 
+        Applies a sequence of operations: pre-norm -> attention -> residual -> post-norm ->
+        pre-norm -> feed-forward -> residual -> post-norm. Supports both padded and unpadded sequences.
+
         Args:
-            x (Tensor): Hidden state (unpadded or padded).
-            attention_mask (Tensor | None): Attention mask (for padded sequences).
-            cu_seqlens (Tensor | None): Cumulative sequence lengths (for unpadded sequences).
-            max_seq_len (int | None): Maximum sequence length (for unpadded sequences).
+            x (Tensor, shape [batch_size, seq_len, hidden_size] or [total_seq_len, hidden_size]):
+                Hidden state to process. For padded sequences, use [batch_size, seq_len, hidden_size].
+                For unpadded sequences, use [total_seq_len, hidden_size].
+            attention_mask (Tensor, shape [batch_size, 1, seq_len, seq_len], optional):
+                4D attention mask for padded sequences. Boolean or float mask with shape
+                [batch_size, num_heads, seq_len, seq_len]. Ignored if cu_seqlens is provided.
+                Defaults to None.
+            cu_seqlens (Tensor, shape [batch_size + 1], optional):
+                Cumulative sequence lengths for unpadded sequences. If provided, enables
+                flash attention optimized path. Defaults to None.
+            max_seq_len (int, optional):
+                Maximum sequence length in the batch when using unpadded format.
+                Required when cu_seqlens is provided. Defaults to None.
 
         Returns:
-            tuple[Tensor, Tensor | None]:
+            tuple[Tensor, Tensor | None]: A tuple containing:
 
-                - `output` (Tensor): Transformed hidden state with same shape as input
-                - `attention_weights` (Tensor | None): Attention weights
+                - output (Tensor): Transformed hidden state with same shape and dtype as input.
+                - attention_weights (Tensor | None): Attention weights if returned by backend, otherwise None.
 
+        References:
+            - "Attention Is All You Need" (https://arxiv.org/pdf/1706.03762)
+            - "On Layer Normalization in the Transformer Architecture" (https://arxiv.org/pdf/2002.04745)
+            - "The Curse of Depth in Large Language Models" (https://arxiv.org/pdf/2502.05795)
         """
         # Attention component
         if self.layer_id == 0 and self.residual_first_layer:
@@ -202,20 +218,31 @@ class EnhancedMaskingBlock(Block):
         cu_seqlens: "Tensor | None" = None,
         max_seq_len: int | None = None,
     ) -> "tuple[Tensor, Tensor | None]":
-        """Forward pass of the transformer block.
+        """Forward pass of the enhanced masking transformer block.
+
+        Applies custom masking strategy to attention before processing through the transformer.
+        Supports random masking with configurable probability.
 
         Args:
-            x (Tensor): Hidden state (unpadded or padded).
-            attention_mask (Tensor | None): Attention mask (for padded sequences).
-            cu_seqlens (Tensor | None): Cumulative sequence lengths (for unpadded sequences).
-            max_seq_len (int | None): Maximum sequence length (for unpadded sequences).
+            x (Tensor, shape [batch_size, seq_len, hidden_size] or [total_seq_len, hidden_size]):
+                Hidden state to process. For padded sequences, use [batch_size, seq_len, hidden_size].
+                For unpadded sequences, use [total_seq_len, hidden_size].
+            attention_mask (Tensor, shape [batch_size, seq_len], optional):
+                2D binary mask indicating which tokens are valid (1) vs padding (0).
+                If None, all tokens are considered valid. Defaults to None.
+            cu_seqlens (Tensor, shape [batch_size + 1], optional):
+                Cumulative sequence lengths for unpadded sequences. Defaults to None.
+            max_seq_len (int, optional):
+                Maximum sequence length in the batch when using unpadded format. Defaults to None.
 
         Returns:
-            tuple[Tensor, Tensor | None]:
+            tuple[Tensor, Tensor | None]: A tuple containing:
 
-                - `output` (Tensor): Transformed hidden state with same shape as input
-                - `attention_weights` (Tensor | None): Attention weights
+                - output (Tensor): Transformed hidden state with same shape and dtype as input.
+                - attention_weights (Tensor | None): Attention weights if returned by backend, otherwise None.
 
+        Note:
+            Diagonal of attention mask is set to 0 to prevent tokens from attending to themselves.
         """
         attention_mask = torch.ones(x.shape[:2], dtype=torch.bool) if attention_mask is None else attention_mask.bool()
         attention_mask = convert_to_4d_attention_mask(attention_mask)
@@ -279,26 +306,35 @@ class Encoder(nn.Module):
         """Forward pass of the encoder.
 
         Processes input hidden state sequentially through all transformer blocks.
+        Supports both padded and unpadded (packed) sequences for efficient processing.
 
         Args:
-            x (Tensor): Hidden state (unpadded or padded).
-            attention_mask (Tensor | None): Attention mask (for padded sequences).
-            cu_seqlens (Tensor | None): Cumulative sequence lengths (for unpadded sequences).
-            max_seq_len (int | None): Maximum sequence length (for unpadded sequences).
-            output_attentions (bool | None, optional): Whether to return attention weights from
-                all layers. Defaults to False.
-            output_hidden_states (bool | None, optional): Whether to return hidden states from
-                all layers. Defaults to False.
+            x (Tensor, shape [batch_size, seq_len, hidden_size] or [total_seq_len, hidden_size]):
+                Hidden state to process. For padded sequences, use [batch_size, seq_len, hidden_size].
+                For unpadded sequences, use [total_seq_len, hidden_size].
+            attention_mask (Tensor, shape [batch_size, 1, seq_len, seq_len], optional):
+                4D attention mask for padded sequences. Ignored if cu_seqlens is provided.
+                Defaults to None.
+            cu_seqlens (Tensor, shape [batch_size + 1], optional):
+                Cumulative sequence lengths for unpadded sequences. Defaults to None.
+            max_seq_len (int, optional):
+                Maximum sequence length in the batch when using unpadded format. Defaults to None.
+            output_attentions (bool, optional):
+                Whether to return attention weights from all layers. Defaults to False.
+            output_hidden_states (bool, optional):
+                Whether to return hidden states from all layers. Defaults to False.
 
         Returns:
-            tuple[Tensor, tuple[Tensor, ...] | None, tuple[Tensor, ...] | None]:
+            tuple[Tensor, tuple[Tensor, ...] | None, tuple[Tensor, ...] | None]: A tuple containing:
 
-                - `last_hidden_state` (Tensor): Output of the final transformer layer.
-                - `all_hidden_states` (tuple[Tensor, ...] | None): Hidden states from all layers
-                  if output_hidden_states=True, None otherwise.
-                - `all_attentions` (tuple[Tensor, ...] | None): Attention weights from all layers
-                  if output_attentions=True, None otherwise.
+                - last_hidden_state (Tensor): Output of the final transformer layer with same shape as input.
+                - all_hidden_states (tuple[Tensor, ...] | None): Tuple of hidden states from all layers
+                  (including input embedding). Only returned if output_hidden_states=True, length = num_blocks + 1.
+                - all_attentions (tuple[Tensor, ...] | None): Tuple of attention weights from all layers.
+                  Only returned if output_attentions=True, length = num_blocks.
 
+        References:
+            - "Attention Is All You Need" (https://arxiv.org/pdf/1706.03762)
         """
         # Keep track of states throughout block stack
         all_attentions = []

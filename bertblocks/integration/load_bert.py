@@ -7,7 +7,44 @@ from bertblocks.modeling.model import BertBlocksModel
 def from_bert_model(
     pretrained_model_name_or_path: str, load_weights: bool = True, add_pooling_layer: bool = False
 ) -> "BertBlocksModel":
-    """Instantiate an equivalent BertBlocks model from BERT weights and config."""
+    """Instantiate an equivalent BertBlocks model from pretrained HuggingFace BERT weights and config.
+
+    Converts a HuggingFace BERT model to BertBlocks architecture with optional weight transfer.
+    The BertBlocks model uses post-normalization and standard MLP architecture to match BERT.
+
+    Args:
+        pretrained_model_name_or_path (str): HuggingFace model identifier or local path to a
+            pretrained BERT model (e.g., "bert-base-uncased", "./path/to/model").
+        load_weights (bool, optional): Whether to transfer weights from the pretrained BERT model.
+            If True, copies all embeddings, attention, feed-forward, and normalization layer weights.
+            If False, only loads the configuration and initializes a fresh model. Defaults to True.
+        add_pooling_layer (bool, optional): Whether to add a pooling layer that processes the
+            [CLS] token. Useful for sequence-level classification tasks. Defaults to False.
+
+    Returns:
+        BertBlocksModel: A BertBlocks model with architecture matched to BERT, optionally
+            loaded with pretrained weights.
+
+    Raises:
+        ValueError: If the model config cannot be loaded or if the model type is not BERT.
+        OSError: If the model path does not exist or is not accessible.
+
+    Note:
+        - The weight transfer is exact and lossless; no approximation is used.
+        - All layer parameters (embeddings, QKV projections, feed-forward, norms) are copied directly.
+        - The pooling layer (if added) is initialized with new random weights.
+
+    Example:
+        >>> from bertblocks.integration import from_bert_model
+        >>> # Load and convert a pretrained BERT model
+        >>> model = from_bert_model("bert-base-uncased", load_weights=True)
+        >>> # Or load just the config without weights for a fresh model
+        >>> model = from_bert_model("bert-base-uncased", load_weights=False)
+
+    References:
+        - "BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding"
+          (https://arxiv.org/abs/1810.04805)
+    """
     from transformers import BertModel
 
     bertblocks_config = BertConfig.from_huggingface(pretrained_model_name_or_path)

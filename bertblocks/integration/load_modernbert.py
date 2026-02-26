@@ -10,7 +10,53 @@ def from_modernbert_model(
     add_pooling_layer: bool = False,
     attn_implementation: Literal["flash_attention_2", "sdpa", "eager"] = "flash_attention_2",
 ) -> "BertBlocksModel":
-    """Instantiate an equivalent BertBlocks model from ModernBERT weights and config."""
+    """Instantiate an equivalent BertBlocks model from pretrained HuggingFace ModernBERT weights and config.
+
+    Converts a HuggingFace ModernBERT model to BertBlocks architecture with optional weight transfer.
+    ModernBERT uses ALiBi positional encodings, GLU feed-forward layers, and supports local attention,
+    which are all supported by BertBlocks.
+
+    Args:
+        pretrained_model_name_or_path (str): HuggingFace model identifier or local path to a
+            pretrained ModernBERT model (e.g., "modernbert-base", "./path/to/model").
+        load_weights (bool, optional): Whether to transfer weights from the pretrained ModernBERT model.
+            If True, copies all embeddings, attention, feed-forward, and normalization layer weights.
+            If False, only loads the configuration and initializes a fresh model. Defaults to True.
+        add_pooling_layer (bool, optional): Whether to add a pooling layer that processes the
+            [CLS] token. Useful for sequence-level classification tasks. Defaults to False.
+        attn_implementation (Literal["flash_attention_2", "sdpa", "eager"], optional):
+            Attention implementation backend to use:
+            - "flash_attention_2": Use FlashAttention-2 for faster inference (requires flash-attn package)
+            - "sdpa": Use PyTorch's scaled-dot-product attention (default, recommended for most cases)
+            - "eager": Use manual attention implementation (slower, for compatibility)
+            Defaults to "flash_attention_2".
+
+    Returns:
+        BertBlocksModel: A BertBlocks model with architecture matched to ModernBERT, optionally
+            loaded with pretrained weights.
+
+    Raises:
+        ValueError: If the model config cannot be loaded or if the model type is not ModernBERT.
+        OSError: If the model path does not exist or is not accessible.
+
+    Note:
+        - The weight transfer is exact and lossless; no approximation is used.
+        - All layer parameters (embeddings, QKV projections, GLU layers, norms) are copied directly.
+        - The pooling layer (if added) is initialized with new random weights.
+        - Final normalization layer weights are transferred if included in the model.
+
+    Example:
+        >>> from bertblocks.integration import from_modernbert_model
+        >>> # Load and convert a pretrained ModernBERT model with FlashAttention
+        >>> model = from_modernbert_model("modernbert-base", load_weights=True)
+        >>> # Load with SDPA backend for broader compatibility
+        >>> model = from_modernbert_model("modernbert-base", attn_implementation="sdpa")
+
+    References:
+        - "Smashing Language Barriers with Multilingual Transformers"
+          (https://arxiv.org/abs/2406.07581)
+        - "ModernBERT" (https://github.com/AnswerDotAI/ModernBERT)
+    """
     from transformers import ModernBertModel
 
     bertblocks_config = ModernBertConfig.from_huggingface(
