@@ -91,6 +91,7 @@ def run_eval(
             enable_checkpointing=False,
             enable_model_summary=False,
             enable_progress_bar=True,
+            gradient_clip_val=1.0,
         )
         task = task_cls(
             pretrained_model_name_or_path=pretrained_model_name_or_path,
@@ -100,6 +101,7 @@ def run_eval(
             weight_decay=task_wd,
             train_batch_size=train_batch_size,
             eval_batch_size=eval_batch_size,
+            max_epochs=task_epochs,
         )
         trainer.fit(task)
         metrics = trainer.test(task)
