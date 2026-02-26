@@ -11,21 +11,16 @@ A BertBlocks model consists of three main stages:
 2. **Encoder** -- A stack of transformer blocks
 3. **Head** -- Task-specific output heads (MLM, classification, QA, etc.)
 
-```mermaid
-graph TD
-    Input["Input IDs"]
-    Embedding["<b>Embedding</b><br/>TokenEmbedding<br/>+ TokenTypeEmbedding<br/>+ Positional Encodings"]
-    Block["<b>Encoder Block ×N</b><br/>Attention → Normalization<br/>→ MLP → Normalization"]
-    Head["<b>Task Head</b><br/>MLM | Classification<br/>QA | Diffusion"]
+```{mermaid}
+    graph TD
+        Input["Input IDs"]
+        Embedding["<b>Embedding</b>"]
+        Block["<b>Encoder Block ×N</b>"]
+        Head["<b>Task Head</b>"]
 
-    Input --> Embedding
-    Embedding --> Block
-    Block --> Head
-
-    style Input fill:#f0f0f0
-    style Embedding fill:#e8f4f8
-    style Block fill:#fff4e8
-    style Head fill:#f0e8f8
+        Input --> Embedding
+        Embedding --> Block
+        Block --> Head
 ```
 
 ## Transformer Block
