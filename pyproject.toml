@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "bertblocks"
-version = "0.1.0"
+version = "0.0.1"
 description = "A comprehensive framework for exploring transformer encoders"
 requires-python = ">=3.12"
 license = "MIT"

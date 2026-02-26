@@ -3,6 +3,8 @@
   <br/>
 </div>
 
+> ⚠️ **BertBlocks is currently in alpha!** APIs and features may change. We appreciate feedback and contributions as we work towards a stable release.
+
 ## Overview
 
 **BertBlocks** provides building blocks for exploring transformer encoders. It aims to be a unified, clean, well-documented, and comprehensive collection of components for BERT-like models.
