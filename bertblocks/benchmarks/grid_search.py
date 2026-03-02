@@ -18,14 +18,10 @@ def run_grid_search(
     pretrained_tokenizer_name_or_path: str | None = None,
     max_seq_length: int = 256,
     eval_batch_size: int = 64,
-    # learning_rates: list[float] = (1e-5, 2e-5, 3e-5, 5e-5),
-    learning_rates: list[float] = (1e-5, 3e-5),
-    # weight_decays: list[float] = (0.0, 0.01, 0.1),
-    #train_batch_sizes: list[int] = (16, 32),
-    #max_epochs_list: list[int] = (3, 4, 5),
-    weight_decays: list[float] = (0.0, 00.1),
+    learning_rates: list[float] = (1e-5, 2e-5, 3e-5, 5e-5),
+    weight_decays: list[float] = (0.0, 0.01, 0.1),
     train_batch_sizes: list[int] = (16, 32),
-    max_epochs_list: list[int] = (3,5),
+    max_epochs_list: list[int] = (3, 4, 5),
 ) -> pd.DataFrame:
     """Run hyperparameter grid search over all tasks.
 
