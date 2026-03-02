@@ -1,6 +1,6 @@
 """Small smoke test for grid_search.py using exactly one hyperparameter combination."""
 
-from grid_search import run_grid_search, best_per_task
+from .grid_search import run_grid_search, best_per_task
 
 
 if __name__ == "__main__":
