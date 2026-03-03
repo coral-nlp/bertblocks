@@ -22,6 +22,7 @@ def run_grid_search(
     weight_decays: list[float] = (0.0, 0.01, 0.1),
     train_batch_sizes: list[int] = (16, 32),
     max_epochs_list: list[int] = (3, 4, 5),
+    output_path: str | None = "result.csv",
 ) -> pd.DataFrame:
     """Run hyperparameter grid search over all tasks.
 
@@ -90,6 +91,8 @@ def run_grid_search(
                 )
             del trainer
             del task
+            if output_path is not None:
+                pd.DataFrame(results).to_csv(output_path, index=False)
             pbar.update(1)
     pbar.close()
     return pd.DataFrame(results)
@@ -103,13 +106,27 @@ def best_per_task(df: pd.DataFrame) -> pd.DataFrame:
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="Run benchmark with hyperparameter grid search")
+    parser = argparse.ArgumentParser(
+        description="Run benchmark with hyperparameter grid search",
+        epilog=(
+            "Examples:\n"
+            "  # Run full GLUE benchmark\n"
+            "  python -m bertblocks.benchmarks.grid_search glue bert-base-uncased\n\n"
+            "  # Run on specific tasks only\n"
+            "  python -m bertblocks.benchmarks.grid_search glue bert-base-uncased --task cola mrpc\n\n"
+            "  # Run on a single task with a custom output path\n"
+            "  python -m bertblocks.benchmarks.grid_search glue bert-base-uncased --task sst2 -o sst2_custom.csv"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     parser.add_argument("benchmark", type=str, choices=["glue"], help="Benchmark to run")
     parser.add_argument("model", type=str, help="Name or path of pretrained model")
+    parser.add_argument("--task", nargs="+", default=None, metavar="TASK",
+                        help="Task name(s) to run (e.g. cola mrpc). Defaults to all tasks.")
     parser.add_argument("--tokenizer", "-t", type=str, default=None, help="Tokenizer name or path")
     parser.add_argument("--max_seq_len", "-ms", type=int, default=256, help="Maximum sequence length")
     parser.add_argument("--eval_batch_size", "-be", type=int, default=64, help="Eval batch size")
-    parser.add_argument("--output", "-o", type=str, default=None, help="Output CSV path for all results")
+    parser.add_argument("--output", "-o", type=str, default=None, help="Output CSV path (saved after each iteration)")
 
     args = parser.parse_args()
 
@@ -119,17 +136,31 @@ if __name__ == "__main__":
         case _:
             raise ValueError(f"Unknown benchmark {args.benchmark}")
 
+    if args.task is not None:
+        requested = {t.lower() for t in args.task}
+        task_modules = [m for m in TASK_MODULES if m.task_name in requested]
+        unknown = requested - {m.task_name for m in task_modules}
+        if unknown:
+            parser.error(f"Unknown task(s): {', '.join(sorted(unknown))}")
+    else:
+        task_modules = TASK_MODULES
+
+    if args.output is None and args.task is not None:
+        output_path = "_".join(sorted(requested)) + "_results.csv"
+    else:
+        output_path = args.output
+
     df = run_grid_search(
-        task_modules=TASK_MODULES,
+        task_modules=task_modules,
         pretrained_model_name_or_path=args.model,
         pretrained_tokenizer_name_or_path=args.tokenizer,
         max_seq_length=args.max_seq_len,
         eval_batch_size=args.eval_batch_size,
+        output_path=output_path,
     )
 
     print("\n=== Best per task ===")
     print(best_per_task(df).to_string(index=False))
 
-    if args.output is not None:
-        df.to_csv(args.output, index=False)
-        print(f"\nAll results saved to {args.output}")
+    if output_path is not None:
+        print(f"\nAll results saved to {output_path}")
