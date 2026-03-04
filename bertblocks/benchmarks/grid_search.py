@@ -24,12 +24,13 @@ def run_grid_search(
     weight_decays: list[float] = (0.0, 0.01, 0.1),
     train_batch_sizes: list[int] = (16, 32),
     max_epochs_list: list[int] = (3, 4, 5),
+    seeds: list[int] = (42,),
     output_path: str | None = "result.csv",
 ) -> pd.DataFrame:
     """Run hyperparameter grid search over all tasks.
 
     For each task, trains and evaluates with every combination of the provided
-    hyperparameters. Returns a DataFrame with one row per (task, HP combo).
+    hyperparameters. Returns a DataFrame with one row per (task, HP combo, seed).
 
     Args:
         task_modules: List of TaskModule subclasses to evaluate.
@@ -42,10 +43,11 @@ def run_grid_search(
         weight_decays: Weight decay values to search over.
         train_batch_sizes: Training batch sizes to search over.
         max_epochs_list: Numbers of training epochs to search over.
+        seeds: Random seeds to average over.
 
     Returns:
         DataFrame with columns: Name, Group, Type, Metric, Score,
-        learning_rate, weight_decay, train_batch_size, max_epochs.
+        learning_rate, weight_decay, train_batch_size, max_epochs, seed.
     """
     if pretrained_tokenizer_name_or_path is None:
         pretrained_tokenizer_name_or_path = pretrained_model_name_or_path
@@ -53,56 +55,61 @@ def run_grid_search(
     combos = list(itertools.product(learning_rates, weight_decays, train_batch_sizes, max_epochs_list))
     results = []
 
-    pbar = tqdm(total=len(task_modules) * len(combos))
+    pbar = tqdm(total=len(task_modules) * len(combos) * len(seeds))
     for task_cls in task_modules:
         for lr, wd, bs, epochs in combos:
-            pbar.set_description(f"{task_cls.__name__} lr={lr} wd={wd} bs={bs} ep={epochs}")
-            trainer = L.Trainer(
-                logger=False,
-                max_epochs=epochs,
-                num_sanity_val_steps=0,
-                enable_checkpointing=False,
-                enable_model_summary=False,
-                enable_progress_bar=False,
-            )
-            task = task_cls(
-                pretrained_model_name_or_path=pretrained_model_name_or_path,
-                pretrained_tokenizer_name_or_path=pretrained_tokenizer_name_or_path,
-                max_seq_length=max_seq_length,
-                learning_rate=lr,
-                weight_decay=wd,
-                train_batch_size=bs,
-                eval_batch_size=eval_batch_size,
-                max_epochs=epochs,
-            )
-            trainer.fit(task)
-            metrics = trainer.test(task, verbose=False)
-            for k, v in metrics[0].items():
-                results.append(
-                    {
-                        "Name": task_cls.__name__,
-                        "Group": task.task_group,
-                        "Type": task.task_type,
-                        "Metric": k,
-                        "Score": v,
-                        "learning_rate": lr,
-                        "weight_decay": wd,
-                        "train_batch_size": bs,
-                        "max_epochs": epochs,
-                    }
+            for seed in seeds:
+                pbar.set_description(f"{task_cls.__name__} lr={lr} wd={wd} bs={bs} ep={epochs} seed={seed}")
+                L.seed_everything(seed)
+                trainer = L.Trainer(
+                    logger=False,
+                    max_epochs=epochs,
+                    num_sanity_val_steps=0,
+                    enable_checkpointing=False,
+                    enable_model_summary=False,
+                    enable_progress_bar=False,
                 )
-            del trainer
-            del task
-            if output_path is not None:
-                pd.DataFrame(results).to_csv(output_path, index=False)
-            pbar.update(1)
+                task = task_cls(
+                    pretrained_model_name_or_path=pretrained_model_name_or_path,
+                    pretrained_tokenizer_name_or_path=pretrained_tokenizer_name_or_path,
+                    max_seq_length=max_seq_length,
+                    learning_rate=lr,
+                    weight_decay=wd,
+                    train_batch_size=bs,
+                    eval_batch_size=eval_batch_size,
+                    max_epochs=epochs,
+                )
+                trainer.fit(task)
+                metrics = trainer.test(task, verbose=False)
+                for k, v in metrics[0].items():
+                    results.append(
+                        {
+                            "Name": task_cls.__name__,
+                            "Group": task.task_group,
+                            "Type": task.task_type,
+                            "Metric": k,
+                            "Score": v,
+                            "learning_rate": lr,
+                            "weight_decay": wd,
+                            "train_batch_size": bs,
+                            "max_epochs": epochs,
+                            "seed": seed,
+                        }
+                    )
+                del trainer
+                del task
+                if output_path is not None:
+                    pd.DataFrame(results).to_csv(output_path, index=False)
+                pbar.update(1)
     pbar.close()
     return pd.DataFrame(results)
 
 
 def best_per_task(df: pd.DataFrame) -> pd.DataFrame:
-    """Return the best-scoring row per task."""
-    return df.loc[df.groupby("Name")["Score"].idxmax()].reset_index(drop=True)
+    """Return the best HP combo per task, averaged across seeds."""
+    hp_cols = ["Name", "Group", "Type", "Metric", "learning_rate", "weight_decay", "train_batch_size", "max_epochs"]
+    averaged = df.groupby(hp_cols, as_index=False)["Score"].mean()
+    return averaged.loc[averaged.groupby("Name")["Score"].idxmax()].reset_index(drop=True)
 
 
 if __name__ == "__main__":

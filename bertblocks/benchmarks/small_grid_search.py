@@ -58,6 +58,7 @@ if __name__ == "__main__":
         weight_decays=[1e-6],
         train_batch_sizes=[16, 32],
         max_epochs_list=[5],
+        seeds=[42, 43, 44],
         output_path=output_path,
     )
 
