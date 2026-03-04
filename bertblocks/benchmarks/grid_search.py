@@ -2,6 +2,8 @@
 
 import itertools
 import logging
+import re
+from pathlib import Path
 
 import lightning as L
 import pandas as pd
@@ -145,8 +147,16 @@ if __name__ == "__main__":
     else:
         task_modules = TASK_MODULES
 
-    if args.output is None and args.task is not None:
-        output_path = "_".join(sorted(requested)) + "_results.csv"
+    experiments_dir = Path(__file__).parent.parent / "experiments"
+    experiments_dir.mkdir(exist_ok=True)
+
+    if args.output is None:
+        model_slug = re.sub(r"[^a-zA-Z0-9]+", "_", args.model).strip("_").lower()
+        if args.task is not None:
+            tasks_slug = "_".join(sorted(requested))
+        else:
+            tasks_slug = args.benchmark
+        output_path = str(experiments_dir / f"{model_slug}_{tasks_slug}_results.csv")
     else:
         output_path = args.output
 
