@@ -18,5 +18,8 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 ENV PATH="/app/.venv/bin:$PATH"
 # Copy sources
 ADD . .
+# Install the project itself (skipped above to avoid an extra copy layer)
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --all-groups --extra cu130
 # Entrypoint
-CMD ["python3", "main.py"]
+ENTRYPOINT ["python3", "-m", "bertblocks"]
