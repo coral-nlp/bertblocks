@@ -69,7 +69,9 @@ def _load_dataset(
         Processed dataset ready for training.
     """
     # Load dataset; if we have a special JSON file it might still be a HF dataset, just cached locally
-    if os.path.isdir(dataset_name_or_path) and not os.path.join(dataset_name_or_path, "dataset_info.json"):
+    if os.path.isdir(dataset_name_or_path) and not os.path.exists(
+        os.path.join(dataset_name_or_path, "dataset_info.json")
+    ):
         dataset = load_dataset(
             file_format or "json",
             data_dir=dataset_name_or_path,
