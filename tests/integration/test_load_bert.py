@@ -3,7 +3,7 @@ import torch
 from pytest_dependency import depends
 from transformers import AutoTokenizer, BertModel
 
-from bertblocks.integration import from_bert_model
+from bertblocks.integration import from_huggingface
 
 TEST_MODELS = ["bert-base-uncased", "bert-base-cased", "bert-large-uncased"]
 
@@ -30,7 +30,7 @@ class TestFromBertModel:
     @pytest.fixture(scope="class")
     def bb_model(self, baseline_model):  # type: ignore
         """Instantiate BertBlocks model as fixture."""
-        bb_model = from_bert_model(baseline_model, add_pooling_layer=False).to(self.device)
+        bb_model = from_huggingface(baseline_model, add_pooling_layer=False).to(self.device)
         bb_model.eval()
         yield bb_model
         del bb_model
@@ -200,30 +200,33 @@ class TestFromBertModel:
     @pytest.mark.dependency
     def test_blocks(self, request, baseline_model_name, subtests, seq, hf_model, bb_model):  # type: ignore
         """Test the encoder blocks individually."""
-        depends(
-            request,
-            [
-                f"TestFromBertModel::test_ffwd[{baseline_model_name}]",
-                f"TestFromBertModel::test_attn[{baseline_model_name}]",
-            ],
-        )
+        # depends(
+        #     request,
+        #     [
+        #         f"TestFromBertModel::test_ffwd[{baseline_model_name}]",
+        #         f"TestFromBertModel::test_attn[{baseline_model_name}]",
+        #     ],
+        # )
 
-        from transformers.modeling_attn_mask_utils import _prepare_4d_attention_mask_for_sdpa
+        from transformers.masking_utils import create_bidirectional_mask
 
-        bb_emb = bb_model.embd(seq["input_ids"])
         hf_emb = hf_model.embeddings(seq["input_ids"])
-        attention_mask = _prepare_4d_attention_mask_for_sdpa(
-            seq["attention_mask"], dtype=hf_emb.dtype, tgt_len=seq["input_ids"].shape[1]
+        hf_attention_mask = create_bidirectional_mask(
+            config=bb_model.config, inputs_embeds=hf_emb, attention_mask=seq["attention_mask"]
+        )
+        bb_emb = bb_model.embd(seq["input_ids"])
+        bb_attention_mask = create_bidirectional_mask(
+            config=bb_model.config, inputs_embeds=bb_emb, attention_mask=seq["attention_mask"]
         )
 
         with torch.no_grad():
             for layer_idx in range(len(hf_model.encoder.layer)):
                 with subtests.test(f"layer_{layer_idx}"):
                     torch.testing.assert_close(
-                        hf_model.encoder.layer[layer_idx](hf_emb, attention_mask=attention_mask)[0][
+                        hf_model.encoder.layer[layer_idx](hf_emb, attention_mask=hf_attention_mask)[
                             seq["attention_mask"].bool()
                         ],
-                        bb_model.encd.blocks[layer_idx](bb_emb, attention_mask=attention_mask)[0][
+                        bb_model.encd.blocks[layer_idx](bb_emb, attention_mask=bb_attention_mask)[0][
                             seq["attention_mask"].bool()
                         ],
                     )

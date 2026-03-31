@@ -2,14 +2,15 @@ import pytest
 import torch
 from pytest_dependency import depends
 from transformers import AutoTokenizer, ModernBertConfig, ModernBertModel
+from transformers.masking_utils import create_bidirectional_mask
 
-from bertblocks.integration import from_modernbert_model
+from bertblocks.integration import from_huggingface
 from bertblocks.modeling.padding import pad_output
 
 TEST_MODELS = ["answerdotai/ModernBERT-base", "answerdotai/ModernBERT-large"]
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available but flash-attn depends on it")
+# @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available but flash-attn depends on it")
 @pytest.mark.parametrize("baseline_model", TEST_MODELS, scope="class")
 class TestFromModernBertModel:
     """Test equivalency of Huggingface ModernBERT and loaded BertBlocks implementations."""
@@ -35,7 +36,7 @@ class TestFromModernBertModel:
     @pytest.fixture(scope="class")
     def bb_model(self, baseline_model):  # type: ignore
         """Instantiate bertblocks model as fixture."""
-        bertblocks_model = from_modernbert_model(baseline_model, add_pooling_layer=False).to(self.device)
+        bertblocks_model = from_huggingface(baseline_model, add_pooling_layer=False).to(self.device)
         bertblocks_model.eval()
         yield bertblocks_model
         del bertblocks_model
@@ -53,7 +54,7 @@ class TestFromModernBertModel:
                 "Wow, that's an incredibly fast response!",
             ],
             return_tensors="pt",
-            padding="max_length",
+            padding=True,
         ).to(self.device)
         del tokenizer
 
@@ -156,19 +157,30 @@ class TestFromModernBertModel:
             ],
         )
 
-        from bertblocks.modeling.padding import unpad_input
-
         with torch.no_grad():
-            input_ids, _, cu_seqlens, max_seq_len = unpad_input(seq["input_ids"], seq["attention_mask"])
+            input_ids = seq["input_ids"]
+            attention_mask = seq["attention_mask"]
 
             hf_emb = hf_model.embeddings(input_ids)
+            position_ids = torch.arange(input_ids.shape[1], device=input_ids.device).unsqueeze(0).expand_as(input_ids)
+            hf_attention_mask = create_bidirectional_mask(
+                config=hf_model.config, inputs_embeds=hf_emb, attention_mask=seq["attention_mask"]
+            )
             bb_emb = bb_model.encd.blocks[0].pre_norm_attn(bb_model.embd(input_ids))
+            bb_attention_mask = create_bidirectional_mask(
+                config=bb_model.config, inputs_embeds=bb_emb, attention_mask=seq["attention_mask"]
+            )
 
             for layer_idx in range(len(hf_model.layers)):
+                position_embeddings = hf_model.rotary_emb(hf_emb, position_ids, hf_model.config.layer_types[layer_idx])
                 with subtests.test(f"layer_{layer_idx}"):
                     torch.testing.assert_close(
-                        hf_model.layers[layer_idx].attn(hf_emb, cu_seqlens=cu_seqlens, max_seqlen=max_seq_len)[0],
-                        bb_model.encd.blocks[layer_idx].attn(bb_emb, cu_seqlens=cu_seqlens, max_seq_len=max_seq_len)[0],
+                        hf_model.layers[layer_idx].attn(hf_emb, position_embeddings, hf_attention_mask)[0][
+                            attention_mask.bool()
+                        ],
+                        bb_model.encd.blocks[layer_idx].attn(bb_emb, attention_mask=bb_attention_mask)[0][
+                            attention_mask.bool()
+                        ],
                     )
 
     @pytest.mark.dependency
@@ -225,27 +237,46 @@ class TestFromModernBertModel:
             ],
         )
 
-        from bertblocks.modeling.padding import unpad_input
-
         with torch.no_grad():
-            input_ids, _, cu_seqlens, max_seq_len = unpad_input(seq["input_ids"], seq["attention_mask"])
+            input_ids, attention_mask = seq["input_ids"], seq["attention_mask"]
 
             hf_emb = hf_model.embeddings(input_ids)
             bb_emb = bb_model.encd.blocks[0].pre_norm_attn(bb_model.embd(input_ids))
 
+            hf_emb = hf_model.embeddings(input_ids)
+            position_ids = torch.arange(input_ids.shape[1], device=input_ids.device).unsqueeze(0).expand_as(input_ids)
+            hf_attention_mask = create_bidirectional_mask(
+                config=hf_model.config, inputs_embeds=hf_emb, attention_mask=attention_mask
+            )
+            bb_emb = bb_model.encd.blocks[0].pre_norm_attn(bb_model.embd(input_ids))
+            bb_attention_mask = create_bidirectional_mask(
+                config=bb_model.config, inputs_embeds=bb_emb, attention_mask=attention_mask
+            )
+
             for layer_idx in range(len(hf_model.layers)):
+                position_embeddings = hf_model.rotary_emb(hf_emb, position_ids, hf_model.config.layer_types[layer_idx])
                 with subtests.test(f"layer_{layer_idx}"):
                     if layer_idx == 0:
                         torch.testing.assert_close(
                             hf_model.layers[layer_idx](
-                                hf_model.embeddings.norm(hf_emb), cu_seqlens=cu_seqlens, max_seqlen=max_seq_len
-                            )[0],
-                            bb_model.encd.blocks[layer_idx](bb_emb, cu_seqlens=cu_seqlens, max_seq_len=max_seq_len)[0],
+                                hf_model.embeddings.norm(hf_emb),
+                                attention_mask=hf_attention_mask,
+                                position_embeddings=position_embeddings,
+                            )[attention_mask.bool()],
+                            bb_model.encd.blocks[layer_idx](bb_emb, attention_mask=bb_attention_mask)[0][
+                                attention_mask.bool()
+                            ],
                         )
                     else:
                         torch.testing.assert_close(
-                            hf_model.layers[layer_idx](hf_emb, cu_seqlens=cu_seqlens, max_seqlen=max_seq_len)[0],
-                            bb_model.encd.blocks[layer_idx](bb_emb, cu_seqlens=cu_seqlens, max_seq_len=max_seq_len)[0],
+                            hf_model.layers[layer_idx](
+                                hf_emb,
+                                attention_mask=hf_attention_mask,
+                                position_embeddings=position_embeddings,
+                            )[attention_mask.bool()],
+                            bb_model.encd.blocks[layer_idx](bb_emb, attention_mask=bb_attention_mask)[0][
+                                attention_mask.bool()
+                            ],
                         )
 
     @pytest.mark.dependency
@@ -261,5 +292,4 @@ class TestFromModernBertModel:
         with torch.no_grad():
             hf_out = hf_model.forward(seq["input_ids"], attention_mask=seq["attention_mask"]).last_hidden_state
             bb_out = bb_model.forward(seq["input_ids"], attention_mask=seq["attention_mask"])
-            bb_out = pad_output(bb_out.last_hidden_state, bb_out.indices, hf_out.shape[0], hf_out.shape[1])
-            torch.testing.assert_close(hf_out, bb_out)
+            torch.testing.assert_close(hf_out[seq["attention_mask"].bool()], bb_out[0][seq["attention_mask"].bool()])

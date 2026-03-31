@@ -59,20 +59,21 @@ API reference for the full list.
 
 BertBlocks includes preset configurations that reproduce known architectures:
 
-### BertConfig
+### BertBlocksConfig
 
 Reproduces the original BERT architecture:
 
 ```python
-from bertblocks.config import BertConfig
+from bertblocks.config import BertBlocksConfig
+from transformers import BertConfig
 
-config = BertConfig(vocab_size=30522)
+config = BertBlocksConfig.from_config(BertConfig())
 ```
 
-You can also create a `BertConfig` from a HuggingFace model:
+You can also create a `BertBlocksConfig` from a HuggingFace model:
 
 ```python
-config = BertConfig.from_huggingface("bert-base-uncased")
+config = BertBlocksConfig.from_huggingface("bert-base-uncased")
 ```
 
 ### ModernBertConfig
@@ -80,13 +81,14 @@ config = BertConfig.from_huggingface("bert-base-uncased")
 Reproduces the ModernBERT architecture:
 
 ```python
-from bertblocks.config import ModernBertConfig
+from bertblocks.config import BertBlocksConfig
+from transformers import ModernBertConfig
 
-config = ModernBertConfig(vocab_size=50368)
+config = BertBlocksConfig.from_config(ModernBertConfig(vocab_size=50368))
 ```
 
 ```python
-config = ModernBertConfig.from_huggingface("answerdotai/ModernBERT-base")
+config = BertBlocksConfig.from_huggingface("answerdotai/ModernBERT-base")
 ```
 
 ## Validation
