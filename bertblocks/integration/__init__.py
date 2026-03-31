@@ -3,10 +3,10 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from bertblocks.modeling.model import BertBlocksModel
 
-from transformers import AutoConfig
+from transformers import AutoConfig, BertModel, PreTrainedModel
 
-from .load_bert import from_bert_model
-from .load_modernbert import from_modernbert_model
+from .load_bert import from_bert_model, from_huggingface_bert_model
+from .load_modernbert import from_huggingface_modernbert_model, from_modernbert_model
 
 
 def from_huggingface(
@@ -32,34 +32,43 @@ def from_huggingface(
 
     Raises:
         ValueError: If the model type is not supported or cannot be detected.
-        OSError: If the model path does not exist or is not accessible.
-        ImportError: If required HuggingFace transformers models are not installed.
-
-    Supported Models:
-        - BERT and variants (bert-base-uncased, bert-large-uncased, etc.)
-        - ModernBERT (modernbert-base, modernbert-large, etc.)
-        - Other BERT-like encoder models compatible with HuggingFace
-
-    Example:
-        >>> from bertblocks.integration import from_huggingface
-        >>> # Load BERT model
-        >>> bert_model = from_huggingface("bert-base-uncased")
-        >>> # Load ModernBERT model
-        >>> modernbert_model = from_huggingface("modernbert-base")
-        >>> # Load without transferring weights
-        >>> fresh_model = from_huggingface("bert-base-uncased", load_weights=False)
-
-    References:
-        - HuggingFace Model Hub: https://huggingface.co/models
     """
     config = AutoConfig.from_pretrained(pretrained_model_name_or_path)
     match config.model_type:
+        case "bert":
+            return from_huggingface_bert_model(
+                pretrained_model_name_or_path, load_weights=load_weights, add_pooling_layer=add_pooling_layer
+            )
         case "modernbert":
-            return from_modernbert_model(
+            return from_huggingface_modernbert_model(
                 pretrained_model_name_or_path, load_weights=load_weights, add_pooling_layer=add_pooling_layer
             )
         case _:
-            raise ValueError(f"Unknown model_type {config.model_type}")
+            raise ValueError(f"Unsupported model_type: {config.model_type}. Supported types: bert, modernbert")
 
 
-__all__ = ["from_huggingface"]
+def from_model(model: PreTrainedModel, add_pooling_layer: bool = False) -> "BertBlocksModel":
+    """Instantiate a BertBlocksModel from an already loaded HuggingFace model instance.
+
+    Automatically detects the model type and dispatches to the appropriate conversion function.
+
+    Args:
+        model (PreTrainedModel): An instance of a HuggingFace PreTrainedModel.
+        add_pooling_layer (bool, optional): Whether to add a pooling layer. Defaults to False.
+
+    Returns:
+        BertBlocksModel: A BertBlocks model with architecture and weights matched to the source model.
+
+    Raises:
+        ValueError: If the model type is not supported or cannot be detected.
+    """
+    from transformers import ModernBertModel
+
+    if isinstance(model, BertModel):
+        return from_bert_model(model, add_pooling_layer=add_pooling_layer)
+    if isinstance(model, ModernBertModel):
+        return from_modernbert_model(model, add_pooling_layer=add_pooling_layer)
+    raise ValueError(f"Unsupported model type: {type(model).__name__}. Supported types: BertModel, ModernBertModel")
+
+
+__all__ = ["from_huggingface", "from_model"]

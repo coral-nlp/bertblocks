@@ -1,6 +1,6 @@
 from typing import Any, Literal
 
-from transformers import AutoConfig, PreTrainedConfig
+from transformers import AutoConfig, AutoTokenizer, BertConfig, ModernBertConfig, PreTrainedConfig
 
 NormalizationFunction = Literal["group", "layer", "rms", "deep", "dynamictanh"]
 NormalizationPosition = Literal["pre", "post", "both", "none"]
@@ -434,56 +434,53 @@ class BertBlocksConfig(PreTrainedConfig):
                     f"invalid block_pos_enc_kind: expected one of {valid_block_enc} or None, got {block_pos_enc_kind!r}"
                 )
 
+    @classmethod
+    def from_huggingface_bert(
+        cls,
+        pretrained_model_name_or_path: str,
+        attn_implementation: Literal["flash_attention_2", "sdpa", "eager"] = "sdpa",
+    ) -> "BertBlocksConfig":
+        """Instantiate a BertBlocksConfig from a pretrained HuggingFace BERT config."""
+        orig_config = BertConfig.from_pretrained(pretrained_model_name_or_path)
+        orig_config.name_or_path = pretrained_model_name_or_path
+        config = cls.from_bert_config(orig_config)
+        config._attn_implementation = attn_implementation
+        config._unpadding = attn_implementation == "flash_attention_2"
+        return config
 
-class BertConfig(BertBlocksConfig):
-    """BertBlocksConfig with default arguments applied for Bert architecture."""
+    @classmethod
+    def from_bert_config(cls, orig_config: BertConfig) -> "BertBlocksConfig":
+        """Instantiate a BertBlocksConfig from a HuggingFace BERT config object."""
+        if not hasattr(orig_config, "mask_token_id") or orig_config.mask_token_id is None:
+            tok = AutoTokenizer.from_pretrained(orig_config.name_or_path)
+            mask_token_id = tok.mask_token_id
+        else:
+            mask_token_id = orig_config.mask_token_id
 
-    model_type = "bert"
+        pos_enc_kind = getattr(orig_config, "position_embedding_type", "absolute")
+        emb_pos_enc_kind = "learned" if pos_enc_kind in ("absolute", "learned") else None
 
-    def __init__(
-        self,
-        vocab_size: int = 28996,
-        max_sequence_length: int = 512,
-        pad_token_id: int = 0,
-        mask_token_id: int = 103,
-        hidden_size: int = 768,
-        num_blocks: int = 12,
-        intermediate_size: int = 3072,
-        num_attention_heads: int = 12,
-        pos_enc_kind: Literal["learned", "absolute"] = "absolute",
-        type_vocab_size: int = 2,
-        initializer_range: float = 0.02,
-        actv_fn: Literal["relu", "silu", "gelu", "leakyrelu", "selu", "logsigmoid", "sigmoid", "prelu"] = "gelu",
-        norm_eps: float = 1e-12,
-        emb_dropout_prob: float = 0.1,
-        attn_dropout_prob: float = 0.1,
-        hidden_dropout_prob: float = 0.1,
-        classifier_dropout_prob: float = 0.1,
-        attn_implementation: Literal["flash_attention_2", "eager", "sdpa"] = "flash_attention_2",
-    ):
-        super().__init__(
-            # User-configurable args
-            vocab_size=vocab_size,
-            max_sequence_length=max_sequence_length,
-            pad_token_id=pad_token_id,
+        return cls(
+            vocab_size=orig_config.vocab_size,
+            max_sequence_length=orig_config.max_position_embeddings,
+            pad_token_id=orig_config.pad_token_id,
             mask_token_id=mask_token_id,
-            hidden_size=hidden_size,
-            num_blocks=num_blocks,
-            intermediate_size=intermediate_size,
-            num_attention_heads=num_attention_heads,
-            emb_pos_enc_kind="learned" if pos_enc_kind in ("absolute", "learned") else None,
+            hidden_size=orig_config.hidden_size,
+            num_blocks=orig_config.num_hidden_layers,
+            intermediate_size=orig_config.intermediate_size,
+            num_attention_heads=orig_config.num_attention_heads,
+            emb_pos_enc_kind=emb_pos_enc_kind,
             block_pos_enc_kind=None,
             attention_gate=None,
-            type_vocab_size=type_vocab_size,
-            initializer_range=initializer_range,
-            actv_fn=actv_fn,
-            norm_eps=norm_eps,
-            emb_dropout_prob=emb_dropout_prob or 0.0,
-            attn_dropout_prob=attn_dropout_prob or 0.0,
-            hidden_dropout_prob=hidden_dropout_prob or 0.0,
-            classifier_dropout_prob=classifier_dropout_prob or 0.0,
-            attn_implementation=attn_implementation,
-            # Hardcoded args for architecture compatibility
+            type_vocab_size=orig_config.type_vocab_size,
+            initializer_range=orig_config.initializer_range,
+            actv_fn=orig_config.hidden_act,
+            norm_eps=orig_config.layer_norm_eps,
+            emb_dropout_prob=orig_config.hidden_dropout_prob or 0.0,
+            attn_dropout_prob=orig_config.attention_probs_dropout_prob or 0.0,
+            hidden_dropout_prob=orig_config.hidden_dropout_prob or 0.0,
+            classifier_dropout_prob=orig_config.classifier_dropout or 0.0,
+            # Hardcoded args for BERT architecture compatibility
             residual_first_layer=False,
             add_token_type_emb=True,
             mlp_type="mlp",
@@ -501,128 +498,24 @@ class BertConfig(BertBlocksConfig):
         )
 
     @classmethod
-    def from_huggingface(
+    def from_huggingface_modernbert(
         cls,
         pretrained_model_name_or_path: str,
         attn_implementation: Literal["flash_attention_2", "sdpa", "eager"] = "sdpa",
-    ) -> "BertConfig":
-        """Instantiate an equivalent BertBlocks BertConfig from a pretrained HuggingFace config."""
-        from transformers import BertConfig
-
-        orig_config = BertConfig.from_pretrained(pretrained_model_name_or_path)
-
-        if not hasattr(orig_config, "mask_token_id"):
-            tok = AutoTokenizer.from_pretrained(pretrained_model_name_or_path)
-            mask_token_id = tok.mask_token_id
-        else:
-            mask_token_id = orig_config.mask_token_id
-
-        return cls(
-            vocab_size=orig_config.vocab_size,
-            max_sequence_length=orig_config.max_position_embeddings,
-            pad_token_id=orig_config.pad_token_id,
-            mask_token_id=mask_token_id,
-            hidden_size=orig_config.hidden_size,
-            num_blocks=orig_config.num_hidden_layers,
-            intermediate_size=orig_config.intermediate_size,
-            num_attention_heads=orig_config.num_attention_heads,
-            pos_enc_kind=orig_config.position_embedding_type,
-            type_vocab_size=orig_config.type_vocab_size,
-            initializer_range=orig_config.initializer_range,
-            actv_fn=orig_config.hidden_act,
-            norm_eps=orig_config.layer_norm_eps,
-            emb_dropout_prob=orig_config.hidden_dropout_prob or 0.0,
-            attn_dropout_prob=orig_config.attention_probs_dropout_prob or 0.0,
-            hidden_dropout_prob=orig_config.hidden_dropout_prob or 0.0,
-            classifier_dropout_prob=orig_config.classifier_dropout or 0.0,
-            attn_implementation=attn_implementation,
-        )
-
-
-class ModernBertConfig(BertBlocksConfig):
-    """BertBlocksConfig with default arguments applied for ModernBert architecture."""
-
-    model_type = "modernbert"
-
-    def __init__(
-        self,
-        vocab_size: int,
-        max_sequence_length: int,
-        pad_token_id: int,
-        mask_token_id: int,
-        hidden_size: int,
-        num_blocks: int,
-        intermediate_size: int,
-        num_attention_heads: int,
-        block_pos_enc_kwargs: dict[str, Any],
-        mlp_in_bias: bool,
-        mlp_out_bias: bool,
-        attn_proj_bias: bool,
-        attn_out_bias: bool,
-        local_attention: tuple[int, int],
-        global_attention_every_n_layers: int,
-        initializer_range: float,
-        actv_fn: Literal["relu", "silu", "gelu", "leakyrelu", "selu", "logsigmoid", "sigmoid", "prelu"],
-        norm_eps: float,
-        norm_bias: bool,
-        emb_dropout_prob: float,
-        attn_dropout_prob: float,
-        hidden_dropout_prob: float,
-        classifier_dropout_prob: float,
-        attn_implementation: Literal["flash_attention_2", "eager", "sdpa"] = "flash_attention_2",
-    ):
-        super().__init__(
-            vocab_size=vocab_size,
-            max_sequence_length=max_sequence_length,
-            pad_token_id=pad_token_id,
-            mask_token_id=mask_token_id,
-            hidden_size=hidden_size,
-            num_blocks=num_blocks,
-            intermediate_size=intermediate_size,
-            num_attention_heads=num_attention_heads,
-            block_pos_enc_kwargs=block_pos_enc_kwargs,
-            mlp_in_bias=mlp_in_bias,
-            mlp_out_bias=mlp_out_bias,
-            attn_proj_bias=attn_proj_bias,
-            attn_out_bias=attn_out_bias,
-            local_attention=local_attention,
-            global_attention_every_n_layers=global_attention_every_n_layers,
-            initializer_range=initializer_range,
-            actv_fn=actv_fn,
-            norm_eps=norm_eps,
-            norm_bias=norm_bias,
-            emb_dropout_prob=emb_dropout_prob,
-            attn_dropout_prob=attn_dropout_prob,
-            hidden_dropout_prob=hidden_dropout_prob,
-            classifier_dropout_prob=classifier_dropout_prob,
-            attn_implementation=attn_implementation,
-            # Hard-coded values for architecture compatibility
-            attention_gate=None,
-            residual_first_layer=True,
-            block_pos_enc_kind="rope",
-            add_token_type_emb=False,
-            mlp_type="glu",
-            initializer_kind="trunc_normal",
-            initializer_cutoff_factor=4.0,
-            initializer_gain=1.0,
-            norm_kind="pre",
-            norm_fn="layer",
-            include_final_norm=True,
-            norm_qk=False,
-        )
+    ) -> "BertBlocksConfig":
+        """Instantiate a BertBlocksConfig from a pretrained HuggingFace ModernBERT config."""
+        orig_config = ModernBertConfig.from_pretrained(pretrained_model_name_or_path)
+        orig_config.name_or_path = pretrained_model_name_or_path
+        config = cls.from_modernbert_config(orig_config)
+        config._attn_implementation = attn_implementation
+        config._unpadding = attn_implementation == "flash_attention_2"
+        return config
 
     @classmethod
-    def from_huggingface(
-        cls,
-        pretrained_model_name_or_path: str,
-        attn_implementation: Literal["flash_attention_2", "sdpa", "eager"] = "flash_attention_2",
-    ) -> "ModernBertConfig":
-        """Instantiate an equivalent BertBlocks ModernBertConfig from a pretrained HuggingFace config."""
-        from transformers import ModernBertConfig
-
-        orig_config = ModernBertConfig.from_pretrained(pretrained_model_name_or_path)
-        if not hasattr(orig_config, "mask_token_id"):
-            tok = AutoTokenizer.from_pretrained(pretrained_model_name_or_path)
+    def from_modernbert_config(cls, orig_config: ModernBertConfig) -> "BertBlocksConfig":
+        """Instantiate a BertBlocksConfig from a HuggingFace ModernBERT config object."""
+        if not hasattr(orig_config, "mask_token_id") or orig_config.mask_token_id is None:
+            tok = AutoTokenizer.from_pretrained(orig_config.name_or_path)
             mask_token_id = tok.mask_token_id
         else:
             mask_token_id = orig_config.mask_token_id
@@ -637,8 +530,8 @@ class ModernBertConfig(BertBlocksConfig):
             intermediate_size=orig_config.intermediate_size,
             num_attention_heads=orig_config.num_attention_heads,
             block_pos_enc_kwargs={
-                "base_global": orig_config.global_rope_theta,
-                "base_local": orig_config.local_rope_theta,
+                "base_global": orig_config.rope_parameters["full_attention"]["rope_theta"],
+                "base_local": orig_config.rope_parameters["sliding_attention"]["rope_theta"],
                 "scale": 1,
             },
             mlp_in_bias=orig_config.mlp_bias,
@@ -659,8 +552,56 @@ class ModernBertConfig(BertBlocksConfig):
             attn_dropout_prob=orig_config.attention_dropout or 0.0,
             hidden_dropout_prob=orig_config.mlp_dropout or 0.0,
             classifier_dropout_prob=orig_config.classifier_dropout or 0.0,
-            attn_implementation=attn_implementation,
+            # Hardcoded args for ModernBERT architecture compatibility
+            attention_gate=None,
+            residual_first_layer=True,
+            block_pos_enc_kind="rope",
+            add_token_type_emb=False,
+            mlp_type="glu",
+            initializer_kind="trunc_normal",
+            initializer_cutoff_factor=4.0,
+            initializer_gain=1.0,
+            norm_kind="pre",
+            norm_fn="layer",
+            include_final_norm=True,
+            norm_qk=False,
         )
 
+    @classmethod
+    def from_config(
+        cls,
+        orig_config: PreTrainedConfig,
+    ) -> "BertBlocksConfig":
+        """Instantiate a BertBlocksConfig from any supported HuggingFace config object.
 
-__all__ = ["BertBlocksConfig", "BertConfig", "ModernBertConfig"]
+        Dispatches to the appropriate from_*_config method based on the config type.
+        Supported config types: BertConfig, ModernBertConfig.
+        """
+        if isinstance(orig_config, BertConfig):
+            return cls.from_bert_config(orig_config)
+        if isinstance(orig_config, ModernBertConfig):
+            return cls.from_modernbert_config(orig_config)
+        raise ValueError(
+            f"Unsupported config type: {type(orig_config).__name__}. Supported types: BertConfig, ModernBertConfig"
+        )
+
+    @classmethod
+    def from_huggingface(
+        cls,
+        pretrained_model_name_or_path: str,
+        attn_implementation: Literal["flash_attention_2", "sdpa", "eager"] = "sdpa",
+    ) -> "BertBlocksConfig":
+        """Instantiate a BertBlocksConfig from any supported pretrained HuggingFace model.
+
+        Automatically detects the model type and dispatches to the appropriate method.
+        Supported model types: BERT, ModernBERT.
+        """
+        orig_config = AutoConfig.from_pretrained(pretrained_model_name_or_path)
+        orig_config.name_or_path = pretrained_model_name_or_path
+        config = cls.from_config(orig_config)
+        config._attn_implementation = attn_implementation
+        config._unpadding = attn_implementation == "flash_attention_2"
+        return config
+
+
+__all__ = ["BertBlocksConfig"]

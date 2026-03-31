@@ -10,10 +10,10 @@
 
 ## Preset Configurations
 
-### BertConfig
+### BertBlocksConfig
 
 ```{eval-rst}
-.. autoclass:: bertblocks.config.BertConfig
+.. autoclass:: bertblocks.config.BertBlocksConfig
    :members:
    :show-inheritance:
 ```
