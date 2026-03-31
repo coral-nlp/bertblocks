@@ -13,7 +13,7 @@ license = "MIT"
 # to CUDA 13.0 if they depend on it, as this is what the Dockerfiles' base image expects
 dependencies = [
     "torch==2.10.0",
-    "transformers==4.53.2",
+    "transformers>=5.1.0",
     "pytorch_optimizer>=3.9.0",
     "datasets>=4.0.0",
     "jsonargparse[signatures]>=4.27.7",
