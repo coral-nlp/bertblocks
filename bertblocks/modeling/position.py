@@ -6,7 +6,7 @@ if TYPE_CHECKING:
 
 import torch
 from torch import Tensor, nn
-from transformers.modeling_utils import is_flash_attn_2_available
+from transformers.utils import is_flash_attn_2_available
 
 if is_flash_attn_2_available():
     # We have flash attention, so we can use their kernel with some modifications

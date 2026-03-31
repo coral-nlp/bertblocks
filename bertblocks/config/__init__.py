@@ -1,7 +1,6 @@
 from typing import Any, Literal
 
-from transformers import AutoTokenizer
-from transformers.modeling_utils import PretrainedConfig
+from transformers import AutoConfig, PreTrainedConfig
 
 NormalizationFunction = Literal["group", "layer", "rms", "deep", "dynamictanh"]
 NormalizationPosition = Literal["pre", "post", "both", "none"]
@@ -16,7 +15,7 @@ BlockPositionalEncoding = Literal["alibi", "rope", "learned", "learned_alibi"] |
 AttentionGate = Literal["elementwise", "headwise"]
 
 
-class BertBlocksConfig(PretrainedConfig):
+class BertBlocksConfig(PreTrainedConfig):
     """Configuration class for BertBlocks models.
 
     Attributes:
@@ -134,7 +133,7 @@ class BertBlocksConfig(PretrainedConfig):
             typically 1. For binary classification, 2. For multi-class classification, the
             number of classes. Must be at least 1.
 
-        **kwargs: Additional keyword arguments passed to the parent PretrainedConfig class.
+        **kwargs: Additional keyword arguments passed to the parent PreTrainedConfig class.
 
     """
 
