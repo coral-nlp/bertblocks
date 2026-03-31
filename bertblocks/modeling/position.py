@@ -20,7 +20,11 @@ if is_flash_attn_2_available():
         interleaved: bool = False,
         cu_seqlens: Tensor | None = None,
         max_seqlen: int | None = None,
+        attention_mask: Tensor | None = None,
     ) -> "Tensor":
+        if attention_mask is not None:
+            raise ValueError("flash attention rotary embeddings do not support unpadded inputs with attention masks")
+
         return flash_apply_rotary(
             x,
             cos,
@@ -73,6 +77,7 @@ else:
         interleaved: bool = False,
         cu_seqlens: "Tensor | None" = None,
         max_seqlen: int | None = None,
+        attention_mask: "Tensor | None" = None,
     ) -> "Tensor":
         """Native torch implementation of apply_rotary, for use if flash attention is not available.
 
@@ -83,23 +88,35 @@ else:
             cu_seqlens (Tensor, shape [batch_size + 1,], optional): tensor of cumulative sequence lengths in unpadded
                 data.
             max_seqlen (int, optional): maximum sequence length in batch.
+            attention_mask (Tensor, shape [batch_size, seq_len], optional): attention mask for padded data.
 
         Returns:
             Tensor, shape [batch_size, seq_len, num_heads, head_dim]: input tensor with rotary encoding applied.
         """
-        if cu_seqlens is None:
-            # Padded code path
-            dim = cos.shape[-1] * 2
-            if not interleaved:
-                cos = torch.cat([cos, cos], dim=-1).unsqueeze(-2)  # ... d -> ... 1 (2 d)
-                sin = torch.cat([sin, sin], dim=-1).unsqueeze(-2)  # ... d -> ... 1 (2 d)
-            else:
-                cos = cos.repeat_interleave(2, dim=-1).unsqueeze(-2)  # ... d -> ... 1 (d 2)
-                sin = sin.repeat_interleave(2, dim=-1).unsqueeze(-2)  # ... d -> ... 1 (d 2)
-            return torch.cat([x[..., :dim] * cos + rotate_half(x[..., :dim], interleaved) * sin, x[..., dim:]], dim=-1)
+        if cu_seqlens is not None:
+            total_len = cu_seqlens[-1]
+            position_idcs = torch.arange(total_len, device=x.device)
+            seq_idx = torch.searchsorted(cu_seqlens[1:], position_idcs, right=True)
+            position_idcs = position_idcs - cu_seqlens[:-1][seq_idx]
+        elif attention_mask is not None:
+            position_idcs = torch.arange(x.shape[1], device=x.device)[None].expand(x.shape[0], -1)
         else:
-            # Unpadded path (we will likely have flash attention here?)
-            raise NotImplementedError
+            raise ValueError(
+                "Neither cu_seqlens nor attention_mask provided for apply_rotary. "
+                "One of these must be provided to determine position indices."
+            )
+
+        cos = cos[position_idcs]
+        sin = sin[position_idcs]
+
+        dim = cos.shape[-1] * 2
+        if not interleaved:
+            cos = torch.cat([cos, cos], dim=-1).unsqueeze(-2)  # ... d -> ... 1 (2 d)
+            sin = torch.cat([sin, sin], dim=-1).unsqueeze(-2)  # ... d -> ... 1 (2 d)
+        else:
+            cos = cos.repeat_interleave(2, dim=-1).unsqueeze(-2)  # ... d -> ... 1 (d 2)
+            sin = sin.repeat_interleave(2, dim=-1).unsqueeze(-2)  # ... d -> ... 1 (d 2)
+        return torch.cat([x[..., :dim] * cos + rotate_half(x[..., :dim], interleaved) * sin, x[..., dim:]], dim=-1)
 
 
 class SinusoidalPositionalEncoding(nn.Module):
@@ -294,10 +311,9 @@ class RotaryPositionalEncoding(nn.Module):
         self,
         rope_dim: int,
         head_dim: int,
-        base: float | None = 10_000.0,
-        interleaved: bool | None = False,
+        base: float = 10_000.0,
+        interleaved: bool = False,
         max_seq_len: int = 512,
-        device: "device | str" = "cuda",
     ):
         super().__init__()
 
@@ -306,13 +322,13 @@ class RotaryPositionalEncoding(nn.Module):
 
         self.interleaved = interleaved
 
-        inv_freq = 1.0 / (base ** (torch.arange(0, rope_dim, 2, device=device) / rope_dim))
+        inv_freq = 1.0 / (base ** (torch.arange(0, rope_dim, 2) / rope_dim))
         self.register_buffer("_inv_freq", inv_freq, persistent=False)
 
         self._seq_len_cached = max_seq_len
         self._cos_cached = None
         self._sin_cached = None
-        self._update_cos_sin_cache(max_seq_len, device, torch.float32)
+        self._update_cos_sin_cache(max_seq_len, dtype=torch.float32)
 
     def _update_cos_sin_cache(
         self, seqlen: int, device: "device | str | None" = None, dtype: "dtype | None" = None
@@ -327,8 +343,8 @@ class RotaryPositionalEncoding(nn.Module):
         if (
             seqlen > self._seq_len_cached
             or self._cos_cached is None
-            or self._cos_cached.device != device
-            or self._cos_cached.dtype != dtype
+            or (device is not None and self._cos_cached.device != device)
+            or (dtype is not None and self._cos_cached.dtype != dtype)
             or (self.training and self._cos_cached.is_inference())
         ):
             self._seq_len_cached = seqlen
@@ -345,6 +361,7 @@ class RotaryPositionalEncoding(nn.Module):
         k: "Tensor",
         cu_seqlens: "Tensor | None" = None,
         max_seqlen: int | None = None,
+        attention_mask: "Tensor | None" = None,
     ) -> "tuple[Tensor, Tensor]":
         """Apply rotary positional encoding to query and key tensors.
 
@@ -356,6 +373,8 @@ class RotaryPositionalEncoding(nn.Module):
             cu_seqlens (Tensor, shape [batch_size + 1,], optional): Cumulative sequence lengths if unpadded.
                 Defaults to None.
             max_seqlen (int, optional): Maximum sequence length in batch. Defaults to None.
+            attention_mask (Tensor, shape [batch_size, seq_len], optional): Attention mask for padded data.
+                Defaults to None.
 
         Returns:
             tuple[Tensor, Tensor]: (q, k) with rotary position encoding applied, same shapes as input.
@@ -364,11 +383,11 @@ class RotaryPositionalEncoding(nn.Module):
         if max_seqlen is not None:
             self._update_cos_sin_cache(max_seqlen, device=q.device, dtype=q.dtype)
 
-        q, k = self._apply_rope(q, k, cu_seqlens, max_seqlen)
+        q, k = self._apply_rope(q, k, cu_seqlens, max_seqlen, attention_mask)
 
         return q, k
 
-    def _apply_rope(self, q, k, cu_seqlens, max_seqlen):  # type: ignore
+    def _apply_rope(self, q, k, cu_seqlens, max_seqlen, attention_mask):  # type: ignore
         q = apply_rotary(
             q,
             self._cos_cached,
@@ -376,6 +395,7 @@ class RotaryPositionalEncoding(nn.Module):
             interleaved=self.interleaved,
             cu_seqlens=cu_seqlens,
             max_seqlen=max_seqlen,
+            attention_mask=attention_mask,
         )
         k = apply_rotary(
             k,
@@ -384,6 +404,7 @@ class RotaryPositionalEncoding(nn.Module):
             interleaved=self.interleaved,
             cu_seqlens=cu_seqlens,
             max_seqlen=max_seqlen,
+            attention_mask=attention_mask,
         )
 
         return q, k

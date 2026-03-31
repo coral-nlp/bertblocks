@@ -195,7 +195,7 @@ class Attention(nn.Module):
 
         # Rotary encoding if applicable
         if self._rotary_enc is not None:
-            q, k = self._rotary_enc(q, k, cu_seqlens, max_seq_len)
+            q, k = self._rotary_enc(q, k, cu_seqlens, max_seq_len, attention_mask)
 
         # QK-Norm if applicable
         if self.norm_qk:
