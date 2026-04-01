@@ -1,8 +1,5 @@
 import math
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from torch import device, dtype
+from typing import Self
 
 import torch
 from torch import Tensor, nn
@@ -49,10 +46,10 @@ if is_flash_attn_2_available():
             inplace=False,
             conjugate=True,
         )
-        return dx, None, None, None, None, None, None, None
+        return dx, None, None, None, None, None, None
 
     def apply_rotary_setup_context(ctx, inputs, output):  # type: ignore
-        x, cos, sin, interleaved, cu_seqlens, max_seqlen = inputs
+        _, cos, sin, interleaved, cu_seqlens, max_seqlen, _ = inputs
         ctx.save_for_backward(cos, sin, cu_seqlens)
         ctx.interleaved = interleaved
         ctx.max_seqlen = max_seqlen
@@ -299,7 +296,7 @@ class RotaryPositionalEncoding(nn.Module):
         base (float, optional): frequency base for positional encodings. Defaults to 10_000.0
         interleaved (bool, optional): indicates whether to rotate pairs of even and odd dimensions (True, GPT-J style)
             instead of 1st half and 2nd half (False, GPT-NeoX style). Defaults to False.
-        device (torch.device, optional): device on which to allocate the frequency buffer. Defaults to None (cpu).
+        max_seq_len (int, optional): initial maximum sequence length for the cos/sin cache. Defaults to 512.
 
     References:
         - "RoFormer: Enhanced Transformer with Rotary Position Embedding" (https://arxiv.org/abs/2104.09864)
@@ -323,37 +320,28 @@ class RotaryPositionalEncoding(nn.Module):
         self.interleaved = interleaved
 
         inv_freq = 1.0 / (base ** (torch.arange(0, rope_dim, 2) / rope_dim))
-        self.register_buffer("_inv_freq", inv_freq, persistent=False)
 
-        self._seq_len_cached = max_seq_len
-        self._cos_cached = None
-        self._sin_cached = None
-        self._update_cos_sin_cache(max_seq_len, dtype=torch.float32)
+        t = torch.arange(max_seq_len)
+        freqs = torch.outer(t, inv_freq)
+        cos, sin = torch.cos(freqs), torch.sin(freqs)
 
-    def _update_cos_sin_cache(
-        self, seqlen: int, device: "device | str | None" = None, dtype: "dtype | None" = None
-    ) -> None:
-        """Recompute the sin/cos cache if the device or maximum sequence length changed.
+        self.register_buffer("_cos_cached", cos, persistent=False)
+        self.register_buffer("_sin_cached", sin, persistent=False)
+
+    def to(self, *args, **kwargs) -> Self:
+        """Override `to` to ensure cached cos/sin tensors are moved to the correct device/dtype with the module.
 
         Args:
-            seqlen (int): maximum sequence length to update the buffers to.
-            device (torch.device, optional): device on which to allocate the frequency buffer. Defaults to None.
-            dtype (torch.dtype, optional): type with which to allocate the frequency buffer. Defaults to None.
-        """
-        if (
-            seqlen > self._seq_len_cached
-            or self._cos_cached is None
-            or (device is not None and self._cos_cached.device != device)
-            or (dtype is not None and self._cos_cached.dtype != dtype)
-            or (self.training and self._cos_cached.is_inference())
-        ):
-            self._seq_len_cached = seqlen
-            t = torch.arange(seqlen, device=device)
-            freqs = torch.outer(t, self._inv_freq)
-            cos, sin = torch.cos(freqs), torch.sin(freqs)
+            *args: Positional arguments for `torch.nn.Module.to()`
+            **kwargs: Keyword arguments for `torch.nn.Module.to()`
 
-            self._cos_cached = cos.to(dtype)
-            self._sin_cached = sin.to(dtype)
+        Returns:
+            Self: The module with all parameters and buffers moved to the specified device/dtype.
+        """
+        device, *_ = torch._C._nn._parse_to(*args, **kwargs)
+        self._cos_cached.to(device=device)
+        self._sin_cached.to(device=device)
+        return super().to(*args, **kwargs)
 
     def forward(
         self,
@@ -379,10 +367,6 @@ class RotaryPositionalEncoding(nn.Module):
         Returns:
             tuple[Tensor, Tensor]: (q, k) with rotary position encoding applied, same shapes as input.
         """
-        # TODO: this yields a graph break
-        if max_seqlen is not None:
-            self._update_cos_sin_cache(max_seqlen, device=q.device, dtype=q.dtype)
-
         q, k = self._apply_rope(q, k, cu_seqlens, max_seqlen, attention_mask)
 
         return q, k
