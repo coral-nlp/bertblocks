@@ -62,7 +62,7 @@ class BertBlocksPreTrainedModel(PreTrainedModel):
     config_class = BertBlocksConfig
     base_model_prefix = "model"
     supports_gradient_checkpointing = True
-    _supports_flash_attn_2 = True
+    _supports_flash_attn = True
     _supports_sdpa = True
     _supports_flex_attn = True
     _no_split_modules: ClassVar[list] = ["Encoder", "Attention"]
@@ -1236,9 +1236,9 @@ class BertBlocksForMaskedDiffusion(BertBlocksForMaskedLM, GenerationMixin):
             last_token_indices = seq_lengths - 1
             prefix_mask[torch.arange(batch_size, device=self.device), last_token_indices] = False
             # Ensure attention_mask matches input_ids length
-            assert (
-                prefix_mask.shape[1] == seq_len
-            ), f"attention_mask length {prefix_mask.shape[1]} doesn't match input_ids length {seq_len}"
+            assert prefix_mask.shape[1] == seq_len, (
+                f"attention_mask length {prefix_mask.shape[1]} doesn't match input_ids length {seq_len}"
+            )
         if seq_len < target_length:
             # Extend to target length if needed
             # Pad input_ids with MASK tokens
