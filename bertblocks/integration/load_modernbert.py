@@ -36,23 +36,31 @@ def from_huggingface_modernbert_model(
 
     if load_weights:
         orig_model = ModernBertModel.from_pretrained(pretrained_model_name_or_path)
-        bertblocks_model = from_modernbert_model(orig_model, add_pooling_layer=add_pooling_layer)
+        bertblocks_model = from_modernbert_model(
+            orig_model, add_pooling_layer=add_pooling_layer, attn_implementation=attn_implementation
+        )
 
     return bertblocks_model
 
 
-def from_modernbert_model(orig_model: ModernBertModel, add_pooling_layer: bool = False) -> BertBlocksModel:
+def from_modernbert_model(
+    orig_model: ModernBertModel,
+    add_pooling_layer: bool = False,
+    attn_implementation: Literal["flash_attention_2", "sdpa", "eager"] = "sdpa",
+) -> BertBlocksModel:
     """Instantiate an equivalent BertBlocks model from a HuggingFace ModernBERT model instance.
 
     Args:
         orig_model: An instance of a HuggingFace ModernBertModel.
         add_pooling_layer (bool, optional): Whether to add a pooling layer. Defaults to False.
+        attn_implementation (str, optional): Attention backend. One of "flash_attention_2", "sdpa",
+            or "eager". Defaults to "sdpa".
 
     Returns:
         BertBlocksModel: A BertBlocks model with architecture matched to ModernBERT,
             loaded with pretrained weights.
     """
-    bertblocks_config = BertBlocksConfig.from_config(orig_model.config)
+    bertblocks_config = BertBlocksConfig.from_config(orig_model.config, attn_implementation=attn_implementation)
     bertblocks_model = BertBlocksModel(bertblocks_config, add_pooling_layer=add_pooling_layer)
 
     # Embedding layer
