@@ -48,7 +48,7 @@ if is_flash_attn_2_available():
         return dx, None, None, None, None, None, None
 
     def apply_rotary_setup_context(ctx, inputs, output):  # type: ignore
-        _, cos, sin, interleaved, cu_seqlens, max_seqlen, _ = inputs
+        x, cos, sin, interleaved, cu_seqlens, max_seqlen, attention_mask = inputs
         ctx.save_for_backward(cos, sin, cu_seqlens)
         ctx.interleaved = interleaved
         ctx.max_seqlen = max_seqlen
