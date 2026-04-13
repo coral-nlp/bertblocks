@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
     from bertblocks.modeling.model import BertBlocksModel
@@ -10,7 +10,10 @@ from .load_modernbert import from_huggingface_modernbert_model, from_modernbert_
 
 
 def from_huggingface(
-    pretrained_model_name_or_path: str, load_weights: bool = True, add_pooling_layer: bool = False
+    pretrained_model_name_or_path: str,
+    load_weights: bool = True,
+    add_pooling_layer: bool = False,
+    attn_implementation: Literal["flash_attention_2", "sdpa", "eager"] = "sdpa",
 ) -> "BertBlocksModel":
     """Instantiate an equivalent BertBlocksModel from HuggingFace pretrained models.
 
@@ -25,6 +28,8 @@ def from_huggingface(
             a fresh model with random weights. Defaults to True.
         add_pooling_layer (bool, optional): Whether to add a pooling layer that processes the [CLS] token.
             Useful for sequence-level classification tasks. Defaults to False.
+        attn_implementation (str, optional): Attention backend. One of "flash_attention_2", "sdpa", or
+            "eager". Defaults to "sdpa".
 
     Returns:
         BertBlocksModel: A BertBlocks model with architecture matched to the source HuggingFace model,
@@ -37,17 +42,27 @@ def from_huggingface(
     match config.model_type:
         case "bert":
             return from_huggingface_bert_model(
-                pretrained_model_name_or_path, load_weights=load_weights, add_pooling_layer=add_pooling_layer
+                pretrained_model_name_or_path,
+                load_weights=load_weights,
+                add_pooling_layer=add_pooling_layer,
+                attn_implementation=attn_implementation,
             )
         case "modernbert":
             return from_huggingface_modernbert_model(
-                pretrained_model_name_or_path, load_weights=load_weights, add_pooling_layer=add_pooling_layer
+                pretrained_model_name_or_path,
+                load_weights=load_weights,
+                add_pooling_layer=add_pooling_layer,
+                attn_implementation=attn_implementation,
             )
         case _:
             raise ValueError(f"Unsupported model_type: {config.model_type}. Supported types: bert, modernbert")
 
 
-def from_model(model: PreTrainedModel, add_pooling_layer: bool = False) -> "BertBlocksModel":
+def from_model(
+    model: PreTrainedModel,
+    add_pooling_layer: bool = False,
+    attn_implementation: Literal["flash_attention_2", "sdpa", "eager"] = "sdpa",
+) -> "BertBlocksModel":
     """Instantiate a BertBlocksModel from an already loaded HuggingFace model instance.
 
     Automatically detects the model type and dispatches to the appropriate conversion function.
@@ -55,6 +70,8 @@ def from_model(model: PreTrainedModel, add_pooling_layer: bool = False) -> "Bert
     Args:
         model (PreTrainedModel): An instance of a HuggingFace PreTrainedModel.
         add_pooling_layer (bool, optional): Whether to add a pooling layer. Defaults to False.
+        attn_implementation (str, optional): Attention backend. One of "flash_attention_2", "sdpa", or
+            "eager". Defaults to "sdpa".
 
     Returns:
         BertBlocksModel: A BertBlocks model with architecture and weights matched to the source model.
@@ -65,9 +82,11 @@ def from_model(model: PreTrainedModel, add_pooling_layer: bool = False) -> "Bert
     from transformers import ModernBertModel
 
     if isinstance(model, BertModel):
-        return from_bert_model(model, add_pooling_layer=add_pooling_layer)
+        return from_bert_model(model, add_pooling_layer=add_pooling_layer, attn_implementation=attn_implementation)
     if isinstance(model, ModernBertModel):
-        return from_modernbert_model(model, add_pooling_layer=add_pooling_layer)
+        return from_modernbert_model(
+            model, add_pooling_layer=add_pooling_layer, attn_implementation=attn_implementation
+        )
     raise ValueError(f"Unsupported model type: {type(model).__name__}. Supported types: BertModel, ModernBertModel")
 
 

@@ -1,3 +1,5 @@
+from typing import Literal
+
 import torch
 from transformers import BertModel
 
@@ -6,7 +8,10 @@ from bertblocks.modeling.model import BertBlocksModel
 
 
 def from_huggingface_bert_model(
-    pretrained_model_name_or_path: str, load_weights: bool = True, add_pooling_layer: bool = False
+    pretrained_model_name_or_path: str,
+    load_weights: bool = True,
+    add_pooling_layer: bool = False,
+    attn_implementation: Literal["flash_attention_2", "sdpa", "eager"] = "sdpa",
 ) -> BertBlocksModel:
     """Instantiate an equivalent BertBlocks model from pretrained HuggingFace BERT weights and config.
 
@@ -46,17 +51,25 @@ def from_huggingface_bert_model(
         - "BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding"
           (https://arxiv.org/abs/1810.04805)
     """
-    bertblocks_config = BertBlocksConfig.from_huggingface_bert(pretrained_model_name_or_path)
+    bertblocks_config = BertBlocksConfig.from_huggingface_bert(
+        pretrained_model_name_or_path, attn_implementation=attn_implementation
+    )
     bertblocks_model = BertBlocksModel(bertblocks_config, add_pooling_layer=add_pooling_layer)
 
     if load_weights:
         orig_model = BertModel.from_pretrained(pretrained_model_name_or_path, add_pooling_layer=add_pooling_layer)
-        bertblocks_model = from_bert_model(orig_model, add_pooling_layer=add_pooling_layer)
+        bertblocks_model = from_bert_model(
+            orig_model, add_pooling_layer=add_pooling_layer, attn_implementation=attn_implementation
+        )
 
     return bertblocks_model
 
 
-def from_bert_model(orig_model: BertModel, add_pooling_layer: bool = False) -> BertBlocksModel:
+def from_bert_model(
+    orig_model: BertModel,
+    add_pooling_layer: bool = False,
+    attn_implementation: Literal["flash_attention_2", "sdpa", "eager"] = "sdpa",
+) -> BertBlocksModel:
     """Instantiate an equivalent BertBlocks model from a HuggingFace BERT model instance.
 
     Converts a HuggingFace BERT model to BertBlocks architecture with weight transfer.
@@ -76,7 +89,7 @@ def from_bert_model(orig_model: BertModel, add_pooling_layer: bool = False) -> B
         - "BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding"
           (https://arxiv.org/abs/1810.04805)
     """
-    bertblocks_config = BertBlocksConfig.from_config(orig_model.config)
+    bertblocks_config = BertBlocksConfig.from_config(orig_model.config, attn_implementation=attn_implementation)
     bertblocks_model = BertBlocksModel(bertblocks_config, add_pooling_layer=add_pooling_layer)
 
     # Embedding layer
