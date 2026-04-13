@@ -38,8 +38,9 @@ jobs:
 
       - name: Install dependencies
         run: |
-          # Install the project with docs dependencies
-          uv sync --all-groups --all-extras
+          # Install the project with docs and cpu (non-CUDA) dependencies
+          # Use cpu extra instead of all-extras to avoid conflict with cu130
+          uv sync --all-groups --extra cpu
         env:
           #   Skip CUDA build for flash-attention during docs build
           FLASH_ATTENTION_SKIP_CUDA_BUILD: "TRUE"
