@@ -571,6 +571,7 @@ class BertBlocksConfig(PreTrainedConfig):
     def from_config(
         cls,
         orig_config: PreTrainedConfig,
+        attn_implementation: Literal["flash_attention_2", "sdpa", "eager"] = "sdpa",
     ) -> "BertBlocksConfig":
         """Instantiate a BertBlocksConfig from any supported HuggingFace config object.
 
@@ -578,12 +579,18 @@ class BertBlocksConfig(PreTrainedConfig):
         Supported config types: BertConfig, ModernBertConfig.
         """
         if isinstance(orig_config, BertConfig):
-            return cls.from_bert_config(orig_config)
-        if isinstance(orig_config, ModernBertConfig):
-            return cls.from_modernbert_config(orig_config)
-        raise ValueError(
-            f"Unsupported config type: {type(orig_config).__name__}. Supported types: BertConfig, ModernBertConfig"
-        )
+            config = cls.from_bert_config(orig_config)
+            config._attn_implementation = attn_implementation
+            config._unpadding = attn_implementation == "flash_attention_2"
+        elif isinstance(orig_config, ModernBertConfig):
+            config = cls.from_modernbert_config(orig_config)
+        else:
+            raise ValueError(
+                f"Unsupported config type: {type(orig_config).__name__}. Supported types: BertConfig, ModernBertConfig"
+            )
+        config._attn_implementation = attn_implementation
+        config._unpadding = attn_implementation == "flash_attention_2"
+        return config
 
     @classmethod
     def from_huggingface(
