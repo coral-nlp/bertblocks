@@ -12,7 +12,7 @@ The models are compatible with HuggingFace transformers ecosystem.
 """
 
 from bertblocks.config import BertBlocksConfig
-from bertblocks.integration import from_huggingface
+from bertblocks.integration import from_huggingface, from_model
 from bertblocks.modeling.model import (
     BertBlocksForMaskedDiffusion,
     BertBlocksForMaskedLM,
@@ -65,4 +65,5 @@ __all__ = [
     "BertBlocksPretrainingDataModule",
     "BertBlocksPretrainingModule",
     "from_huggingface",
+    "from_model",
 ]
