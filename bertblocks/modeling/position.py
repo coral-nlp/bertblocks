@@ -19,7 +19,7 @@ if is_flash_attn_2_available():
         max_seqlen: int | None = None,
         attention_mask: Tensor | None = None,
     ) -> "Tensor":
-        if attention_mask is not None:
+        if attention_mask is not None and cu_seqlens is not None:
             raise ValueError("flash attention rotary embeddings do not support unpadded inputs with attention masks")
 
         return flash_apply_rotary(
@@ -85,7 +85,8 @@ else:
             cu_seqlens (Tensor, shape [batch_size + 1,], optional): tensor of cumulative sequence lengths in unpadded
                 data.
             max_seqlen (int, optional): maximum sequence length in batch.
-            attention_mask (Tensor, shape [batch_size, seq_len], optional): attention mask for padded data.
+            attention_mask (Tensor, optional): used as a non-None sentinel to select the padded code path (arange
+                position indices). The actual values are not read; any tensor shape is accepted.
 
         Returns:
             Tensor, shape [batch_size, seq_len, num_heads, head_dim]: input tensor with rotary encoding applied.
