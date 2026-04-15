@@ -35,4 +35,4 @@ jobs:
 
       - name: Run tests
         working-directory: ${{github.workspace}}
-        run: uv run --extra cpu --group test pytest tests
+        run: uv run --extra cpu --group test pytest --small-models tests
