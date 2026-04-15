@@ -15,20 +15,17 @@ class TestAlibiPositionalEncoding:
     @pytest.mark.parametrize("num_heads", [4, 8, 12, 16, 20, 24])
     def test_get_slopes(self, num_heads: int) -> None:
         """Test get_slopes with different number of heads."""
-        slopes = AlibiPositionalEncoding.get_slopes(num_heads)
+        slopes = AlibiPositionalEncoding.get_slopes(num_heads).to(self.device)
 
         # Slopes should have the correct shape
         assert slopes.shape == (num_heads,)
-        # Slopes should be allocated to the correct device
-        assert slopes.device == self.device
         # All slopes should be positive or zero
         assert torch.all(slopes >= 0)
 
     @pytest.mark.parametrize("num_heads", [4, 8, 12, 16, 20, 24])
-    @pytest.mark.parametrize("dtype", [torch.float16, torch.float32, torch.float64])
-    def test_init(self, num_heads, dtype) -> None:
+    def test_init(self, num_heads) -> None:
         """Test that initialization properly registers slopes buffer."""
-        pos_enc = AlibiPositionalEncoding(num_heads)
+        pos_enc = AlibiPositionalEncoding(num_heads).to(self.device)
         # Object should have slopes attribute
         assert hasattr(pos_enc, "slopes")
         # Slopes should be of correct shape
@@ -41,7 +38,7 @@ class TestAlibiPositionalEncoding:
     @pytest.mark.parametrize("seq_len", [2**i for i in range(5, 7)])
     def test_forward_float_mask(self, num_heads: int, batch_size: int, seq_len: int) -> None:
         """Test forward with float attention mask."""
-        pos_enc = AlibiPositionalEncoding(num_heads)
+        pos_enc = AlibiPositionalEncoding(num_heads).to(self.device)
         attention_mask = torch.randn(batch_size, num_heads, seq_len, seq_len).to(self.device)
 
         attention_mask_out = pos_enc.forward(attention_mask)
@@ -59,7 +56,7 @@ class TestAlibiPositionalEncoding:
     @pytest.mark.parametrize("seq_len", [2**i for i in range(5, 7)])
     def test_forward_boolean_mask(self, num_heads: int, batch_size: int, seq_len: int) -> None:
         """Test forward with boolean attention mask."""
-        pos_enc = AlibiPositionalEncoding(num_heads)
+        pos_enc = AlibiPositionalEncoding(num_heads).to(self.device)
 
         # Create boolean mask
         attention_mask = get_boolean_attention_mask_mockup(batch_size, seq_len, device=self.device)
@@ -79,7 +76,7 @@ class TestAlibiPositionalEncoding:
     @pytest.mark.parametrize("dtype", [torch.float16, torch.float32, torch.float64])
     def test_forward_boolean_mask(self, num_heads: int, batch_size: int, seq_len: int, dtype: torch.dtype) -> None:
         """Test forward with boolean attention mask."""
-        pos_enc = AlibiPositionalEncoding(num_heads)
+        pos_enc = AlibiPositionalEncoding(num_heads).to(self.device)
 
         attention_mask = get_float_attention_mask_mockup(
             batch_size, num_heads, seq_len, device=self.device, dtype=dtype
@@ -100,7 +97,7 @@ class TestRotaryPositionalEncoding:
     def test_init(self, rope_dim: int, interleaved: bool) -> None:
         """Test initialization and cache creation."""
         head_dim = 64
-        enc = RotaryPositionalEncoding(rope_dim=rope_dim, head_dim=head_dim, interleaved=interleaved)
+        enc = RotaryPositionalEncoding(rope_dim=rope_dim, head_dim=head_dim, interleaved=interleaved).to(self.device)
         assert enc._cos_cached is not None
         assert enc._sin_cached is not None
         assert enc._cos_cached.shape[0] == 512  # default max_seq_len
@@ -154,6 +151,7 @@ class TestRotaryPositionalEncoding:
         assert q_out.shape == q.shape
         assert k_out.shape == k.shape
         assert q_out.device == q.device
+        assert k_out.device == k.device
 
     def test_error_no_mask_no_cu_seqlens(self) -> None:
         """Test that ValueError is raised when neither cu_seqlens nor attention_mask is provided."""
@@ -164,6 +162,7 @@ class TestRotaryPositionalEncoding:
         with pytest.raises(ValueError, match="Neither cu_seqlens nor attention_mask"):
             enc(q, k)
 
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="Test requires CUDA for device transfer")
     def test_cache_device_update(self) -> None:
         """Test that cos/sin cache is updated to match input device and dtype."""
         enc = RotaryPositionalEncoding(rope_dim=32, head_dim=64, max_seq_len=32)

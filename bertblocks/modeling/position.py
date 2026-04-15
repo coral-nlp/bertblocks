@@ -326,23 +326,8 @@ class RotaryPositionalEncoding(nn.Module):
         freqs = torch.outer(t, inv_freq)
         cos, sin = torch.cos(freqs), torch.sin(freqs)
 
-        self.register_buffer("_cos_cached", cos, persistent=False)
-        self.register_buffer("_sin_cached", sin, persistent=False)
-
-    def to(self, *args, **kwargs) -> Self:
-        """Override `to` to ensure cached cos/sin tensors are moved to the correct device/dtype with the module.
-
-        Args:
-            *args: Positional arguments for `torch.nn.Module.to()`
-            **kwargs: Keyword arguments for `torch.nn.Module.to()`
-
-        Returns:
-            Self: The module with all parameters and buffers moved to the specified device/dtype.
-        """
-        device, *_ = torch._C._nn._parse_to(*args, **kwargs)
-        self._cos_cached.to(device=device)
-        self._sin_cached.to(device=device)
-        return super().to(*args, **kwargs)
+        self.register_buffer("_cos_cached", cos, persistent=True)
+        self.register_buffer("_sin_cached", sin, persistent=True)
 
     def forward(
         self,
