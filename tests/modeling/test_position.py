@@ -13,17 +13,14 @@ class TestAlibiPositionalEncoding:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     @pytest.mark.parametrize("num_heads", [4, 8, 12, 16, 20, 24])
-    @pytest.mark.parametrize("dtype", [torch.float16, torch.float32, torch.float64])
-    def test_get_slopes(self, num_heads: int, dtype: torch.dtype) -> None:
-        """Test get_slopes with different number of heads and dtypes."""
-        slopes = AlibiPositionalEncoding.get_slopes(num_heads, device=self.device, dtype=dtype)
+    def test_get_slopes(self, num_heads: int) -> None:
+        """Test get_slopes with different number of heads."""
+        slopes = AlibiPositionalEncoding.get_slopes(num_heads)
 
         # Slopes should have the correct shape
         assert slopes.shape == (num_heads,)
         # Slopes should be allocated to the correct device
         assert slopes.device == self.device
-        # Slopes should be of correct datatype
-        assert slopes.dtype == dtype
         # All slopes should be positive or zero
         assert torch.all(slopes >= 0)
 
@@ -31,7 +28,7 @@ class TestAlibiPositionalEncoding:
     @pytest.mark.parametrize("dtype", [torch.float16, torch.float32, torch.float64])
     def test_init(self, num_heads, dtype) -> None:
         """Test that initialization properly registers slopes buffer."""
-        pos_enc = AlibiPositionalEncoding(num_heads, device=self.device)
+        pos_enc = AlibiPositionalEncoding(num_heads)
         # Object should have slopes attribute
         assert hasattr(pos_enc, "slopes")
         # Slopes should be of correct shape
@@ -44,7 +41,7 @@ class TestAlibiPositionalEncoding:
     @pytest.mark.parametrize("seq_len", [2**i for i in range(5, 7)])
     def test_forward_float_mask(self, num_heads: int, batch_size: int, seq_len: int) -> None:
         """Test forward with float attention mask."""
-        pos_enc = AlibiPositionalEncoding(num_heads, device=self.device)
+        pos_enc = AlibiPositionalEncoding(num_heads)
         attention_mask = torch.randn(batch_size, num_heads, seq_len, seq_len).to(self.device)
 
         attention_mask_out = pos_enc.forward(attention_mask)
@@ -62,7 +59,7 @@ class TestAlibiPositionalEncoding:
     @pytest.mark.parametrize("seq_len", [2**i for i in range(5, 7)])
     def test_forward_boolean_mask(self, num_heads: int, batch_size: int, seq_len: int) -> None:
         """Test forward with boolean attention mask."""
-        pos_enc = AlibiPositionalEncoding(num_heads, device=self.device)
+        pos_enc = AlibiPositionalEncoding(num_heads)
 
         # Create boolean mask
         attention_mask = get_boolean_attention_mask_mockup(batch_size, seq_len, device=self.device)
@@ -82,7 +79,7 @@ class TestAlibiPositionalEncoding:
     @pytest.mark.parametrize("dtype", [torch.float16, torch.float32, torch.float64])
     def test_forward_boolean_mask(self, num_heads: int, batch_size: int, seq_len: int, dtype: torch.dtype) -> None:
         """Test forward with boolean attention mask."""
-        pos_enc = AlibiPositionalEncoding(num_heads, device=self.device)
+        pos_enc = AlibiPositionalEncoding(num_heads)
 
         attention_mask = get_float_attention_mask_mockup(
             batch_size, num_heads, seq_len, device=self.device, dtype=dtype
