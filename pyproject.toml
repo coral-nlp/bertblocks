@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "bertblocks"
 version = "0.0.1"
 description = "A comprehensive framework for exploring transformer encoders"
-requires-python = ">=3.12"
+requires-python = ">=3.10,<3.14"
 license = "MIT"
 # Dependencies that alway depend on CUDA are listed as optional, install with --extra cu130
 # Torch is always installed, selecting the backend based on platform; all packages are pinned
