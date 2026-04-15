@@ -67,7 +67,7 @@ Reproduces the original BERT architecture:
 from bertblocks.config import BertBlocksConfig
 from transformers import BertConfig
 
-config = BertBlocksConfig.from_config(BertConfig())
+config = BertBlocksConfig.from_config(BertConfig.from_pretrained("bert-base-uncased"))
 ```
 
 You can also create a `BertBlocksConfig` from a HuggingFace model:
@@ -84,7 +84,7 @@ Reproduces the ModernBERT architecture:
 from bertblocks.config import BertBlocksConfig
 from transformers import ModernBertConfig
 
-config = BertBlocksConfig.from_config(ModernBertConfig(vocab_size=50368))
+config = BertBlocksConfig.from_config(ModernBertConfig.from_pretrained("answerdotai/ModernBERT-base"))
 ```
 
 ```python

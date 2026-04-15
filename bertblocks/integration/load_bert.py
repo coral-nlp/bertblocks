@@ -51,18 +51,14 @@ def from_huggingface_bert_model(
         - "BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding"
           (https://arxiv.org/abs/1810.04805)
     """
+    if load_weights:
+        orig_model = BertModel.from_pretrained(pretrained_model_name_or_path, add_pooling_layer=add_pooling_layer)
+        return from_bert_model(orig_model, add_pooling_layer=add_pooling_layer, attn_implementation=attn_implementation)
+
     bertblocks_config = BertBlocksConfig.from_huggingface_bert(
         pretrained_model_name_or_path, attn_implementation=attn_implementation
     )
-    bertblocks_model = BertBlocksModel(bertblocks_config, add_pooling_layer=add_pooling_layer)
-
-    if load_weights:
-        orig_model = BertModel.from_pretrained(pretrained_model_name_or_path, add_pooling_layer=add_pooling_layer)
-        bertblocks_model = from_bert_model(
-            orig_model, add_pooling_layer=add_pooling_layer, attn_implementation=attn_implementation
-        )
-
-    return bertblocks_model
+    return BertBlocksModel(bertblocks_config, add_pooling_layer=add_pooling_layer)
 
 
 def from_bert_model(
