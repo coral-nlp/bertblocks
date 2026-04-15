@@ -175,7 +175,7 @@ class TestFromBertModel:
     @pytest.mark.dependency
     def test_attn(self, request, baseline_model_name, subtests, seq, hf_model, bb_model):  # type: ignore
         """Test the attention mechanism individually."""
-        # depends(request, [f"TestFromBertModel::test_embedding[{baseline_model_name}]"])
+        depends(request, [f"TestFromBertModel::test_embedding[{baseline_model_name}]"])
 
         from transformers.modeling_attn_mask_utils import _prepare_4d_attention_mask_for_sdpa
 
@@ -200,19 +200,19 @@ class TestFromBertModel:
     @pytest.mark.dependency
     def test_blocks(self, request, baseline_model_name, subtests, seq, hf_model, bb_model):  # type: ignore
         """Test the encoder blocks individually."""
-        # depends(
-        #     request,
-        #     [
-        #         f"TestFromBertModel::test_ffwd[{baseline_model_name}]",
-        #         f"TestFromBertModel::test_attn[{baseline_model_name}]",
-        #     ],
-        # )
+        depends(
+            request,
+            [
+                f"TestFromBertModel::test_ffwd[{baseline_model_name}]",
+                f"TestFromBertModel::test_attn[{baseline_model_name}]",
+            ],
+        )
 
         from transformers.masking_utils import create_bidirectional_mask
 
         hf_emb = hf_model.embeddings(seq["input_ids"])
         hf_attention_mask = create_bidirectional_mask(
-            config=bb_model.config, inputs_embeds=hf_emb, attention_mask=seq["attention_mask"]
+            config=hf_model.config, inputs_embeds=hf_emb, attention_mask=seq["attention_mask"]
         )
         bb_emb = bb_model.embd(seq["input_ids"])
         bb_attention_mask = create_bidirectional_mask(
