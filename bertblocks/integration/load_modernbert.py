@@ -29,18 +29,16 @@ def from_huggingface_modernbert_model(
     """
     from transformers import ModernBertModel
 
-    bertblocks_config = BertBlocksConfig.from_huggingface_modernbert(
-        pretrained_model_name_or_path, attn_implementation=attn_implementation
-    )
-    bertblocks_model = BertBlocksModel(bertblocks_config, add_pooling_layer=add_pooling_layer)
-
     if load_weights:
         orig_model = ModernBertModel.from_pretrained(pretrained_model_name_or_path)
-        bertblocks_model = from_modernbert_model(
+        return from_modernbert_model(
             orig_model, add_pooling_layer=add_pooling_layer, attn_implementation=attn_implementation
         )
 
-    return bertblocks_model
+    bertblocks_config = BertBlocksConfig.from_huggingface_modernbert(
+        pretrained_model_name_or_path, attn_implementation=attn_implementation
+    )
+    return BertBlocksModel(bertblocks_config, add_pooling_layer=add_pooling_layer)
 
 
 def from_modernbert_model(
@@ -97,8 +95,8 @@ def from_modernbert_model(
         if bertblocks_config.norm_bias:
             bertblocks_model.encd.blocks[i].pre_norm_ffwd.bias.data.copy_(orig_model.layers[i].mlp_norm.bias.data)
 
-        bertblocks_model.norm.weight.data.copy_(orig_model.final_norm.weight.data)
-        if bertblocks_config.norm_bias:
-            bertblocks_model.norm.bias.data.copy_(orig_model.final_norm.bias.data)
+    bertblocks_model.norm.weight.data.copy_(orig_model.final_norm.weight.data)
+    if bertblocks_config.norm_bias:
+        bertblocks_model.norm.bias.data.copy_(orig_model.final_norm.bias.data)
 
     return bertblocks_model
