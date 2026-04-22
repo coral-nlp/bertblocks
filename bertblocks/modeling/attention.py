@@ -52,12 +52,12 @@ class Attention(nn.Module):
         self.head_dim = self.hidden_size // self.num_heads
         self.max_seq_len = config.max_sequence_length
         self.dropout_p = config.attn_dropout_prob
-        if config.global_attention_every_n_layers != 0:
-            self.local_attention = (
-                config.local_attention if layer_id % config.global_attention_every_n_layers != 0 else (-1, -1)
-            )
+        if config.global_attention_every_n_layers == 0:
+            self.local_attention = config.local_attention
         else:
-            self.local_attention = (-1, -1)
+            self.local_attention = (
+                (-1, -1) if layer_id % config.global_attention_every_n_layers == 0 else config.local_attention
+            )
         self.deterministic = True
         # Layers
         self.norm_qk = config.norm_qk

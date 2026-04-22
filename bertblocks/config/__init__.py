@@ -79,7 +79,8 @@ class BertBlocksConfig(PreTrainedConfig):
         attn_proj_bias: Whether to include bias terms in the qkv projection of attention layers.
         attn_out_bias: Whether to include bias terms in the output projection of attention layers.
         local_attention: Whether to include local attention mechanism. Default (-1, -1) means global attention.
-        global_attention_every_n_layers: The layer step size for global attention.
+        global_attention_every_n_layers: The layer step size for global attention. Set to 0 to disable global attention.
+            Set to 1 for global attention in every layer. Set to 2 for global attention in every other layer, etc.
         initializer_kind: The initialization method for weights. Determines the type of
             distribution random weights are sampled from for initialization.
             Defaults to a truncated normal distribution.
@@ -148,7 +149,7 @@ class BertBlocksConfig(PreTrainedConfig):
         num_blocks: int = 12,
         attn_implementation: AttentionBackend | None = None,
         local_attention: tuple[int, int] = (-1, -1),
-        global_attention_every_n_layers: int = 0,
+        global_attention_every_n_layers: int = 1,
         initializer_kind: Initializer = "trunc_normal",
         initializer_range: float = 0.02,
         initializer_cutoff_factor: float = 3.0,
