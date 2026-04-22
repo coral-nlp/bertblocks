@@ -308,15 +308,6 @@ class BertBlocksModel(BertBlocksPreTrainedModel):
             if self.config.block_pos_enc_kind == "alibi" and self.alibi is not None:
                 attention_mask = self.alibi(attention_mask)
 
-            if self.local_attention != (-1, -1) and self.local_attention[0] > 0:
-                window_size = self.local_attention[0]
-                pos = torch.arange(input_ids.shape[1], device=input_ids.device)
-                local_mask = (pos.unsqueeze(0) - pos.unsqueeze(1)).abs() <= window_size
-                if attention_mask.dtype == torch.bool:
-                    attention_mask = attention_mask & local_mask
-                else:
-                    attention_mask = attention_mask.masked_fill(~local_mask, -float("inf"))
-
         x, pooler_output, hidden_states, attentions = self._forward(
             input_ids,
             attention_mask,
