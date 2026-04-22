@@ -40,7 +40,7 @@ model:
       attn_dropout_prob: 0.1
       classifier_dropout: 0.0
       emb_dropout_prob: 0.1
-      global_attention_every_n_layers: 0
+      global_attention_every_n_layers: 1
       hidden_dropout_prob: 0.1
       pad_token_id: 0
       head_type: "proj"
