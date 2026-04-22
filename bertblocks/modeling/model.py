@@ -36,7 +36,7 @@ from bertblocks.modeling.position import AlibiPositionalEncoding
 
 
 @dataclass
-class MaybeUnpaddedBaseModelOutput(BaseModelOutput):
+class UnpaddedBaseModelOutput(BaseModelOutput):
     cu_seqlens: torch.FloatTensor | None = None
     indices: torch.FloatTensor | None = None
     seq_len: int | None = None
@@ -44,7 +44,7 @@ class MaybeUnpaddedBaseModelOutput(BaseModelOutput):
 
 
 @dataclass
-class MaybeUnpaddedBaseModelOutputWithPooling(BaseModelOutputWithPooling):
+class UnpaddedBaseModelOutputWithPooling(BaseModelOutputWithPooling):
     cu_seqlens: torch.FloatTensor | None = None
     indices: torch.FloatTensor | None = None
     seq_len: int | None = None
@@ -165,6 +165,42 @@ class BertBlocksPreTrainedModel(PreTrainedModel):
         if hasattr(module, "gradient_checkpointing"):
             module.gradient_checkpointing = value
 
+    def pad_output(
+        self, output: UnpaddedBaseModelOutput | UnpaddedBaseModelOutputWithPooling
+    ) -> BaseModelOutput | BaseModelOutputWithPooling:
+        indices = output.indices
+        seq_len = output.seq_len or 0
+        batch_size = output.batch_size or 0
+
+        if indices is None:
+            return output
+
+        if isinstance(output, BaseModelOutputWithPooling):
+            return BaseModelOutputWithPooling(
+                last_hidden_state=pad_output(
+                    output.last_hidden_state, indices, batch_size, seq_len, self.model.pad_token_id
+                ),
+                pooler_output=output.pooler_output,
+                hidden_states=[
+                    pad_output(h, indices, batch_size, seq_len, self.pad_token_id) for h in output.hidden_states
+                ]
+                if output.hidden_states is not None
+                else None,
+                attentions=output.attentions,
+            )
+        else:
+            return BaseModelOutput(
+                last_hidden_state=pad_output(
+                    output.last_hidden_state, indices, batch_size, seq_len, self.model.pad_token_id
+                ),
+                hidden_states=[
+                    pad_output(h, indices, batch_size, seq_len, self.pad_token_id) for h in output.hidden_states
+                ]
+                if output.hidden_states is not None
+                else None,
+                attentions=output.attentions,
+            )
+
 
 class BertBlocksModel(BertBlocksPreTrainedModel):
     """Core BertBlocks model for encoding sequences.
@@ -267,7 +303,8 @@ class BertBlocksModel(BertBlocksPreTrainedModel):
         token_type_ids: "torch.Tensor | None" = None,
         output_attentions: "bool" = False,
         output_hidden_states: "bool" = False,
-    ) -> "MaybeUnpaddedBaseModelOutput | MaybeUnpaddedBaseModelOutputWithPooling":
+        pad_outputs: "bool" = True,
+    ) -> "UnpaddedBaseModelOutput | UnpaddedBaseModelOutputWithPooling | BaseModelOutput | BaseModelOutputWithPooling":
         """Forward pass of the BertBlocks model.
 
         Args:
@@ -278,6 +315,7 @@ class BertBlocksModel(BertBlocksPreTrainedModel):
                 of tokens. Defaults to None.
             output_attentions: Whether to return attention weights from all layers. Defaults to None.
             output_hidden_states: Whether to return hidden states from all layers. Defaults to False.
+            pad_outputs: Whether to pad outputs if model is in unpadding mode. Defaults to True.
 
         Returns:
             BaseModelOutput or BaseModelOutputWithPooling containing:
@@ -327,27 +365,25 @@ class BertBlocksModel(BertBlocksPreTrainedModel):
             output_hidden_states,
         )
 
+        outputs: dict[str, Any] = {"last_hidden_state": x}
         if pooler_output is not None:
-            return MaybeUnpaddedBaseModelOutputWithPooling(
-                last_hidden_state=x,
-                pooler_output=pooler_output,
-                hidden_states=hidden_states if output_hidden_states else None,
-                attentions=attentions if output_attentions else None,
-                cu_seqlens=cu_seqlens,
-                indices=indices,
-                seq_len=seq_len,
-                batch_size=batch_size,
-            )
+            outputs["pooler_output"] = pooler_output
+        if output_hidden_states:
+            outputs["hidden_states"] = hidden_states
+        if output_attentions:
+            outputs["attentions"] = attentions
+
+        if self.unpadding:
+            output_cls = UnpaddedBaseModelOutputWithPooling if pooler_output is not None else UnpaddedBaseModelOutput
+            outputs.update({"cu_seqlens": cu_seqlens, "indices": indices, "seq_len": seq_len, "batch_size": batch_size})
         else:
-            return MaybeUnpaddedBaseModelOutput(
-                last_hidden_state=x,
-                hidden_states=hidden_states if output_hidden_states else None,
-                attentions=attentions if output_attentions else None,
-                cu_seqlens=cu_seqlens,
-                indices=indices,
-                seq_len=seq_len,
-                batch_size=batch_size,
-            )
+            output_cls = BaseModelOutputWithPooling if pooler_output is not None else BaseModelOutput
+
+        output = output_cls(**outputs)
+        if pad_outputs and isinstance(output, (UnpaddedBaseModelOutput, UnpaddedBaseModelOutputWithPooling)):
+            output = self.pad_output(output)
+
+        return output
 
 
 class BertBlocksForTasksBase(BertBlocksPreTrainedModel):
@@ -366,42 +402,6 @@ class BertBlocksForTasksBase(BertBlocksPreTrainedModel):
         super().__init__(config, *args, **kwargs)
         self.model = BertBlocksModel(config)
         self.head = get_prediction_head(config)
-
-    def pad_output(
-        self, output: MaybeUnpaddedBaseModelOutput | MaybeUnpaddedBaseModelOutputWithPooling
-    ) -> BaseModelOutput | BaseModelOutputWithPooling:
-        indices = output.indices
-        seq_len = output.seq_len or 0
-        batch_size = output.batch_size or 0
-
-        if indices is None:
-            return output
-
-        if isinstance(output, BaseModelOutputWithPooling):
-            return BaseModelOutputWithPooling(
-                last_hidden_state=pad_output(
-                    output.last_hidden_state, indices, batch_size, seq_len, self.model.pad_token_id
-                ),
-                pooler_output=output.pooler_output,
-                hidden_states=[
-                    pad_output(h, indices, batch_size, seq_len, self.pad_token_id) for h in output.hidden_states
-                ]
-                if output.hidden_states is not None
-                else None,
-                attentions=output.attentions,
-            )
-        else:
-            return BaseModelOutput(
-                last_hidden_state=pad_output(
-                    output.last_hidden_state, indices, batch_size, seq_len, self.model.pad_token_id
-                ),
-                hidden_states=[
-                    pad_output(h, indices, batch_size, seq_len, self.pad_token_id) for h in output.hidden_states
-                ]
-                if output.hidden_states is not None
-                else None,
-                attentions=output.attentions,
-            )
 
     def compute_loss(
         self,
@@ -507,21 +507,24 @@ class BertBlocksForMaskedLM(BertBlocksPreTrainedModel):
                 - `attentions`: Attention weights from all layers if requested
 
         """
-        output: MaybeUnpaddedBaseModelOutput = self.model(
+        output = self.model(
             input_ids,
             attention_mask=attention_mask,
             token_type_ids=token_type_ids,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
+            pad_outputs=False,
         )
         logits = self.decoder(self.head(output.last_hidden_state))
 
         loss = None
         if labels is not None:
-            labels = labels.flatten()[output.indices] if output.indices is not None else labels.flatten()
+            labels = labels.flatten()
+            if isinstance(output, UnpaddedBaseModelOutput) and output.indices is not None:
+                labels = labels[output.indices]
             loss = self.loss_fn(logits.view(-1, self.vocab_size), labels)
 
-        if output.indices is not None:
+        if isinstance(output, UnpaddedBaseModelOutput) and output.indices is not None:
             indices = output.indices
             seq_len = output.seq_len or 0
             batch_size = output.batch_size or 0  # Just to satisfy mypy, this will never trigger in practice
@@ -529,19 +532,18 @@ class BertBlocksForMaskedLM(BertBlocksPreTrainedModel):
                 loss=loss,
                 logits=pad_output(logits, indices, batch_size, seq_len, -torch.inf),
                 hidden_states=[
-                    pad_output(h, indices, batch_size, seq_len, self.pad_token_id) for h in output.hidden_states
+                    pad_output(h, indices, batch_size, seq_len, self.model.pad_token_id) for h in output.hidden_states
                 ]
                 if output.hidden_states is not None
                 else None,
                 attentions=output.attentions,
             )
-        else:
-            return MaskedLMOutput(
-                loss=loss,
-                logits=logits,
-                hidden_states=output.hidden_states,
-                attentions=output.attentions,
-            )
+        return MaskedLMOutput(
+            loss=loss,
+            logits=logits,
+            hidden_states=output.hidden_states,
+            attentions=output.attentions,
+        )
 
 
 class BertBlocksForEnhancedMaskedLM(BertBlocksForMaskedLM):
@@ -609,7 +611,7 @@ class BertBlocksForEnhancedMaskedLM(BertBlocksForMaskedLM):
                 - `attentions`: Attention weights from all layers if requested
 
         """
-        output: MaybeUnpaddedBaseModelOutput = self.model(
+        output = self.model(
             input_ids,
             attention_mask=attention_mask,
             token_type_ids=token_type_ids,
@@ -621,30 +623,14 @@ class BertBlocksForEnhancedMaskedLM(BertBlocksForMaskedLM):
 
         loss = None
         if labels is not None:
-            labels = labels.flatten()[output.indices] if output.indices is not None else labels.flatten()
-            loss = self.loss_fn(logits.view(-1, self.vocab_size), labels)
+            loss = self.loss_fn(logits.view(-1, self.vocab_size), labels.flatten())
 
-        if output.indices is not None:
-            indices = output.indices
-            seq_len = output.seq_len or 0
-            batch_size = output.batch_size or 0
-            return MaskedLMOutput(
-                loss=loss,
-                logits=pad_output(logits, indices, batch_size, seq_len, -torch.inf),
-                hidden_states=[
-                    pad_output(h, indices, batch_size, seq_len, self.pad_token_id) for h in output.hidden_states
-                ]
-                if output.hidden_states is not None
-                else None,
-                attentions=output.attentions,
-            )
-        else:
-            return MaskedLMOutput(
-                loss=loss,
-                logits=logits,
-                hidden_states=output.hidden_states,
-                attentions=output.attentions,
-            )
+        return MaskedLMOutput(
+            loss=loss,
+            logits=logits,
+            hidden_states=output.hidden_states,
+            attentions=output.attentions,
+        )
 
 
 class BertBlocksForSequenceClassification(BertBlocksForTasksBase):
@@ -709,18 +695,33 @@ class BertBlocksForSequenceClassification(BertBlocksForTasksBase):
             token_type_ids=token_type_ids,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
+            pad_outputs=False,
         )
-        output = self.pad_output(output)
 
-        cls_features = output.last_hidden_state[:, 0, :]  # Regular CLS token extraction
+        if isinstance(output, UnpaddedBaseModelOutput) and output.cu_seqlens is not None:
+            # CLS token is the first token of each sequence; in the unpadded tensor its
+            # position is given by the sequence start indices: cu_seqlens[:-1].
+            cls_indices = output.cu_seqlens[:-1].long()
+            cls_features = output.last_hidden_state[cls_indices]
+            hidden_states = (
+                [
+                    pad_output(h, output.indices, output.batch_size or 0, output.seq_len or 0, self.model.pad_token_id)
+                    for h in output.hidden_states
+                ]
+                if output.hidden_states is not None
+                else None
+            )
+        else:
+            cls_features = output.last_hidden_state[:, 0, :]  # Regular CLS token extraction
+            hidden_states = output.hidden_states
+
         logits = self.classifier(self.head(cls_features))
-
         loss = self.compute_loss(logits, labels, self.problem_type)
 
         return SequenceClassifierOutput(
             loss=loss,
             logits=logits,
-            hidden_states=output.hidden_states,
+            hidden_states=hidden_states,
             attentions=output.attentions,
         )
 
@@ -787,12 +788,33 @@ class BertBlocksForTokenClassification(BertBlocksForTasksBase):
             token_type_ids=token_type_ids,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
+            pad_outputs=False,
         )
-        output = self.pad_output(output)
         logits = self.classifier(self.head(output.last_hidden_state))
 
-        loss = self.compute_loss(logits, labels, self.problem_type)
+        is_unpadded = isinstance(output, UnpaddedBaseModelOutput) and output.indices is not None
 
+        loss = None
+        if labels is not None:
+            flat_labels = labels.flatten()
+            if is_unpadded:
+                flat_labels = flat_labels[output.indices]
+            loss = self.loss_fn(logits.view(-1, self.num_classes), flat_labels)
+
+        if is_unpadded:
+            indices = output.indices
+            seq_len = output.seq_len or 0
+            batch_size = output.batch_size or 0
+            return TokenClassifierOutput(
+                loss=loss,
+                logits=pad_output(logits, indices, batch_size, seq_len, 0),
+                hidden_states=[
+                    pad_output(h, indices, batch_size, seq_len, self.model.pad_token_id) for h in output.hidden_states
+                ]
+                if output.hidden_states is not None
+                else None,
+                attentions=output.attentions,
+            )
         return TokenClassifierOutput(
             loss=loss,
             logits=logits,
@@ -863,9 +885,22 @@ class BertBlocksForQuestionAnswering(BertBlocksForTasksBase):
             token_type_ids=token_type_ids,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
+            pad_outputs=False,
         )
-        output = self.pad_output(output)
         logits = self.classifier(self.head(output.last_hidden_state))
+
+        if isinstance(output, UnpaddedBaseModelOutput) and output.indices is not None:
+            indices = output.indices
+            seq_len = output.seq_len or 0
+            batch_size = output.batch_size or 0
+            logits = pad_output(logits, indices, batch_size, seq_len, 0)
+            hidden_states = (
+                [pad_output(h, indices, batch_size, seq_len, self.model.pad_token_id) for h in output.hidden_states]
+                if output.hidden_states is not None
+                else None
+            )
+        else:
+            hidden_states = output.hidden_states
 
         start_logits, end_logits = logits.split(1, dim=-1)
         start_logits = start_logits.squeeze(-1).contiguous()
@@ -890,7 +925,7 @@ class BertBlocksForQuestionAnswering(BertBlocksForTasksBase):
             loss=loss,
             start_logits=start_logits,
             end_logits=end_logits,
-            hidden_states=output.hidden_states,
+            hidden_states=hidden_states,
             attentions=output.attentions,
         )
 
@@ -950,18 +985,20 @@ class BertBlocksForMaskedDiffusion(BertBlocksForMaskedLM, GenerationMixin):
         if attention_mask is None:
             attention_mask = torch.ones_like(input_ids)
 
-        output: MaybeUnpaddedBaseModelOutput = self.model(
+        output = self.model(
             input_ids,
             attention_mask=attention_mask,
             token_type_ids=token_type_ids,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
+            pad_outputs=False,
         )
         logits = self.decoder(self.head(output.last_hidden_state))
 
         if labels is not None:
             # Binary mask indicating unmasked tokens in batch (that should not contribute to the loss)
-            if output.indices is not None:
+            if isinstance(output, UnpaddedBaseModelOutput):
+                assert output.indices is not None, "Output indices should not be None in unpadding mode"
                 unpadded_input_ids = input_ids.flatten()[output.indices]
                 unpadded_labels = labels.flatten()[output.indices]
                 masked_labels = torch.where(unpadded_input_ids == self.mask_token_id, unpadded_labels, -100)
@@ -976,7 +1013,8 @@ class BertBlocksForMaskedDiffusion(BertBlocksForMaskedLM, GenerationMixin):
         else:
             loss = None
 
-        if output.indices is not None:
+        if isinstance(output, UnpaddedBaseModelOutput):
+            assert output.indices is not None, "Output indices should not be None in unpadding mode"
             indices = output.indices
             seq_len = output.seq_len or 0
             batch_size = output.batch_size or 0
