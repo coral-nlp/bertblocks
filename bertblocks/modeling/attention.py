@@ -214,6 +214,15 @@ class Attention(nn.Module):
                 deterministic=self.deterministic,
             )
         elif attention_mask is not None:
+            if self.local_attention != (-1, -1) and self.local_attention[0] > 0:
+                window_size = self.local_attention[0]
+                pos = torch.arange(x.shape[1], device=x.device)
+                local_mask = (pos.unsqueeze(0) - pos.unsqueeze(1)).abs() <= window_size
+                if attention_mask.dtype == torch.bool:
+                    attention_mask = attention_mask & local_mask
+                else:
+                    attention_mask = attention_mask.masked_fill(~local_mask, -float("inf"))
+
             x_out, w = self._backend.forward_padded(
                 q,
                 k,
