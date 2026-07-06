@@ -1,0 +1,29 @@
+# FineWeb-Edu (sample-10BT) streaming data for multi-task MLM pretraining.
+# Uses the ModernBERT tokenizer. The `multitask_mlm` objective reuses the standard MLM collator;
+# the bag-of-words targets are reconstructed inside the model from input_ids + labels.
+data:
+  class_path: bertblocks.training.modules.BertBlocksPretrainingDataModule
+  init_args:
+    train_dataset_name_or_path: HuggingFaceFW/fineweb-edu
+    # FineWeb-Edu has no official validation split, so carve a genuinely disjoint held-out set from the
+    # training stream: the first `held_out_val_size` examples become validation and training skips them
+    # (via IterableDataset .take()/.skip()). Validation streams too, so no full download.
+    held_out_val_size: 10000
+    pretrained_tokenizer_name_or_path: answerdotai/ModernBERT-base
+    objective: multitask_mlm
+    text_column: text
+    train_split: train
+    streaming: true
+    # Streaming + packing does not buffer-shuffle; FineWeb-Edu shards are already shuffled.
+    shuffle: false
+    max_sequence_length: 1024
+    train_batch_size: 64
+    val_batch_size: 64
+    num_workers: 8
+    packing: true
+    packing_pad_to_budget: true
+    collator_kwargs:
+      mlm_probability: 0.3
+    # `name` is forwarded to datasets.load_dataset(..., name=...) to select the HF config.
+    data_kwargs:
+      name: sample-10BT

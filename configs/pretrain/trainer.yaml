@@ -1,0 +1,44 @@
+# Shared trainer config for multi-task encoder pretraining on FineWeb-Edu.
+# Merge with a data config and a model-size config, e.g.:
+#   python -m bertblocks fit \
+#     --config configs/pretrain/trainer.yaml \
+#     --config configs/pretrain/data-fineweb-edu.yaml \
+#     --config configs/pretrain/model-150m.yaml
+seed_everything: 42
+trainer:
+  accelerator: gpu
+  devices: 1
+  precision: bf16-mixed
+  default_root_dir: ./checkpoints
+  # Streaming FineWeb-Edu is effectively infinite: drive the run by steps, not epochs.
+  max_steps: 100000
+  check_val_every_n_epoch: null
+  val_check_interval: 2000
+  limit_val_batches: 50
+  log_every_n_steps: 10
+  gradient_clip_val: 1.0
+  accumulate_grad_batches: 1
+  callbacks:
+    # HuggingFaceModelCheckpoint also exports a HuggingFace checkpoint next to each .ckpt and prunes it in
+    # lockstep, so save_top_k/save_last govern the HF exports identically (top_k=3 keeps 3 HF checkpoints).
+    - class_path: bertblocks.training.callbacks.HuggingFaceModelCheckpoint
+      init_args:
+        filename: "{step}"
+        every_n_train_steps: 10000
+        save_top_k: 3
+        save_last: true
+    - class_path: lightning.pytorch.callbacks.LearningRateMonitor
+      init_args:
+        logging_interval: step
+  # A single logger (not a list) so `--trainer.logger.save_dir <path>` can be overridden on the CLI.
+  # On Modal, run_modal.py points save_dir at the persistent volume; `trainer.log_dir` then resolves
+  # there, so the .ckpt files and their sibling HuggingFace exports survive the container.
+  logger:
+    # Custom subclass: the stock WandbLogger.save_dir returns the constructor arg, not the real wandb run
+    # directory, so `trainer.log_dir` (and thus checkpoints) resolve to the wrong place. See the module.
+    class_path: bertblocks.training.loggers.WandbLogger
+    init_args:
+      project: bertblocks-multitask
+      # Set your W&B entity (team/user), or leave null to use the default from the environment.
+      entity: null
+      log_model: false

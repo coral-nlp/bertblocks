@@ -1,0 +1,44 @@
+# Ettin-xs (~17M) multi-task encoder: MLM + bag-of-subwords + isotropy.
+# Smallest size — good for fast iteration and smoke tests.
+# Architecture: flash attention with windowed (local) attention on every layer + ALiBi.
+# Loss weights are training-time (model_kwargs), kept out of the serialized model config.
+model:
+  class_path: bertblocks.training.modules.BertBlocksPretrainingModule
+  init_args:
+    # Kept in sync with data-fineweb-edu.yaml (jsonargparse omegaconf mode resolves interpolations
+    # per --config file, so cross-file ${data.init_args...} references cannot be used here).
+    objective: multitask_mlm
+    pretrained_tokenizer_name_or_path: answerdotai/ModernBERT-base
+    compile_model: true
+    optimizer_class: adamw
+    optimizer_quantized: false
+    optimizer_kwargs:
+      betas: [0.9, 0.98]
+      eps: 1.0e-8
+    learning_rate: 8.0e-4
+    weight_decay: 1.0e-5
+    scheduler_warmup_kind: linear
+    scheduler_warmup_steps: 2000
+    scheduler_training_kind: constant
+    scheduler_training_steps: -1
+    scheduler_cooldown_kind: linear
+    scheduler_cooldown_steps: 0
+    model_kwargs:
+      bow_loss_weight: 1.0
+      isotropy_loss_weight: 1.0
+    model_config_kwargs:
+      hidden_size: 256
+      num_blocks: 7
+      num_attention_heads: 4
+      intermediate_size: 384
+      max_sequence_length: 8192
+      attn_implementation: flash_attention_2
+      block_pos_enc_kind: alibi
+      # Windowed (sliding-window) attention on every layer; 0 disables global attention entirely.
+      local_attention: [64, 64]
+      global_attention_every_n_layers: 0
+      mlp_type: glu
+      norm_kind: pre
+      norm_fn: rms
+      actv_fn: silu
+      head_type: glu

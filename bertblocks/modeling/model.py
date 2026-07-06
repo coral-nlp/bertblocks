@@ -8,7 +8,7 @@ from transformers import GenerationMixin
 
 from bertblocks.modeling.norms import get_norm
 from bertblocks.modeling.scale import LayerScaler
-from bertblocks.modeling.utils import LogLinearNoise
+from bertblocks.modeling.utils import LogLinearNoise, flatten_and_segment, segment_mean
 
 if TYPE_CHECKING:
     pass
@@ -30,7 +30,7 @@ from bertblocks.config import BertBlocksConfig
 from bertblocks.modeling.block import Encoder, EnhancedMaskingBlock, convert_to_4d_attention_mask
 from bertblocks.modeling.embedding import TokenEmbedding
 from bertblocks.modeling.head import Pooler, get_prediction_head
-from bertblocks.modeling.loss import get_loss_function
+from bertblocks.modeling.loss import BagOfWordsLoss, InBatchSimilarityLoss, get_loss_function
 from bertblocks.modeling.padding import pad_output, unpad_input
 from bertblocks.modeling.position import AlibiPositionalEncoding
 
@@ -301,21 +301,51 @@ class BertBlocksModel(BertBlocksPreTrainedModel):
         input_ids: "torch.Tensor",
         attention_mask: "torch.Tensor | None" = None,
         token_type_ids: "torch.Tensor | None" = None,
+        position_ids: "torch.Tensor | None" = None,
+        cu_seq_lens_q: "torch.Tensor | None" = None,
+        cu_seq_lens_k: "torch.Tensor | None" = None,
+        max_length_q: "int | None" = None,
+        max_length_k: "int | None" = None,
         output_attentions: "bool" = False,
         output_hidden_states: "bool" = False,
         pad_outputs: "bool" = True,
+        **kwargs: Any,
     ) -> "UnpaddedBaseModelOutput | UnpaddedBaseModelOutputWithPooling | BaseModelOutput | BaseModelOutputWithPooling":
         """Forward pass of the BertBlocks model.
 
+        Supports three input regimes:
+
+            1. **Padded** (default): standard ``[batch_size, seq_len]`` ``input_ids`` with a binary
+               ``attention_mask``.
+            2. **Internally unpadded**: when the model runs in unpadding mode
+               (``attn_implementation="flash_attention_2"``), padding is stripped inside ``forward``
+               and (by default) restored before returning.
+            3. **Externally unpadded** (HuggingFace/ModernBERT varlen convention): the caller has
+               already flattened the batch and supplies the varlen metadata via ``cu_seq_lens_q`` /
+               ``max_length_q``. This path is used by seltz-neural's ``UnpaddingBackbone`` wrapper.
+               Padding is neither stripped nor restored here (the caller re-pads); the flat
+               ``last_hidden_state`` is returned with a leading batch axis of size 1.
+
         Args:
-            input_ids (torch.Tensor, shape [batch_size, seq_len]): Tensor of token ids.
+            input_ids (torch.Tensor): Token ids, shape ``[batch_size, seq_len]``. In the externally
+                unpadded regime this is the flattened ``[1, total_tokens]`` tensor.
             attention_mask (torch.Tensor, shape [batch_size, seq_len], optional): Tensor indicating which
                 tokens should be attended to. Defaults to None.
             token_type_ids (torch.Tensor, shape [batch_size, seq_len], optional): Tensor indicating type
                 of tokens. Defaults to None.
+            position_ids (torch.Tensor, optional): Accepted for HuggingFace API parity but ignored;
+                BertBlocks derives positions internally (ALiBi / RoPE reset per sequence via
+                ``cu_seqlens``), which is equivalent to caller-provided per-sequence ``position_ids``.
+            cu_seq_lens_q (torch.Tensor, shape [batch_size + 1], optional): Cumulative sequence lengths
+                for pre-unpadded (varlen) inputs. When provided, the externally unpadded path is taken.
+            cu_seq_lens_k (torch.Tensor, optional): Key cumulative sequence lengths. Accepted for API
+                parity; BertBlocks is self-attention only, so ``cu_seq_lens_q`` is used for both.
+            max_length_q (int, optional): Maximum unpadded sequence length; required with ``cu_seq_lens_q``.
+            max_length_k (int, optional): Accepted for API parity; unused (see ``cu_seq_lens_k``).
             output_attentions: Whether to return attention weights from all layers. Defaults to None.
             output_hidden_states: Whether to return hidden states from all layers. Defaults to False.
             pad_outputs: Whether to pad outputs if model is in unpadding mode. Defaults to True.
+            **kwargs: Absorbed for HuggingFace flash-attention API parity.
 
         Returns:
             BaseModelOutput or BaseModelOutputWithPooling containing:
@@ -327,8 +357,19 @@ class BertBlocksModel(BertBlocksPreTrainedModel):
 
         """
         batch_size, seq_len = input_ids.shape
+        externally_unpadded = cu_seq_lens_q is not None
 
-        if self.unpadding:
+        if cu_seq_lens_q is not None:
+            # Caller (e.g. seltz-neural UnpaddingBackbone) already unpadded the batch and supplies
+            # varlen metadata; inputs are flat [1, total_tokens]. Don't unpad again; don't re-pad
+            # (the caller re-pads). Requires the flash backend (attn_implementation="flash_attention_2").
+            input_ids = input_ids.reshape(-1)
+            token_type_ids = token_type_ids.reshape(-1) if token_type_ids is not None else None
+            cu_seqlens = cu_seq_lens_q.to(torch.int32)
+            max_seq_len = int(max_length_q) if max_length_q is not None else None
+            attention_mask = None
+            indices = None
+        elif self.unpadding:
             input_ids, indices, cu_seqlens, max_seq_len = self.unpad_input(input_ids, attention_mask)
             attention_mask = None
         else:
@@ -364,6 +405,15 @@ class BertBlocksModel(BertBlocksPreTrainedModel):
         if output_attentions:
             outputs["attentions"] = attentions
 
+        if externally_unpadded:
+            # Return the flat output with a leading batch axis of size 1 so the caller's
+            # `last_hidden_state.squeeze(0)` + re-pad works. No re-padding is done here.
+            outputs["last_hidden_state"] = x.unsqueeze(0)
+            if output_hidden_states and hidden_states is not None:
+                outputs["hidden_states"] = tuple(h.unsqueeze(0) for h in hidden_states)
+            output_cls = BaseModelOutputWithPooling if pooler_output is not None else BaseModelOutput
+            return output_cls(**outputs)
+
         if self.unpadding:
             output_cls = UnpaddedBaseModelOutputWithPooling if pooler_output is not None else UnpaddedBaseModelOutput
             outputs.update({"cu_seqlens": cu_seqlens, "indices": indices, "seq_len": seq_len, "batch_size": batch_size})
@@ -371,7 +421,7 @@ class BertBlocksModel(BertBlocksPreTrainedModel):
             output_cls = BaseModelOutputWithPooling if pooler_output is not None else BaseModelOutput
 
         output = output_cls(**outputs)
-        if pad_outputs and isinstance(output, (UnpaddedBaseModelOutput, UnpaddedBaseModelOutputWithPooling)):
+        if pad_outputs and isinstance(output, UnpaddedBaseModelOutput | UnpaddedBaseModelOutputWithPooling):
             output = self.pad_output(output)
 
         return output
@@ -534,6 +584,168 @@ class BertBlocksForMaskedLM(BertBlocksPreTrainedModel):
             logits=logits,
             hidden_states=output.hidden_states,
             attentions=output.attentions,
+        )
+
+
+@dataclass
+class MultiTaskMaskedLMOutput(MaskedLMOutput):
+    """MLM output extended with the individual multi-task loss components (for logging)."""
+
+    mlm_loss: "torch.FloatTensor | None" = None
+    bow_loss: "torch.FloatTensor | None" = None
+    isotropy_loss: "torch.FloatTensor | None" = None
+
+
+class BertBlocksForMultiTaskMaskedLM(BertBlocksForMaskedLM):
+    """BertBlocks MLM model with two auxiliary sequence-level pretraining objectives.
+
+    In addition to standard masked language modeling, this model mean-pools the contextualized token
+    embeddings into one vector per document and applies:
+
+    - **Bag-of-subword modeling**: a head projects the pooled vector to the vocabulary and is trained
+      with BCE against the multi-hot set of subwords present in the *unmasked* sequence
+      (:class:`~bertblocks.modeling.loss.BagOfWordsLoss`).
+    - **Isotropy / in-batch similarity**: the pooled sequence embeddings are driven toward mutual
+      orthogonality by penalizing their pairwise cosine similarity toward 0
+      (:class:`~bertblocks.modeling.loss.InBatchSimilarityLoss`).
+
+    The total loss is ``mlm_loss + bow_loss_weight * bow_loss + isotropy_loss_weight * isotropy_loss``.
+    The loss weights and ignored token ids are *training-time* arguments (passed via ``model_kwargs``),
+    not part of the serialized :class:`~bertblocks.config.BertBlocksConfig`.
+
+    Both output heads — the MLM decoder and the bag-of-words decoder — are weight-tied to the input
+    token embeddings (``tie_word_embeddings`` is forced on), so each head projects hidden states to
+    the vocabulary with the embedding matrix and neither adds a full ``hidden x vocab`` parameter block.
+
+    Args:
+        config (BertBlocksConfig): Model configuration.
+        bow_loss_weight (float): Weight of the bag-of-words loss. Defaults to 1.0.
+        isotropy_loss_weight (float): Weight of the isotropy loss. Defaults to 1.0.
+        isotropy_gather_distributed (bool): Whether to all-gather pooled embeddings across ranks
+            before computing the isotropy loss. Defaults to False.
+        ignore_token_ids (list[int], optional): Vocabulary ids (e.g. special tokens) excluded from the
+            bag-of-words target. Defaults to None.
+    """
+
+    # Tie both output decoders to the input token embeddings (transformers expects a {target: source}
+    # mapping). Tying is only performed once ``config.tie_word_embeddings`` is enabled below, after
+    # ``bow_decoder`` exists — the base ``__init__``'s ``post_init`` runs with tying still disabled.
+    _tied_weights_keys: ClassVar = {
+        "decoder.weight": "model.embd.embd.weight",
+        "bow_decoder.weight": "model.embd.embd.weight",
+    }
+
+    def __init__(
+        self,
+        config: "BertBlocksConfig",
+        bow_loss_weight: float = 1.0,
+        isotropy_loss_weight: float = 1.0,
+        isotropy_gather_distributed: bool = False,
+        ignore_token_ids: "Sequence[int] | None" = None,
+    ) -> None:
+        super().__init__(config)
+        self.bow_loss_weight = bow_loss_weight
+        self.isotropy_loss_weight = isotropy_loss_weight
+        self.ignore_token_ids = list(ignore_token_ids) if ignore_token_ids is not None else None
+        self.bow_head = get_prediction_head(config)
+        self.bow_decoder = nn.Linear(config.hidden_size, config.vocab_size, bias=True)
+        self.bow_loss_fn = BagOfWordsLoss()
+        self.isotropy_loss_fn = InBatchSimilarityLoss(gather_distributed=isotropy_gather_distributed)
+        # Enable tying now that both decoders exist, then (re-)run init so post_init ties them to the
+        # input embeddings.
+        self.config.tie_word_embeddings = True
+        self.post_init()
+
+    def forward(
+        self,
+        input_ids: "torch.Tensor",
+        attention_mask: "torch.Tensor | None" = None,
+        token_type_ids: "torch.Tensor | None" = None,
+        labels: "torch.Tensor | None" = None,
+        output_attentions: "bool | None" = False,
+        output_hidden_states: "bool | None" = False,
+    ) -> "MultiTaskMaskedLMOutput":
+        """Forward pass for multi-task masked language modeling.
+
+        Args:
+            input_ids (torch.Tensor, shape [batch_size, seq_len]): Tensor of (masked) token ids.
+            attention_mask (torch.Tensor, shape [batch_size, seq_len], optional): Attention mask.
+            token_type_ids (torch.Tensor, shape [batch_size, seq_len], optional): Token type ids.
+            labels (torch.Tensor, shape [batch_size, seq_len], optional): MLM target ids
+                (original id at masked positions, -100 elsewhere). Required to compute any loss.
+            output_attentions (bool): Whether to return attention weights. Defaults to False.
+            output_hidden_states (bool): Whether to return hidden states. Defaults to False.
+
+        Returns:
+            MultiTaskMaskedLMOutput: with ``loss`` (total), ``mlm_loss``, ``bow_loss``,
+            ``isotropy_loss``, and (padded) ``logits``.
+        """
+        output: BaseModelOutput | UnpaddedBaseModelOutput = self.model(
+            input_ids,
+            attention_mask=attention_mask,
+            token_type_ids=token_type_ids,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            pad_outputs=False,
+        )
+        last_hidden_state = output.last_hidden_state
+        logits = self.decoder(self.head(last_hidden_state))
+
+        total_loss: torch.Tensor | None = None
+        mlm_loss: torch.Tensor | None = None
+        bow_loss: torch.Tensor | None = None
+        isotropy_loss: torch.Tensor | None = None
+        unpadded = isinstance(output, UnpaddedBaseModelOutput) and output.indices is not None
+        if labels is not None:
+            mlm_labels = labels.flatten()[output.indices] if unpadded else labels.flatten()
+            mlm_loss = self.loss_fn(logits.view(-1, self.vocab_size), mlm_labels)
+
+            # Sequence-level auxiliary tasks operate on per-document mean-pooled embeddings.
+            segment_ids, lengths, num_segments, valid_mask = flatten_and_segment(output, attention_mask)
+            flat_hidden = last_hidden_state if valid_mask is None else last_hidden_state[valid_mask]
+            pooled = segment_mean(flat_hidden, segment_ids, lengths, num_segments)
+
+            if valid_mask is None:
+                valid_input = input_ids.flatten()[output.indices]
+                valid_labels = mlm_labels
+            else:
+                valid_input = input_ids[valid_mask]
+                valid_labels = labels[valid_mask]
+            # Reconstruct the unmasked (original) token ids: masked positions carry the original id in
+            # the labels, unmasked positions already hold it in the (possibly masked) input_ids.
+            original_ids = torch.where(valid_labels != -100, valid_labels, valid_input)
+            bow_target = self.bow_loss_fn.build_multihot(
+                original_ids, segment_ids, num_segments, self.vocab_size, self.ignore_token_ids
+            )
+            bow_logits = self.bow_decoder(self.bow_head(pooled))
+            bow_loss = self.bow_loss_fn(bow_logits, bow_target)
+
+            isotropy_loss = self.isotropy_loss_fn(pooled)
+
+            total_loss = mlm_loss + self.bow_loss_weight * bow_loss + self.isotropy_loss_weight * isotropy_loss
+
+        if unpadded:
+            indices = output.indices
+            seq_len = output.seq_len or 0
+            batch_size = output.batch_size or 0
+            padded_logits = pad_output(logits, indices, batch_size, seq_len, -torch.inf)
+            hidden_states = (
+                [pad_output(h, indices, batch_size, seq_len, self.pad_token_id) for h in output.hidden_states]
+                if output.hidden_states is not None
+                else None
+            )
+        else:
+            padded_logits = logits
+            hidden_states = output.hidden_states
+
+        return MultiTaskMaskedLMOutput(
+            loss=total_loss,
+            logits=padded_logits,
+            hidden_states=hidden_states,
+            attentions=output.attentions,
+            mlm_loss=mlm_loss,
+            bow_loss=bow_loss,
+            isotropy_loss=isotropy_loss,
         )
 
 
@@ -1265,9 +1477,9 @@ class BertBlocksForMaskedDiffusion(BertBlocksForMaskedLM, GenerationMixin):
             last_token_indices = seq_lengths - 1
             prefix_mask[torch.arange(batch_size, device=self.device), last_token_indices] = False
             # Ensure attention_mask matches input_ids length
-            assert prefix_mask.shape[1] == seq_len, (
-                f"attention_mask length {prefix_mask.shape[1]} doesn't match input_ids length {seq_len}"
-            )
+            assert (
+                prefix_mask.shape[1] == seq_len
+            ), f"attention_mask length {prefix_mask.shape[1]} doesn't match input_ids length {seq_len}"
         if seq_len < target_length:
             # Extend to target length if needed
             # Pad input_ids with MASK tokens
@@ -1491,10 +1703,18 @@ class BertBlocksForMaskedDiffusion(BertBlocksForMaskedLM, GenerationMixin):
 
 def get_model_cls(
     task: Literal[
-        "mlm", "diffusion", "enhanced_mlm", "denoising", "classification", "token_classification", "question_answering"
+        "mlm",
+        "multitask_mlm",
+        "diffusion",
+        "enhanced_mlm",
+        "denoising",
+        "classification",
+        "token_classification",
+        "question_answering",
     ],
 ) -> type[
     BertBlocksForMaskedLM
+    | BertBlocksForMultiTaskMaskedLM
     | BertBlocksForMaskedDiffusion
     | BertBlocksForEnhancedMaskedLM
     | BertBlocksForSequenceClassification
@@ -1504,6 +1724,8 @@ def get_model_cls(
     match task:
         case "mlm":
             return BertBlocksForMaskedLM
+        case "multitask_mlm":
+            return BertBlocksForMultiTaskMaskedLM
         case "diffusion":
             return BertBlocksForMaskedDiffusion
         case "enhanced_mlm":
@@ -1516,14 +1738,15 @@ def get_model_cls(
             return BertBlocksForQuestionAnswering
         case _:
             raise ValueError(
-                f"Unknown task {task}, expected one of 'mlm', 'diffusion', 'enhanced_mlm', 'sequence_classification', "
-                f"'token_classification', 'question_answering'"
+                f"Unknown task {task}, expected one of 'mlm', 'multitask_mlm', 'diffusion', 'enhanced_mlm', "
+                f"'sequence_classification', 'token_classification', 'question_answering'"
             )
 
 
 __all__ = [
     "BertBlocksForMaskedDiffusion",
     "BertBlocksForMaskedLM",
+    "BertBlocksForMultiTaskMaskedLM",
     "BertBlocksForQuestionAnswering",
     "BertBlocksForSequenceClassification",
     "BertBlocksForTokenClassification",

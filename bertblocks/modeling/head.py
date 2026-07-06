@@ -1,5 +1,5 @@
 import copy
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     import torch
@@ -10,6 +10,29 @@ from torch import nn
 
 from bertblocks.modeling.mlp import get_mlp
 from bertblocks.modeling.norms import get_norm
+from bertblocks.modeling.utils import flatten_and_segment, segment_mean
+
+
+def masked_mean_pool(hidden: "torch.Tensor", output: "Any", attention_mask: "torch.Tensor | None") -> "torch.Tensor":
+    """Mean-pool token embeddings into one vector per document.
+
+    Handles both the unpadded/packed representation (``output.cu_seqlens`` set, ``hidden`` already a
+    flat ``[total_tokens, hidden]`` tensor) and the padded representation (``hidden`` shaped
+    ``[batch, seq_len, hidden]`` with valid tokens marked by ``attention_mask``). Padding and
+    packing therefore produce identical pooled vectors.
+
+    Args:
+        hidden (torch.Tensor): Contextualized token embeddings, flat ``[total_tokens, hidden]`` when
+            unpadded or ``[batch, seq_len, hidden]`` when padded.
+        output: Encoder output exposing ``cu_seqlens`` (or ``None`` for the padded path).
+        attention_mask (torch.Tensor, optional): ``[batch, seq_len]`` validity mask for the padded path.
+
+    Returns:
+        torch.Tensor, shape [num_documents, hidden]: Mean-pooled sequence embeddings.
+    """
+    segment_ids, lengths, num_segments, valid_mask = flatten_and_segment(output, attention_mask)
+    flat_hidden = hidden if valid_mask is None else hidden[valid_mask]
+    return segment_mean(flat_hidden, segment_ids, lengths, num_segments)
 
 
 class Pooler(nn.Module):

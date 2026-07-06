@@ -16,6 +16,7 @@ from bertblocks.integration import from_huggingface, from_model
 from bertblocks.modeling.model import (
     BertBlocksForMaskedDiffusion,
     BertBlocksForMaskedLM,
+    BertBlocksForMultiTaskMaskedLM,
     BertBlocksForQuestionAnswering,
     BertBlocksForSequenceClassification,
     BertBlocksForTokenClassification,
@@ -58,6 +59,7 @@ __all__ = [
     "BertBlocksFinetuningModule",
     "BertBlocksForMaskedDiffusion",
     "BertBlocksForMaskedLM",
+    "BertBlocksForMultiTaskMaskedLM",
     "BertBlocksForQuestionAnswering",
     "BertBlocksForSequenceClassification",
     "BertBlocksForTokenClassification",

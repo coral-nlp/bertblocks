@@ -1,3 +1,5 @@
+from typing import Any
+
 import torch
 from torch import nn
 
@@ -31,6 +33,70 @@ class LogLinearNoise(nn.Module):
         alpha_t = 1 - (1 - self.eps) * t
         dalpha_t = -(1 - self.eps) * torch.ones_like(t)
         return dalpha_t, alpha_t
+
+
+def flatten_and_segment(
+    output: "Any", attention_mask: "torch.Tensor | None"
+) -> "tuple[torch.Tensor, torch.Tensor, int, torch.Tensor | None]":
+    """Derive per-document segment structure from an encoder output.
+
+    Produces a segment id for every *valid* token so that per-sequence pooling and bag-of-word
+    targets can be computed identically for both the unpadded/packed representation (where the
+    hidden states are already a flat ``[total_tokens, hidden]`` tensor delimited by ``cu_seqlens``)
+    and the padded representation (``[batch, seq_len, hidden]`` delimited by ``attention_mask``).
+
+    Args:
+        output: Encoder output exposing ``cu_seqlens`` (unpadded/packed) or ``None`` (padded). When
+            ``cu_seqlens`` is set it delimits per-document segments in the flat token dimension, even
+            when multiple documents are packed into a row.
+        attention_mask (torch.Tensor, shape [batch, seq_len], optional): Required for the padded
+            path; ``1`` marks valid tokens.
+
+    Returns:
+        tuple:
+            - ``segment_ids`` (torch.Tensor, shape [num_valid_tokens]): Document index of each valid
+              token, aligned to the flat/selected token order.
+            - ``lengths`` (torch.Tensor, shape [num_segments]): Number of valid tokens per document.
+            - ``num_segments`` (int): Number of documents in the batch.
+            - ``valid_mask`` (torch.Tensor | None): For the padded path, the ``[batch, seq_len]``
+              boolean mask used to select flat tokens; ``None`` when tokens are already flat.
+    """
+    cu_seqlens = getattr(output, "cu_seqlens", None)
+    if cu_seqlens is not None:
+        cu_seqlens = cu_seqlens.long()
+        lengths = cu_seqlens[1:] - cu_seqlens[:-1]
+        num_segments = int(lengths.numel())
+        segment_ids = torch.repeat_interleave(torch.arange(num_segments, device=lengths.device), lengths)
+        return segment_ids, lengths, num_segments, None
+
+    if attention_mask is None:
+        raise ValueError("attention_mask is required to derive segments for a padded batch")
+    valid_mask = attention_mask.bool()
+    num_segments = valid_mask.shape[0]
+    lengths = valid_mask.sum(dim=1)
+    segment_ids = torch.arange(num_segments, device=valid_mask.device).unsqueeze(1).expand_as(valid_mask)[valid_mask]
+    return segment_ids, lengths, num_segments, valid_mask
+
+
+def segment_mean(
+    flat_hidden: "torch.Tensor", segment_ids: "torch.Tensor", lengths: "torch.Tensor", num_segments: int
+) -> "torch.Tensor":
+    """Mean-pool flat token embeddings into one vector per document.
+
+    Args:
+        flat_hidden (torch.Tensor, shape [num_valid_tokens, hidden]): Valid token embeddings in
+            segment order.
+        segment_ids (torch.Tensor, shape [num_valid_tokens]): Document index of each token.
+        lengths (torch.Tensor, shape [num_segments]): Token count per document.
+        num_segments (int): Number of documents.
+
+    Returns:
+        torch.Tensor, shape [num_segments, hidden]: Mean-pooled sequence embeddings.
+    """
+    sums = torch.zeros(num_segments, flat_hidden.shape[-1], dtype=flat_hidden.dtype, device=flat_hidden.device)
+    sums = sums.index_add(0, segment_ids, flat_hidden)
+    counts = lengths.clamp(min=1).unsqueeze(1).to(sums.dtype)
+    return sums / counts
 
 
 def top_k_top_p_filtering(

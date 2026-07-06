@@ -53,7 +53,7 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
         self,
         train_dataset_name_or_path: str | list[str],
         pretrained_tokenizer_name_or_path: str,
-        objective: Literal["mlm", "enhanced_mlm", "diffusion"] = "mlm",
+        objective: Literal["mlm", "multitask_mlm", "enhanced_mlm", "diffusion"] = "mlm",
         max_sequence_length: int = 512,
         val_dataset_name_or_path: str | list[str] | None = None,
         train_split: str | None = None,
@@ -71,6 +71,9 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
         packing_pad_to_budget: bool = False,
         cache_dir: str | None = None,
         data_kwargs: dict[str, Any] | None = None,
+        val_streaming: bool | None = None,
+        val_data_kwargs: dict[str, Any] | None = None,
+        held_out_val_size: int | None = None,
     ) -> None:
         """Initialize the pretraining data module.
 
@@ -104,6 +107,17 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
                 fixed shapes (useful for torch.compile). When False, uses dynamic shapes. Defaults to False.
             cache_dir (str, optional): Directory to cache data transformations. Defaults to None.
             data_kwargs (dict[str, Any], optional): Additional keyword arguments passed to huggingface loader functions.
+            val_streaming (bool, optional): Whether to stream the validation dataset. Defaults to None, which
+                mirrors ``streaming``. Set this to stream a large held-out validation source (the legacy behaviour
+                always materialized validation non-streaming, which is infeasible for corpora like FineWeb-Edu).
+            val_data_kwargs (dict[str, Any], optional): Loader kwargs used for the validation dataset (e.g. a
+                different HF config ``name``). Defaults to None, which reuses ``data_kwargs``.
+            held_out_val_size (int, optional): If set, carve a disjoint held-out validation set of this many
+                examples from the *training* source: the first ``held_out_val_size`` examples become validation
+                (``.take(n)`` when streaming, else ``.select(range(n))``) and training skips them
+                (``.skip(n)`` / ``.select(range(n, len))``). This guarantees train/val are disjoint even for
+                datasets with only a ``train`` split (e.g. FineWeb-Edu). Takes precedence over
+                ``val_dataset_name_or_path``. Defaults to None.
         """
         super().__init__()
         self.save_hyperparameters()
@@ -117,10 +131,11 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
             **(self.hparams.collator_kwargs or {}),
         )
 
-    def _map_kwargs(self, cache_file_name: str | None = None) -> dict[str, Any]:
+    def _map_kwargs(self, cache_file_name: str | None = None, streaming: bool | None = None) -> dict[str, Any]:
         """Build kwargs for dataset .map() calls."""
+        streaming = self.hparams.streaming if streaming is None else streaming
         kwargs: dict[str, Any] = {"batched": True}
-        if not self.hparams.streaming:
+        if not streaming:
             kwargs["cache_file_name"] = cache_file_name
             kwargs["num_proc"] = self.hparams.num_workers or None
         return kwargs
@@ -151,9 +166,15 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
             fn = truncate_fn if "input_ids" in (ds.column_names or []) else tokenize_fn
             ds.map(fn, **self._map_kwargs(train_cache))
 
-        # Optionally prepare validation dataset(s)
+        # Optionally prepare validation dataset(s). Held-out validation is derived from the training
+        # source in setup(), and streamed validation needs no pre-tokenization, so only pre-tokenize an
+        # explicit, non-streaming validation source here.
         val_paths = self.hparams.val_dataset_name_or_path
-        if val_paths is not None and not self.hparams.streaming:
+        val_is_streaming = self.hparams.streaming if self.hparams.val_streaming is None else self.hparams.val_streaming
+        val_kwargs = (
+            self.hparams.val_data_kwargs if self.hparams.val_data_kwargs is not None else self.hparams.data_kwargs
+        )
+        if self.hparams.held_out_val_size is None and val_paths is not None and not val_is_streaming:
             if isinstance(val_paths, str):
                 val_paths = [val_paths]
             val_splits = self.hparams.val_split or "validation"
@@ -169,7 +190,7 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
                     add_index=False,
                     file_format=self.hparams.file_format,
                     streaming=False,
-                    **self.hparams.data_kwargs or {},
+                    **val_kwargs or {},
                 )
                 fn = truncate_fn if "input_ids" in ds.column_names else tokenize_fn
                 ds.map(fn, **self._map_kwargs(val_cache_i))
@@ -186,8 +207,40 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
                 streaming=self.hparams.streaming,
                 **self.hparams.data_kwargs or {},
             )
-            val_paths = self.hparams.val_dataset_name_or_path
-            if val_paths is not None:
+            val_is_streaming = (
+                self.hparams.streaming if self.hparams.val_streaming is None else self.hparams.val_streaming
+            )
+            val_kwargs = (
+                self.hparams.val_data_kwargs if self.hparams.val_data_kwargs is not None else self.hparams.data_kwargs
+            )
+            if self.hparams.held_out_val_size:
+                # Carve a disjoint held-out validation set from the training source: the first
+                # `held_out_val_size` examples become validation, and training skips them.
+                if self.hparams.val_dataset_name_or_path is not None:
+                    warnings.warn(
+                        "held_out_val_size is set; ignoring val_dataset_name_or_path and carving the "
+                        "validation set from the training source instead.",
+                        stacklevel=2,
+                    )
+                n = self.hparams.held_out_val_size
+                if self.hparams.streaming:
+                    val_source = _load_dataset(
+                        dataset_name_or_path=self.hparams.train_dataset_name_or_path,
+                        split=self.hparams.train_split or "train",
+                        add_index=False,
+                        file_format=self.hparams.file_format,
+                        streaming=True,
+                        **self.hparams.data_kwargs or {},
+                    )
+                    self.val_dataset = [val_source.take(n)]
+                    self.train_dataset = self.train_dataset.skip(n)
+                    val_is_streaming = True
+                else:
+                    self.val_dataset = [self.train_dataset.select(range(n))]
+                    self.train_dataset = self.train_dataset.select(range(n, len(self.train_dataset)))
+                    val_is_streaming = False
+            elif self.hparams.val_dataset_name_or_path is not None:
+                val_paths = self.hparams.val_dataset_name_or_path
                 if isinstance(val_paths, str):
                     val_paths = [val_paths]
                 val_splits = self.hparams.val_split or "validation"
@@ -199,8 +252,8 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
                         split=vs,
                         add_index=False,
                         file_format=self.hparams.file_format,
-                        streaming=False,
-                        **self.hparams.data_kwargs or {},
+                        streaming=val_is_streaming,
+                        **val_kwargs or {},
                     )
                     for vp, vs in zip(val_paths, val_splits, strict=False)
                 ]
@@ -227,8 +280,10 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
                     val_cache_i = (
                         str(Path(self.hparams.cache_dir) / f"val_{i}.arrow") if self.hparams.cache_dir else None
                     )
-                    fn = truncate_fn if "input_ids" in self.val_dataset[i].column_names else tokenize_fn
-                    self.val_dataset[i] = self.val_dataset[i].map(fn, **self._map_kwargs(val_cache_i))
+                    fn = truncate_fn if "input_ids" in (self.val_dataset[i].column_names or []) else tokenize_fn
+                    self.val_dataset[i] = self.val_dataset[i].map(
+                        fn, **self._map_kwargs(val_cache_i, streaming=val_is_streaming)
+                    )
 
             # For non-packing mode, shard the dataset across ranks
             if not self.hparams.streaming and self.trainer.world_size > 1 and not self.hparams.packing:
@@ -546,7 +601,7 @@ class BertBlocksPretrainingModule(L.LightningModule):
         scheduler_cooldown_kind: Literal["constant", "linear", "inverse-sqrt", "cosine", "exponential"] = "linear",
         scheduler_cooldown_steps: int = 0,
         scheduler_cooldown_decay: float = 0.0,
-        objective: Literal["mlm", "enhanced_mlm", "diffusion"] = "mlm",
+        objective: Literal["mlm", "multitask_mlm", "enhanced_mlm", "diffusion"] = "mlm",
         gradient_checkpointing: bool = False,
         model_config_kwargs: "dict[str, Any] | None" = None,
         model_kwargs: "dict[str, Any] | None" = None,
@@ -592,6 +647,7 @@ class BertBlocksPretrainingModule(L.LightningModule):
         super().__init__()
         self.save_hyperparameters(ignore=["model_config"])
         self.model_config = BertBlocksConfig(**(model_config_kwargs or {}))
+        model_kwargs = dict(model_kwargs or {})
         # Patch model config with tokenizer info if given
         if self.hparams.pretrained_tokenizer_name_or_path is not None:
             tokenizer = AutoTokenizer.from_pretrained(self.hparams.pretrained_tokenizer_name_or_path)
@@ -601,12 +657,16 @@ class BertBlocksPretrainingModule(L.LightningModule):
             self.pad_token_id = tokenizer.pad_token_id
             self.model_config.pad_token_id = tokenizer.pad_token_id
             self.mask_token_id = tokenizer.mask_token_id
+            # The multi-task objective excludes structural (special) tokens from the bag-of-words
+            # target. Derive them from the tokenizer here so this stays out of the model config.
+            if objective == "multitask_mlm":
+                model_kwargs.setdefault("ignore_token_ids", tokenizer.all_special_ids)
             del tokenizer
         else:
             self.pad_token_id = 0
             self.model_config.pad_token_id = 0
             self.mask_token_id = 0
-        self.model = get_model_cls(objective)(self.model_config, **(model_kwargs or {}))
+        self.model = get_model_cls(objective)(self.model_config, **model_kwargs)
         if self.hparams.gradient_checkpointing:
             self.model.gradient_checkpointing_enable()
 
@@ -672,15 +732,15 @@ class BertBlocksPretrainingModule(L.LightningModule):
             optimizer_grouped_parameters = [
                 {
                     "params": [p for n, p in self.model.named_parameters() if n in decay_parameters],
-                    "weight_decay": torch.Tensor(self.hparams.weight_decay),
+                    "weight_decay": self.hparams.weight_decay,
                 },
                 {
                     "params": [p for n, p in self.model.named_parameters() if n not in decay_parameters],
-                    "weight_decay": torch.Tensor(0.0),
+                    "weight_decay": 0.0,
                 },
             ]
             optimizer_kwargs = self.hparams.optimizer_kwargs or {}
-            optimizer_kwargs.update({"lr": torch.Tensor(self.hparams.learning_rate)})
+            optimizer_kwargs.update({"lr": self.hparams.learning_rate})
 
         optimizer = get_optimizer(
             self.hparams.optimizer_class,
@@ -729,6 +789,7 @@ class BertBlocksPretrainingModule(L.LightningModule):
         )
         output = self.model(**batch)
         self.log("loss/train", output.loss, prog_bar=True)
+        self._log_loss_components(output, "train")
         return output.loss
 
     def validation_step(self, batch: dict[str, torch.Tensor], batch_idx: int, dataloader_idx: int = 0) -> torch.Tensor:
@@ -738,31 +799,20 @@ class BertBlocksPretrainingModule(L.LightningModule):
             self.log(f"loss/validation_{dataloader_idx}", output.loss, prog_bar=True)
         else:
             self.log("loss/validation", output.loss, prog_bar=True)
+            self._log_loss_components(output, "validation")
         return output.loss
+
+    def _log_loss_components(self, output: Any, split: str) -> None:
+        """Log per-objective loss components when present (e.g. the multi-task objective)."""
+        for name in ("mlm_loss", "bow_loss", "isotropy_loss"):
+            value = getattr(output, name, None)
+            if value is not None:
+                self.log(f"loss/{split}_{name.removesuffix('_loss')}", value)
 
     def on_before_optimizer_step(self, optimizer: torch.optim.Optimizer) -> None:
         """Log grad norms at each optimizer step."""
         norms = grad_norm(self.model, norm_type=2)
         self.log_dict({f"gradnorm/{k}": v for k, v in norms.items()})
-
-    def on_save_checkpoint(self, *args: Any, **kwargs: Any) -> None:
-        """Save model checkpoint in HuggingFace format.
-
-        This method is called whenever Lightning saves a checkpoint and
-        additionally saves the model in HuggingFace format for easy loading
-        and deployment. Only saves on the main process in distributed training.
-
-        Args:
-            *args: Variable arguments (unused).
-            **kwargs: Keyword arguments (unused).
-
-        """
-        if self.trainer is not None and self.trainer.log_dir is not None:
-            if self.trainer.global_rank != 0:
-                return
-            log_dir = Path(self.trainer.log_dir)
-            save_path = log_dir / "huggingface_checkpoint"
-            self.model.save_pretrained(save_path, safe_serialization=False)
 
 
 class BertBlocksFinetuningModule(L.LightningModule):

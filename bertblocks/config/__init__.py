@@ -280,7 +280,6 @@ class BertBlocksConfig(PreTrainedConfig):
         self.num_classes = num_classes
 
         # Dependent parameters
-        self._unpadding = self._attn_implementation == "flash_attention_2"
         rope_dim = (
             self.block_pos_enc_kwargs["rope_dim"]
             if "rope_dim" in self.block_pos_enc_kwargs
@@ -291,6 +290,17 @@ class BertBlocksConfig(PreTrainedConfig):
         # Post-initialization validation to catch corrupted configs
         # (e.g., from JSON loading or attribute manipulation)
         self._validate_positional_encodings()
+
+    @property
+    def _unpadding(self) -> bool:
+        """Whether inputs are unpadded before the backbone forward pass.
+
+        Derived from ``_attn_implementation`` so it always tracks the active attention backend,
+        even when ``_attn_implementation`` is set after construction (e.g. by HuggingFace's
+        ``from_pretrained`` or a consuming framework). Unpadding is only supported by the flash
+        backend.
+        """
+        return self._attn_implementation == "flash_attention_2"
 
     def _validate_positional_encodings(self) -> None:
         """Validate that positional encoding kinds are properly set.
@@ -446,7 +456,6 @@ class BertBlocksConfig(PreTrainedConfig):
         orig_config.name_or_path = pretrained_model_name_or_path
         config = cls.from_bert_config(orig_config)
         config._attn_implementation = attn_implementation
-        config._unpadding = attn_implementation == "flash_attention_2"
         return config
 
     @classmethod
@@ -509,7 +518,6 @@ class BertBlocksConfig(PreTrainedConfig):
         orig_config.name_or_path = pretrained_model_name_or_path
         config = cls.from_modernbert_config(orig_config)
         config._attn_implementation = attn_implementation
-        config._unpadding = attn_implementation == "flash_attention_2"
         return config
 
     @classmethod
@@ -582,7 +590,6 @@ class BertBlocksConfig(PreTrainedConfig):
         if isinstance(orig_config, BertConfig):
             config = cls.from_bert_config(orig_config)
             config._attn_implementation = attn_implementation
-            config._unpadding = attn_implementation == "flash_attention_2"
         elif isinstance(orig_config, ModernBertConfig):
             config = cls.from_modernbert_config(orig_config)
         else:
@@ -590,7 +597,6 @@ class BertBlocksConfig(PreTrainedConfig):
                 f"Unsupported config type: {type(orig_config).__name__}. Supported types: BertConfig, ModernBertConfig"
             )
         config._attn_implementation = attn_implementation
-        config._unpadding = attn_implementation == "flash_attention_2"
         return config
 
     @classmethod
@@ -608,7 +614,6 @@ class BertBlocksConfig(PreTrainedConfig):
         orig_config.name_or_path = pretrained_model_name_or_path
         config = cls.from_config(orig_config)
         config._attn_implementation = attn_implementation
-        config._unpadding = attn_implementation == "flash_attention_2"
         return config
 
 

@@ -48,16 +48,13 @@ class Collator(ABC):
 
     def _get_valid_token_mask(self, input_ids: Tensor, attention_mask: Tensor) -> Tensor:
         # Create valid token mask
+        special_ids = torch.tensor([self.pad_token_id, self.mask_token_id], device=input_ids.device)
         if is_packed_batch(attention_mask):
             # Packed format: valid tokens have attention_mask >= 0
-            valid_mask = (attention_mask >= 0) & torch.isin(
-                input_ids, [self.pad_token_id, self.mask_token_id], invert=True
-            )
+            valid_mask = (attention_mask >= 0) & torch.isin(input_ids, special_ids, invert=True)
         else:
             # Standard format: valid tokens have attention_mask == 1
-            valid_mask = attention_mask.bool() & torch.isin(
-                input_ids, [self.pad_token_id, self.mask_token_id], invert=True
-            )
+            valid_mask = attention_mask.bool() & torch.isin(input_ids, special_ids, invert=True)
         return valid_mask
 
     def __call__(self, batch: list[dict[str, Any]]) -> dict[str, Any]:
@@ -683,14 +680,22 @@ class MaskedDiffusionCollator(Collator):
 
 def get_collator_cls(
     objective: Literal[
-        "mlm", "enhanced_mlm", "classification", "token_classification", "question_answering", "diffusion"
+        "mlm",
+        "multitask_mlm",
+        "enhanced_mlm",
+        "classification",
+        "token_classification",
+        "question_answering",
+        "diffusion",
     ],
 ) -> type[Collator]:
     """Get the appropriate data collator for the given objective.
 
     Args:
         objective (str): The training objective. Available options:
-            "mlm", "enhanced_mlm", "classification", "token_classification", "question_answering", "diffusion".
+            "mlm", "multitask_mlm", "enhanced_mlm", "classification", "token_classification",
+            "question_answering", "diffusion". "multitask_mlm" reuses the MLM collator; its extra
+            bag-of-words targets are reconstructed inside the model from ``input_ids`` and ``labels``.
 
     Raises:
         ValueError: If the objective is unknown.
@@ -699,7 +704,7 @@ def get_collator_cls(
         type[Collator]: The corresponding data collator class.
     """
     match objective:
-        case "mlm":
+        case "mlm" | "multitask_mlm":
             return MaskedLanguageModelingCollator
         case "enhanced_mlm":
             return EnhancedMaskedLanguageModelingCollator
