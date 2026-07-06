@@ -443,7 +443,7 @@ class BertBlocksForMaskedLM(BertBlocksPreTrainedModel):
 
     """
 
-    _tied_weights_keys: ClassVar = ["decoder.weight"]
+    _tied_weights_keys: ClassVar = {"model.embd.embd.weight": "decoder.weight"}
 
     def __init__(self, config: "BertBlocksConfig"):
         super().__init__(config)
@@ -557,7 +557,7 @@ class BertBlocksForEnhancedMaskedLM(BertBlocksForMaskedLM):
         masking_probability (float): Probability of masking tokens. Defaults to 0.5.
     """
 
-    _tied_weights_keys: ClassVar = ["decoder.weight"]
+    _tied_weights_keys: ClassVar = {"model.embd.embd.weight": "decoder.weight"}
 
     def __init__(
         self,
