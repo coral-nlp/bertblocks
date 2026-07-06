@@ -302,6 +302,15 @@ class BertBlocksConfig(PreTrainedConfig):
         """
         return self._attn_implementation == "flash_attention_2"
 
+    @_unpadding.setter
+    def _unpadding(self, value: bool) -> None:
+        # ``_unpadding`` is derived from ``_attn_implementation`` (see the getter); it is not stored.
+        # The setter exists only to absorb writes: HuggingFace's ``from_pretrained`` re-applies every
+        # key found in a serialized ``config.json`` via ``setattr``, and older BertBlocks versions
+        # persisted ``_unpadding`` as a plain field. Ignoring the write keeps those checkpoints loadable
+        # while the value stays consistent with the active attention backend.
+        pass
+
     def _validate_positional_encodings(self) -> None:
         """Validate that positional encoding kinds are properly set.
 
