@@ -71,6 +71,7 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
         packing_pad_to_budget: bool = False,
         cache_dir: str | None = None,
         data_kwargs: dict[str, Any] | None = None,
+        skip_truncation: bool = False,
     ) -> None:
         """Initialize the pretraining data module.
 
@@ -104,6 +105,8 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
                 fixed shapes (useful for torch.compile). When False, uses dynamic shapes. Defaults to False.
             cache_dir (str, optional): Directory to cache data transformations. Defaults to None.
             data_kwargs (dict[str, Any], optional): Additional keyword arguments passed to huggingface loader functions.
+            skip_truncation (bool, optional): Skip truncation for datasets that are already
+                tokenized and capped at max_sequence_length by an offline preprocessing step. Defaults to False.
         """
         super().__init__()
         self.save_hyperparameters()
@@ -116,6 +119,19 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
             text_column=self.hparams.text_column or "text",
             **(self.hparams.collator_kwargs or {}),
         )
+
+    def _prepare_fn(self, dataset: Any, tokenize_fn: Any, truncate_fn: Any) -> Any | None:
+        columns = dataset.column_names or []
+        if "input_ids" not in columns:
+            return tokenize_fn
+        if self.hparams.skip_truncation:
+            if "length" not in columns:
+                raise ValueError(
+                    "skip_truncation needs a 'length' column, which the truncation pass would "
+                    f"otherwise add; this dataset has {sorted(columns)}"
+                )
+            return None
+        return truncate_fn
 
     def _map_kwargs(self, cache_file_name: str | None = None) -> dict[str, Any]:
         """Build kwargs for dataset .map() calls."""
@@ -143,13 +159,14 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
             ds = _load_dataset(
                 dataset_name_or_path=self.hparams.train_dataset_name_or_path,
                 split=self.hparams.train_split or "train",
-                add_index=self.hparams.packing,
+                add_index=self.hparams.packing and not self.hparams.skip_truncation,
                 file_format=self.hparams.file_format,
                 streaming=self.hparams.streaming,
                 **self.hparams.data_kwargs or {},
             )
-            fn = truncate_fn if "input_ids" in (ds.column_names or []) else tokenize_fn
-            ds.map(fn, **self._map_kwargs(train_cache))
+            fn = self._prepare_fn(ds, tokenize_fn, truncate_fn)
+            if fn is not None:
+                ds.map(fn, **self._map_kwargs(train_cache))
 
         # Optionally prepare validation dataset(s)
         val_paths = self.hparams.val_dataset_name_or_path
@@ -171,8 +188,9 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
                     streaming=False,
                     **self.hparams.data_kwargs or {},
                 )
-                fn = truncate_fn if "input_ids" in ds.column_names else tokenize_fn
-                ds.map(fn, **self._map_kwargs(val_cache_i))
+                fn = self._prepare_fn(ds, tokenize_fn, truncate_fn)
+                if fn is not None:
+                    ds.map(fn, **self._map_kwargs(val_cache_i))
 
     def setup(self, stage: str | None = None) -> None:
         """Load the dataset for training. Called on every process - loads from cache populated by prepare_data()."""
@@ -181,7 +199,7 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
             self.train_dataset = _load_dataset(
                 dataset_name_or_path=self.hparams.train_dataset_name_or_path,
                 split=self.hparams.train_split or "train",
-                add_index=self.hparams.packing,
+                add_index=self.hparams.packing and not self.hparams.skip_truncation,
                 file_format=self.hparams.file_format,
                 streaming=self.hparams.streaming,
                 **self.hparams.data_kwargs or {},
@@ -215,20 +233,22 @@ class BertBlocksPretrainingDataModule(L.LightningDataModule):
             )
             truncate_fn = partial(_truncated_add_length, max_sequence_length=self.hparams.max_sequence_length)
 
-            train_fn = truncate_fn if "input_ids" in (self.train_dataset.column_names or []) else tokenize_fn
-            self.train_dataset = self.train_dataset.map(train_fn, **self._map_kwargs(train_cache))
-            # When packing, ensure deterministic order across all ranks after map by sorting by original index
-            if self.hparams.packing and not self.hparams.streaming:
-                self.train_dataset = self.train_dataset.sort("_idx")
-                self.train_dataset = self.train_dataset.remove_columns(["_idx"])
+            train_fn = self._prepare_fn(self.train_dataset, tokenize_fn, truncate_fn)
+            if train_fn is not None:
+                self.train_dataset = self.train_dataset.map(train_fn, **self._map_kwargs(train_cache))
+                # When packing, ensure deterministic order across all ranks after map by sorting by original index
+                if "_idx" in (self.train_dataset.column_names or []) and not self.hparams.streaming:
+                    self.train_dataset = self.train_dataset.sort("_idx")
+                    self.train_dataset = self.train_dataset.remove_columns(["_idx"])
 
             if self.val_dataset is not None:
                 for i in range(len(self.val_dataset)):
                     val_cache_i = (
                         str(Path(self.hparams.cache_dir) / f"val_{i}.arrow") if self.hparams.cache_dir else None
                     )
-                    fn = truncate_fn if "input_ids" in self.val_dataset[i].column_names else tokenize_fn
-                    self.val_dataset[i] = self.val_dataset[i].map(fn, **self._map_kwargs(val_cache_i))
+                    fn = self._prepare_fn(self.val_dataset[i], tokenize_fn, truncate_fn)
+                    if fn is not None:
+                        self.val_dataset[i] = self.val_dataset[i].map(fn, **self._map_kwargs(val_cache_i))
 
             # For non-packing mode, shard the dataset across ranks
             if not self.hparams.streaming and self.trainer.world_size > 1 and not self.hparams.packing:
