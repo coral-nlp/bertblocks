@@ -1,5 +1,6 @@
 """Sequence packing using batch sampling and a wrapper around collators to produce full flat-packed batches."""
 
+import warnings
 from collections.abc import Callable, Iterator
 from typing import Any
 
@@ -185,8 +186,13 @@ class PackingIterableDataset(IterableDataset):
     The underlying dataset must include a length field (specified by length_column) in
     each sample. This can be added using dataset.map() before wrapping.
 
-    In distributed training with num_workers > 0, sharding is handled automatically by
-    PyTorch's DataLoader worker sharding mechanism for IterableDataset.
+    With num_workers > 1 the wrapper shards the dataset itself, because PyTorch does not:
+    it hands each worker a full copy of an iterable-style dataset and leaves deduplication
+    to the dataset. Map-style datasets are sharded contiguously per worker, streaming ones
+    are left to split themselves, and anything else warns rather than silently duplicating.
+
+    This wrapper does not shard across ranks. Distributed training needs
+    PackingBatchSampler, which takes world_size and rank.
 
     Args:
         dataset: The underlying iterable dataset to wrap.
@@ -219,6 +225,27 @@ class PackingIterableDataset(IterableDataset):
         self.length_column = length_column
         self.drop_last = drop_last
 
+    def _worker_dataset(self) -> Any:
+        """
+        Assert that map-style datasets are split across workers.
+        IterableDataset splits itself by worker inside own __iter__.
+        """
+        worker = torch.utils.data.get_worker_info()
+        if worker is None or worker.num_workers <= 1:
+            return self.dataset
+
+        if hasattr(self.dataset, "shard") and hasattr(self.dataset, "__len__"):
+            return self.dataset.shard(num_shards=worker.num_workers, index=worker.id, contiguous=True)
+
+        if not hasattr(self.dataset, "shard"):
+            warnings.warn(
+                f"{type(self.dataset).__name__} cannot be sharded across the {worker.num_workers} "
+                "dataloader workers, so every worker yields the same samples. Use num_workers<=1 "
+                "or a dataset that shards itself.",
+                stacklevel=2,
+            )
+        return self.dataset
+
     def __iter__(self) -> Iterator[list[dict[str, Any]]]:
         """Iterate over packed batches.
 
@@ -228,7 +255,7 @@ class PackingIterableDataset(IterableDataset):
         batch_samples = []
         batch_tokens = 0
 
-        for sample in self.dataset:
+        for sample in self._worker_dataset():
             # Get sequence length from sample
             if self.length_column not in sample:
                 raise ValueError(
