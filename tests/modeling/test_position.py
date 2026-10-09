@@ -86,6 +86,24 @@ class TestAlibiPositionalEncoding:
         # ALiBi will only ever decrease scores
         assert torch.all(attention_mask_out <= attention_mask)
 
+    @pytest.mark.parametrize("num_heads", [4, 8])
+    def test_slopes_survive_from_pretrained(self, num_heads: int, tmp_path) -> None:
+        """Test that the non-persistent slopes buffer is restored when loading with from_pretrained."""
+        from bertblocks import BertBlocksConfig, BertBlocksModel
+
+        config = BertBlocksConfig(
+            vocab_size=128,
+            hidden_size=64,
+            num_blocks=2,
+            num_attention_heads=num_heads,
+            intermediate_size=128,
+            block_pos_enc_kind="alibi",
+        )
+        BertBlocksModel(config).save_pretrained(tmp_path)
+        model = BertBlocksModel.from_pretrained(tmp_path)
+
+        assert torch.equal(model.alibi.slopes, AlibiPositionalEncoding.get_slopes(num_heads))
+
 
 class TestRotaryPositionalEncoding:
     """Test RotaryPositionalEncoding implementation."""

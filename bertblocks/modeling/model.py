@@ -79,6 +79,15 @@ class BertBlocksPreTrainedModel(PreTrainedModel):
             module: The module to initialize.
 
         """
+        # Ensure correct slopes
+        if isinstance(module, AlibiPositionalEncoding):
+            module.slopes.copy_(
+                module.get_slopes(
+                    module.slopes.numel()  # num_attention_heads
+                )
+            )
+            return
+
         # Set up initialization parameters from config
         initializer_kind = self.config.initializer_kind
         initializer_cutoff_factor = self.config.initializer_cutoff_factor
