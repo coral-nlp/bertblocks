@@ -463,6 +463,10 @@ class TaskModule(abc.ABC, L.LightningModule):
             }
         }
 
+    def on_fit_start(self) -> None:
+        """Switch to training mode since `from_pretrained` returns the model in eval mode."""
+        self.model.train()
+
     def training_step(self, batch: dict[str, torch.Tensor]) -> torch.Tensor:
         """Perform train step."""
         if self.task_type == "qa":
