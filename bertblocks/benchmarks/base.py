@@ -344,8 +344,8 @@ class TaskModule(abc.ABC, L.LightningModule):
             # Multi-label: return logits, torchmetrics applies sigmoid
             return out.logits, batch["labels"]
         if isinstance(self.metric, (BinaryAccuracy, BinaryF1Score, BinaryMatthewsCorrCoef)):
-            # Binary metric: return positive class logits
-            return out.logits[:, 1], batch["labels"]
+            # Binary: return label predictions
+            return out.logits.argmax(dim=-1), batch["labels"]
         # Multiclass: return logits, torchmetrics applies argmax
         return out.logits, batch["labels"]
 
