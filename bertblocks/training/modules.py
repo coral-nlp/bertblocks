@@ -692,15 +692,15 @@ class BertBlocksPretrainingModule(L.LightningModule):
             optimizer_grouped_parameters = [
                 {
                     "params": [p for n, p in self.model.named_parameters() if n in decay_parameters],
-                    "weight_decay": torch.Tensor(self.hparams.weight_decay),
+                    "weight_decay": self.hparams.weight_decay,
                 },
                 {
                     "params": [p for n, p in self.model.named_parameters() if n not in decay_parameters],
-                    "weight_decay": torch.Tensor(0.0),
+                    "weight_decay": 0.0,
                 },
             ]
             optimizer_kwargs = self.hparams.optimizer_kwargs or {}
-            optimizer_kwargs.update({"lr": torch.Tensor(self.hparams.learning_rate)})
+            optimizer_kwargs.update({"lr": self.hparams.learning_rate})
 
         optimizer = get_optimizer(
             self.hparams.optimizer_class,
@@ -862,15 +862,15 @@ class BertBlocksFinetuningModule(L.LightningModule):
         optimizer_grouped_parameters = [
             {
                 "params": [p for n, p in self.model.named_parameters() if n in decay_parameters],
-                "weight_decay": torch.Tensor(self.hparams.weight_decay),
+                "weight_decay": self.hparams.weight_decay,
             },
             {
                 "params": [p for n, p in self.model.named_parameters() if n not in decay_parameters],
-                "weight_decay": torch.Tensor(0.0),
+                "weight_decay": 0.0,
             },
         ]
         optimizer_kwargs = self.hparams.optimizer_kwargs or {}
-        optimizer_kwargs.update({"lr": torch.Tensor(self.hparams.learning_rate)})
+        optimizer_kwargs.update({"lr": self.hparams.learning_rate})
         optimizer = get_optimizer(
             self.hparams.optimizer_class,
             optimizer_grouped_parameters,
