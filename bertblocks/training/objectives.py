@@ -48,15 +48,16 @@ class Collator(ABC):
 
     def _get_valid_token_mask(self, input_ids: Tensor, attention_mask: Tensor) -> Tensor:
         # Create valid token mask
+        ignored_tokens = torch.tensor([self.pad_token_id, self.mask_token_id], device=input_ids.device)
         if is_packed_batch(attention_mask):
             # Packed format: valid tokens have attention_mask >= 0
             valid_mask = (attention_mask >= 0) & torch.isin(
-                input_ids, [self.pad_token_id, self.mask_token_id], invert=True
+                input_ids, ignored_tokens, invert=True
             )
         else:
             # Standard format: valid tokens have attention_mask == 1
             valid_mask = attention_mask.bool() & torch.isin(
-                input_ids, [self.pad_token_id, self.mask_token_id], invert=True
+                input_ids, ignored_tokens, invert=True
             )
         return valid_mask
 
